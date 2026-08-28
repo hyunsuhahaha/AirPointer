@@ -40,6 +40,7 @@ class CursorController:
         self._target_x, self._target_y = self._x, self._y
         self._point_target_x, self._point_target_y = self._x, self._y
         self._last_hand: Point | None = None
+        self._needs_absolute_anchor = True
         self._pinch_target: tuple[int, int] | None = None
         self._captured_snap: SnapResult | None = None
         self._state: CursorState | None = None
@@ -93,6 +94,7 @@ class CursorController:
             self._active = False
             self._state = None
         self._last_hand = None
+        self._needs_absolute_anchor = True
         self._pinch_target = None
         self._captured_snap = None
         self._mouse_up()
@@ -169,9 +171,13 @@ class CursorController:
         )
 
     def _pointer_target(self, point: Point) -> tuple[int, int]:
-        if self.settings.mapping_mode == "relative":
+        if self.settings.mapping_mode == "relative" and not self._needs_absolute_anchor:
             return self._relative_target(point)
+        self._needs_absolute_anchor = False
         self._last_hand = None
+        return self._absolute_target(point)
+
+    def _absolute_target(self, point: Point) -> tuple[int, int]:
         span_x = max(0.35, min(0.9, 0.70 / self.settings.sensitivity))
         span_y = max(0.30, min(0.85, 0.60 / self.settings.sensitivity))
         left, top = (1.0 - span_x) / 2.0, (1.0 - span_y) / 2.0

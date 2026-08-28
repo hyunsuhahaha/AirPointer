@@ -30,6 +30,22 @@ def test_absolute_pointing_reaches_left_edge_from_right_side(monkeypatch) -> Non
         controller.close()
 
 
+def test_relative_mode_reanchors_absolutely_after_untracking(monkeypatch) -> None:
+    monkeypatch.setattr(cursor_module.pyautogui, "size", lambda: (1000, 1000))
+    monkeypatch.setattr(cursor_module.pyautogui, "position",
+                        lambda: type("Position", (), {"x": 900, "y": 500})())
+    monkeypatch.setattr(cursor_module.pyautogui, "moveTo", lambda *args, **kwargs: None)
+    controller = CursorController(Settings(mapping_mode="relative", snap_enabled=False), NoSnap())
+    try:
+        controller.apply(Intent("tracking", Point(0.7, 0.5)))
+        controller.release()  # Hand lowered long enough to stop tracking.
+        state = controller.apply(Intent("tracking", Point(0.15, 0.5)))
+        assert state is not None
+        assert state.point_x == 0
+    finally:
+        controller.close()
+
+
 def test_cursor_interpolates_between_camera_frames(monkeypatch) -> None:
     moves: list[tuple[int, int]] = []
     monkeypatch.setattr(cursor_module.pyautogui, "size", lambda: (1000, 1000))
