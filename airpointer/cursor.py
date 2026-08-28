@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import threading
+import time
 from dataclasses import dataclass
 
 import pyautogui
@@ -205,7 +206,17 @@ class CursorController:
         return state
 
     def _animate(self) -> None:
-        while not self._stop.wait(1 / 120):
+        interval = 1 / 240
+        deadline = time.perf_counter()
+        while not self._stop.is_set():
+            deadline += interval
+            delay = deadline - time.perf_counter()
+            if delay > 0:
+                time.sleep(delay)
+            else:
+                deadline = time.perf_counter()
+            if self._stop.is_set():
+                break
             with self._lock:
                 if not self._active:
                     continue

@@ -58,7 +58,7 @@ def test_cursor_interpolates_between_camera_frames(monkeypatch) -> None:
         controller.apply(Intent("tracking", Point(0.5, 0.5)))
         controller.apply(Intent("tracking", Point(0.7, 0.5)))
         time.sleep(0.12)
-        assert len(moves) >= 5
+        assert len(moves) >= 20
     finally:
         close = getattr(controller, "close", None)
         if close:

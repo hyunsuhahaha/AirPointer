@@ -26,6 +26,7 @@ python -m airpointer.main
 - 주 모니터 한 대
 - 첫 번째로 감지된 손 한 개
 - 1€ Filter를 사용한 검지 절대 포인팅(기본값), 선택 가능한 상대 이동
+- 카메라 프레임 사이를 240Hz 고해상도 타이머로 보간하는 커서 출력
 - pinch 진입/해제 hysteresis와 captured drag
 - 비동기 UI hover lock, pinch 확정 시 1회 snap
 - 접근성 트리를 제공하는 Windows 앱과 웹 콘텐츠의 UI Snap
