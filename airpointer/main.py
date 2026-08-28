@@ -4,8 +4,10 @@ import threading
 import tkinter as tk
 from tkinter import ttk
 
+from PIL import Image, ImageTk
+
 from .camera import CameraLoop
-from .cursor import CursorController, CursorState
+from .cursor import CursorController
 from .overlay import Overlay
 from .settings import Settings
 from .ui_snap import UISnapper
@@ -19,9 +21,12 @@ class App:
         self.settings = Settings()
         self.snapper = UISnapper(self.settings.snap_radius)
         self.cursor = CursorController(self.settings, self.snapper)
-        self._state: CursorState | None = None
-        self._state_lock = threading.Lock()
-        self.camera = CameraLoop(self.settings, self.cursor, self._set_state)
+        self._frame = None
+        self._frame_version = 0
+        self._drawn_frame_version = -1
+        self._frame_lock = threading.Lock()
+        self._preview_photo = None
+        self.camera = CameraLoop(self.settings, self.cursor, self._set_frame)
         self.overlay = Overlay(self.root)
         self._build_ui()
         self.root.update_idletasks()
@@ -41,6 +46,10 @@ class App:
                              command=lambda: setattr(self.settings, "camera_index", int(camera.get())))
         camera.set("0")
         camera.pack(side="right")
+
+        self.preview = tk.Canvas(frame, width=320, height=180, bg="#171717", highlightthickness=0)
+        self.preview.pack(pady=(8, 6))
+        self.preview.create_text(160, 90, text="Press Start to preview", fill="white")
 
         self._scale(frame, "Sensitivity", 0.6, 1.8, self.settings.sensitivity,
                     lambda value: setattr(self.settings, "sensitivity", float(value)))
@@ -77,14 +86,26 @@ class App:
             self.camera.start()
             self.button.config(text="Stop")
             self.status.config(text="Running — lower your hand to release control")
-            self.root.iconify()
 
-    def _set_state(self, state: CursorState | None) -> None:
-        with self._state_lock:
-            self._state = state
+    def _set_frame(self, frame) -> None:
+        with self._frame_lock:
+            self._frame = frame
+            self._frame_version += 1
 
     def _redraw(self) -> None:
         self.overlay.draw(self.cursor.current_state())
+        with self._frame_lock:
+            frame = self._frame
+            version = self._frame_version
+        if version != self._drawn_frame_version:
+            self.preview.delete("all")
+            if frame is None:
+                self.preview.create_text(160, 90, text="Camera stopped", fill="white")
+                self._preview_photo = None
+            else:
+                self._preview_photo = ImageTk.PhotoImage(Image.fromarray(frame))
+                self.preview.create_image(160, 90, image=self._preview_photo)
+            self._drawn_frame_version = version
         self.root.after(16, self._redraw)
 
     def _close(self) -> None:
