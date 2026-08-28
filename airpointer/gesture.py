@@ -70,7 +70,7 @@ class InteractionEngine:
             return self._missing()
 
         self._absent_run = 0
-        raw_point = points[8]
+        raw_point = _pointing_target(points)
         raw_palm = _palm_center(points)
         point = Point(self._x_filter.update(raw_point.x, timestamp),
                       self._y_filter.update(raw_point.y, timestamp))
@@ -138,6 +138,12 @@ class InteractionEngine:
 def _palm_center(points: list[Point]) -> Point:
     palm = [points[i] for i in (0, 5, 9, 13, 17)]
     return Point(sum(p.x for p in palm) / len(palm), sum(p.y for p in palm) / len(palm))
+
+
+def _pointing_target(points: list[Point]) -> Point:
+    base, tip = points[5], points[8]
+    return Point(tip.x + (tip.x - base.x) * 2.0,
+                 tip.y + (tip.y - base.y) * 2.0)
 
 
 def _is_fist(points: list[Point]) -> bool:

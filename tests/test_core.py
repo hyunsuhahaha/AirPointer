@@ -19,8 +19,20 @@ def test_open_hand_tracks() -> None:
     points = _hand()
     intent = InteractionEngine().update(points, 0.0)
     assert intent.phase == "tracking" and intent.point is not None
-    assert intent.point == points[8]
+    assert intent.point.y < points[8].y
     assert intent.palm is not None
+
+
+def test_pointer_projects_index_finger_direction() -> None:
+    points = _hand()
+    points[5] = Point(0.65, 0.70)
+    points[6] = Point(0.60, 0.65)
+    points[7] = Point(0.55, 0.58)
+    points[8] = Point(0.50, 0.50)
+    intent = InteractionEngine().update(points, 0.0)
+    assert intent.point is not None
+    assert intent.point.x < 0.25
+    assert intent.point.y < 0.15
 
 
 def test_pinch_uses_hysteresis_and_emits_click_on_release() -> None:
