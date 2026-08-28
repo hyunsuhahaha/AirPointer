@@ -1,7 +1,7 @@
 # AirPointer
 
-Windows용 웹캠 제스처 마우스 MVP입니다. 검지로 이동하고 엄지와 검지를 붙여 클릭/드래그하며,
-Windows UI Automation이 찾은 가까운 버튼·입력창·링크로 커서를 스냅합니다.
+Windows용 웹캠 공간 포인터입니다. 손바닥 이동을 상대 커서 이동으로 바꾸고 엄지와 검지를
+붙여 클릭/드래그하며, Windows UI Automation이 찾은 가까운 버튼·입력창·링크를 잠급니다.
 설정창에는 손 위치를 확인할 수 있는 미러 카메라 미리보기가 표시됩니다.
 
 ## 실행
@@ -15,12 +15,15 @@ python -m pip install -r requirements.txt
 python -m airpointer.main
 ```
 
-검지만 펴면 이동, 엄지와 검지를 붙이면 클릭/드래그, 주먹을 쥐거나 손을 내리면 제어가
-해제됩니다. 앱과 대상 프로그램의 권한 수준이 같아야 UI Snap과 입력이 정상 작동합니다.
+편 손을 움직이면 커서가 상대 이동합니다. 짧게 pinch 후 놓으면 클릭, pinch를 유지하거나
+움직이면 드래그가 됩니다. 주먹은 커서를 놓고 손 위치를 다시 잡는 clutch이며, 손을 내리면
+제어가 해제됩니다. 앱과 대상 프로그램의 권한 수준이 같아야 UI Snap과 입력이 정상 작동합니다.
 
 ## 현재 범위
 
 - 주 모니터 한 대
 - 첫 번째로 감지된 손 한 개
-- 중앙 활성영역 기반 매핑(감도로 조절)
+- 1€ Filter와 속도 gain을 사용한 상대 이동(감도로 조절)
+- pinch 진입/해제 hysteresis와 captured drag
+- 비동기 UI hover lock, pinch 확정 시 1회 snap
 - 접근성 트리를 제공하는 Windows 앱과 웹 콘텐츠의 UI Snap

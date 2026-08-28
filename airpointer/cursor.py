@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import math
 import threading
 from dataclasses import dataclass
 
 import pyautogui
 
+from .gesture import Intent
 from .hand_tracker import Point
 from .settings import Settings
 from .ui_snap import SnapResult, UISnapper
@@ -21,9 +23,13 @@ class CursorState:
     point_y: int
     pinching: bool
     snap: SnapResult | None
+    mode: str = "tracking"
+    confidence: float = 1.0
 
 
 class CursorController:
+    """Adapts pure interaction intent to relative Windows pointer input."""
+
     def __init__(self, settings: Settings, snapper: UISnapper) -> None:
         self.settings = settings
         self.snapper = snapper
@@ -33,6 +39,9 @@ class CursorController:
         self._point_x, self._point_y = self._x, self._y
         self._target_x, self._target_y = self._x, self._y
         self._point_target_x, self._point_target_y = self._x, self._y
+        self._last_hand: Point | None = None
+        self._pinch_target: tuple[int, int] | None = None
+        self._captured_snap: SnapResult | None = None
         self._state: CursorState | None = None
         self._mouse_down = False
         self._active = False
@@ -41,40 +50,52 @@ class CursorController:
         self._thread = threading.Thread(target=self._animate, name="airpointer-cursor", daemon=True)
         self._thread.start()
 
-    def update(self, point: Point, pinching: bool) -> CursorState:
-        point_x, point_y = self._map(point)
-        x, y = point_x, point_y
-
-        snap = None
-        if self.settings.snap_enabled and not self._mouse_down:
-            snap = self.snapper.nearest(x, y)
-            if snap:
-                x, y = snap.x, snap.y
-
-        state = CursorState(x, y, point_x, point_y, pinching, snap)
-        with self._lock:
-            self._target_x, self._target_y = x, y
-            self._point_target_x, self._point_target_y = point_x, point_y
-            self._state = state
-            self._active = True
-        if pinching and not self._mouse_down:
-            pyautogui.moveTo(x, y, _pause=False)
+    def apply(self, intent: Intent) -> CursorState | None:
+        if intent.phase == "paused":
+            self.release()
+            return None
+        if intent.phase == "lost":
             with self._lock:
-                self._x, self._y = x, y
-            pyautogui.mouseDown(_pause=False)
-            self._mouse_down = True
-        elif not pinching and self._mouse_down:
-            pyautogui.mouseUp(_pause=False)
-            self._mouse_down = False
+                if self._state:
+                    state = self._state
+                    self._state = CursorState(state.x, state.y, state.point_x, state.point_y,
+                                              state.pinching, state.snap, "lost", intent.confidence)
+            return self.current_state()
+
+        assert intent.point is not None
+        if intent.event == "click":
+            return self._click(intent.point)
+        if intent.event == "drag_end":
+            self._mouse_up()
+            self._pinch_target = None
+            self._captured_snap = None
+            self._last_hand = intent.point
+
+        if intent.phase == "pinch":
+            return self._hold_pinch(intent.point)
+
+        if intent.phase == "drag":
+            if intent.event == "drag_start":
+                self._start_drag()
+            x, y = self._relative_target(intent.point)
+            return self._set_target(x, y, None, "drag", True)
+
+        x, y = self._relative_target(intent.point)
+        snap = self.snapper.nearest(x, y) if self.settings.snap_enabled else None
+        mode = "hover" if snap else "tracking"
+        state = self._set_target(x, y, snap, mode, False)
+        self._pinch_target = None
+        self._captured_snap = None
         return state
 
     def release(self) -> None:
         with self._lock:
             self._active = False
             self._state = None
-        if self._mouse_down:
-            pyautogui.mouseUp(_pause=False)
-            self._mouse_down = False
+        self._last_hand = None
+        self._pinch_target = None
+        self._captured_snap = None
+        self._mouse_up()
 
     def current_state(self) -> CursorState | None:
         with self._lock:
@@ -82,12 +103,79 @@ class CursorController:
                 return None
             state = self._state
             return CursorState(state.x, state.y, round(self._point_x), round(self._point_y),
-                               state.pinching, state.snap)
+                               state.pinching, state.snap, state.mode, state.confidence)
 
     def close(self) -> None:
         self.release()
         self._stop.set()
         self._thread.join(timeout=0.2)
+        self.snapper.close()
+
+    def _hold_pinch(self, point: Point) -> CursorState:
+        if self._pinch_target is None:
+            raw_x, raw_y = self._relative_target(point)
+            snap = self.snapper.nearest(raw_x, raw_y) if self.settings.snap_enabled else None
+            self._captured_snap = snap
+            self._pinch_target = (snap.x, snap.y) if snap else (raw_x, raw_y)
+            self._last_hand = point
+        with self._lock:
+            hold_x, hold_y = round(self._x), round(self._y)
+        return self._set_target(hold_x, hold_y, self._captured_snap, "pinch", True,
+                                semantic_target=self._pinch_target)
+
+    def _click(self, point: Point) -> CursorState:
+        x, y = self._pinch_target or (round(self._target_x), round(self._target_y))
+        pyautogui.moveTo(x, y, _pause=False)
+        pyautogui.click(_pause=False)
+        with self._lock:
+            self._x = self._point_x = self._target_x = self._point_target_x = x
+            self._y = self._point_y = self._target_y = self._point_target_y = y
+        snap = self._captured_snap
+        self._pinch_target = None
+        self._captured_snap = None
+        self._last_hand = point
+        return self._set_target(x, y, snap, "click", False)
+
+    def _start_drag(self) -> None:
+        x, y = self._pinch_target or (round(self._target_x), round(self._target_y))
+        pyautogui.moveTo(x, y, _pause=False)
+        pyautogui.mouseDown(_pause=False)
+        self._mouse_down = True
+        with self._lock:
+            self._x = self._point_x = self._target_x = self._point_target_x = x
+            self._y = self._point_y = self._target_y = self._point_target_y = y
+
+    def _mouse_up(self) -> None:
+        if self._mouse_down:
+            pyautogui.mouseUp(_pause=False)
+            self._mouse_down = False
+
+    def _relative_target(self, point: Point) -> tuple[int, int]:
+        if self._last_hand is None:
+            self._last_hand = point
+            return round(self._target_x), round(self._target_y)
+        dx, dy = point.x - self._last_hand.x, point.y - self._last_hand.y
+        self._last_hand = point
+        speed = math.hypot(dx, dy)
+        gain = self.settings.sensitivity * (1.6 + min(speed * 20.0, 1.4))
+        with self._lock:
+            x = self._target_x + dx * self.screen_width * gain
+            y = self._target_y + dy * self.screen_height * gain
+        return (
+            max(0, min(self.screen_width - 1, round(x))),
+            max(0, min(self.screen_height - 1, round(y))),
+        )
+
+    def _set_target(self, x: int, y: int, snap: SnapResult | None, mode: str,
+                    pinching: bool, semantic_target: tuple[int, int] | None = None) -> CursorState:
+        sx, sy = semantic_target or ((snap.x, snap.y) if snap else (x, y))
+        state = CursorState(sx, sy, x, y, pinching, snap, mode)
+        with self._lock:
+            self._target_x, self._target_y = x, y
+            self._point_target_x, self._point_target_y = x, y
+            self._state = state
+            self._active = True
+        return state
 
     def _animate(self) -> None:
         while not self._stop.wait(1 / 120):
@@ -101,14 +189,3 @@ class CursorController:
                 self._point_y += (self._point_target_y - self._point_y) * alpha
                 x, y = round(self._x), round(self._y)
             pyautogui.moveTo(x, y, _pause=False)
-
-    def _map(self, point: Point) -> tuple[int, int]:
-        span_x = 0.70 / self.settings.sensitivity
-        span_y = 0.60 / self.settings.sensitivity
-        left, top = 0.5 - span_x / 2, 0.5 - span_y / 2
-        x = (point.x - left) / span_x * self.screen_width
-        y = (point.y - top) / span_y * self.screen_height
-        return (
-            max(0, min(self.screen_width - 1, int(x))),
-            max(0, min(self.screen_height - 1, int(y))),
-        )

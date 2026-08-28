@@ -1,9 +1,21 @@
 from __future__ import annotations
 
 import ctypes
+import math
+import time
 import tkinter as tk
+from collections import deque
 
 from .cursor import CursorState
+
+COLORS = {
+    "tracking": "#44e5ff",
+    "hover": "#74f7c5",
+    "pinch": "#ffb02e",
+    "click": "#fff07a",
+    "drag": "#ff67d4",
+    "lost": "#4d7180",
+}
 
 
 class Overlay:
@@ -12,11 +24,11 @@ class Overlay:
         self.window.overrideredirect(True)
         self.window.attributes("-topmost", True)
         self.window.attributes("-transparentcolor", "#010101")
-        width = self.window.winfo_screenwidth()
-        height = self.window.winfo_screenheight()
+        width, height = self.window.winfo_screenwidth(), self.window.winfo_screenheight()
         self.window.geometry(f"{width}x{height}+0+0")
         self.canvas = tk.Canvas(self.window, bg="#010101", highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
+        self._trail: deque[tuple[int, int]] = deque(maxlen=8)
         self.window.update_idletasks()
         hwnd = self.window.winfo_id()
         ex_style = ctypes.windll.user32.GetWindowLongW(hwnd, -20)
@@ -25,19 +37,53 @@ class Overlay:
     def draw(self, state: CursorState | None) -> None:
         self.canvas.delete("all")
         if state is None:
+            self._trail.clear()
             return
-        color = "#ff9f1c" if state.pinching else "#44d7b6"
+
         x, y = state.point_x, state.point_y
-        r = 14
-        self.canvas.create_oval(x - r, y - r, x + r, y + r, outline=color, width=3)
-        self.canvas.create_oval(x - 4, y - 4, x + 4, y + 4, fill=color, outline=color)
-        self.canvas.create_line(x - 22, y, x - 10, y, fill=color, width=2)
-        self.canvas.create_line(x + 10, y, x + 22, y, fill=color, width=2)
-        self.canvas.create_line(x, y - 22, x, y - 10, fill=color, width=2)
-        self.canvas.create_line(x, y + 10, x, y + 22, fill=color, width=2)
+        mode = state.mode
+        color = COLORS.get(mode, COLORS["tracking"])
+        if mode != "lost" and (not self._trail or math.hypot(x - self._trail[-1][0], y - self._trail[-1][1]) > 2):
+            self._trail.append((x, y))
+        self._draw_trail(color)
+
+        pulse = (math.sin(time.monotonic() * 8) + 1) / 2
+        radius = 10 if mode in ("pinch", "click") else 15 + round(pulse * 2)
+        self.canvas.create_arc(x - radius, y - radius, x + radius, y + radius,
+                               start=15, extent=105, outline=color, width=3)
+        self.canvas.create_arc(x - radius, y - radius, x + radius, y + radius,
+                               start=195, extent=105, outline=color, width=3)
+        self.canvas.create_oval(x - 3, y - 3, x + 3, y + 3, fill=color, outline=color)
+        arm = radius + 9
+        for x1, y1, x2, y2 in ((x - arm, y, x - radius - 3, y), (x + radius + 3, y, x + arm, y),
+                               (x, y - arm, x, y - radius - 3), (x, y + radius + 3, x, y + arm)):
+            self.canvas.create_line(x1, y1, x2, y2, fill=color, width=2)
+        self.canvas.create_text(x + 25, y - 24, text=mode.upper(), fill=color,
+                                font=("Consolas", 9, "bold"), anchor="w")
+
         if state.snap:
-            left, top, right, bottom = state.snap.rect
-            self.canvas.create_line(x, y, state.x, state.y, fill="#44d7b6", width=2, dash=(4, 3))
-            self.canvas.create_rectangle(left, top, right, bottom, outline="#44d7b6", width=3)
-            self.canvas.create_oval(state.x - 5, state.y - 5, state.x + 5, state.y + 5,
-                                    fill="#44d7b6", outline="#44d7b6")
+            self._draw_target(state, color, solid=mode in ("pinch", "drag", "click"))
+
+    def _draw_trail(self, color: str) -> None:
+        points = list(self._trail)
+        if len(points) < 2:
+            return
+        for index in range(1, len(points)):
+            width = 1 if index < len(points) - 3 else 2
+            self.canvas.create_line(*points[index - 1], *points[index], fill=color, width=width)
+
+    def _draw_target(self, state: CursorState, color: str, solid: bool) -> None:
+        left, top, right, bottom = state.snap.rect
+        length = min(18, max(7, (right - left) // 4), max(7, (bottom - top) // 4))
+        segments = (
+            (left, top + length, left, top, left + length, top),
+            (right - length, top, right, top, right, top + length),
+            (right, bottom - length, right, bottom, right - length, bottom),
+            (left + length, bottom, left, bottom, left, bottom - length),
+        )
+        for segment in segments:
+            self.canvas.create_line(*segment, fill=color, width=3)
+        self.canvas.create_line(state.point_x, state.point_y, state.x, state.y, fill=color,
+                                width=2, dash=() if solid else (5, 4))
+        self.canvas.create_oval(state.x - 4, state.y - 4, state.x + 4, state.y + 4,
+                                fill=color, outline=color)

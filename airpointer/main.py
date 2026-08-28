@@ -17,6 +17,7 @@ class App:
     def __init__(self) -> None:
         self.root = tk.Tk()
         self.root.title("AirPointer")
+        self.root.configure(bg="#07131c")
         self.root.resizable(False, False)
         self.settings = Settings()
         self.snapper = UISnapper(self.settings.snap_radius)
@@ -26,6 +27,7 @@ class App:
         self._drawn_frame_version = -1
         self._frame_lock = threading.Lock()
         self._preview_photo = None
+        self._last_mode = ""
         self.camera = CameraLoop(self.settings, self.cursor, self._set_frame)
         self.overlay = Overlay(self.root)
         self._build_ui()
@@ -35,9 +37,22 @@ class App:
         self.root.after(16, self._redraw)
 
     def _build_ui(self) -> None:
+        style = ttk.Style(self.root)
+        style.theme_use("clam")
+        style.configure("TFrame", background="#07131c")
+        style.configure("TLabel", background="#07131c", foreground="#bdeeff", font=("Segoe UI", 10))
+        style.configure("TCheckbutton", background="#07131c", foreground="#bdeeff")
+        style.map("TCheckbutton", background=[("active", "#07131c")])
+        style.configure("TButton", background="#0e3a4a", foreground="#8cf1ff",
+                        bordercolor="#39dff5", font=("Segoe UI", 10, "bold"), padding=8)
+        style.map("TButton", background=[("active", "#14556b")])
+        style.configure("Horizontal.TScale", background="#07131c", troughcolor="#173441")
         frame = ttk.Frame(self.root, padding=24)
         frame.pack(fill="both", expand=True)
-        ttk.Label(frame, text="AirPointer", font=("Segoe UI", 20, "bold")).pack(anchor="w", pady=(0, 18))
+        ttk.Label(frame, text="AIRPOINTER // v0.2", foreground="#44e5ff",
+                  font=("Consolas", 19, "bold")).pack(anchor="w", pady=(0, 4))
+        ttk.Label(frame, text="SPATIAL POINTER INTERFACE", foreground="#527f91",
+                  font=("Consolas", 8)).pack(anchor="w", pady=(0, 15))
 
         camera_row = ttk.Frame(frame)
         camera_row.pack(fill="x", pady=5)
@@ -47,13 +62,14 @@ class App:
         camera.set("0")
         camera.pack(side="right")
 
-        self.preview = tk.Canvas(frame, width=320, height=180, bg="#171717", highlightthickness=0)
+        self.preview = tk.Canvas(frame, width=320, height=180, bg="#02090d",
+                                 highlightbackground="#1d8295", highlightthickness=1)
         self.preview.pack(pady=(8, 6))
-        self.preview.create_text(160, 90, text="Press Start to preview", fill="white")
+        self.preview.create_text(160, 90, text="CAMERA OFFLINE", fill="#527f91", font=("Consolas", 10))
 
         self._scale(frame, "Sensitivity", 0.6, 1.8, self.settings.sensitivity,
                     lambda value: setattr(self.settings, "sensitivity", float(value)))
-        self._scale(frame, "Smoothing", 0.03, 0.20, self.settings.smoothing,
+        self._scale(frame, "Responsiveness", 0.05, 0.35, self.settings.smoothing,
                     lambda value: setattr(self.settings, "smoothing", float(value)))
         self._scale(frame, "Pinch threshold", 0.20, 0.55, self.settings.pinch_threshold,
                     lambda value: setattr(self.settings, "pinch_threshold", float(value)))
@@ -67,7 +83,7 @@ class App:
             snap_var.set(False)
             self.settings.snap_enabled = False
 
-        self.status = ttk.Label(frame, text="Ready")
+        self.status = ttk.Label(frame, text="SYSTEM READY", foreground="#74f7c5", font=("Consolas", 9))
         self.status.pack(anchor="w", pady=(8, 6))
         self.button = ttk.Button(frame, text="Start", command=self._toggle)
         self.button.pack(fill="x")
@@ -81,11 +97,11 @@ class App:
         if self.camera.running:
             self.camera.stop()
             self.button.config(text="Start")
-            self.status.config(text="Stopped")
+            self.status.config(text="SYSTEM STANDBY")
         else:
             self.camera.start()
             self.button.config(text="Stop")
-            self.status.config(text="Running — lower your hand to release control")
+            self.status.config(text="TRACKING // FIST TO CLUTCH")
 
     def _set_frame(self, frame) -> None:
         with self._frame_lock:
@@ -93,14 +109,20 @@ class App:
             self._frame_version += 1
 
     def _redraw(self) -> None:
-        self.overlay.draw(self.cursor.current_state())
+        state = self.cursor.current_state()
+        self.overlay.draw(state)
+        mode = state.mode.upper() if state else ("SEARCHING FOR HAND" if self.camera.running else "SYSTEM STANDBY")
+        if mode != self._last_mode:
+            self.status.config(text=mode)
+            self._last_mode = mode
         with self._frame_lock:
             frame = self._frame
             version = self._frame_version
         if version != self._drawn_frame_version:
             self.preview.delete("all")
             if frame is None:
-                self.preview.create_text(160, 90, text="Camera stopped", fill="white")
+                self.preview.create_text(160, 90, text="CAMERA OFFLINE", fill="#527f91",
+                                         font=("Consolas", 10))
                 self._preview_photo = None
             else:
                 self._preview_photo = ImageTk.PhotoImage(Image.fromarray(frame))
