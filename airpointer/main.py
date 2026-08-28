@@ -15,7 +15,6 @@ class App:
     def __init__(self) -> None:
         self.root = tk.Tk()
         self.root.title("AirPointer")
-        self.root.geometry("390x390")
         self.root.resizable(False, False)
         self.settings = Settings()
         self.snapper = UISnapper(self.settings.snap_radius)
@@ -25,6 +24,8 @@ class App:
         self.camera = CameraLoop(self.settings, self.cursor, self._set_state)
         self.overlay = Overlay(self.root)
         self._build_ui()
+        self.root.update_idletasks()
+        self.root.geometry(f"390x{self.root.winfo_reqheight()}")
         self.root.protocol("WM_DELETE_WINDOW", self._close)
         self.root.after(16, self._redraw)
 
@@ -98,4 +99,3 @@ class App:
 
 if __name__ == "__main__":
     App().run()
-
