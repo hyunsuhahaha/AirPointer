@@ -1,6 +1,6 @@
 from airpointer.camera import _start_gate
 from airpointer.gesture import InteractionEngine
-from airpointer.hand_tracker import Point
+from airpointer.hand_tracker import Point, _select_right_hand
 from airpointer.ui_snap import _distance_to_rect, _snap_point
 
 
@@ -25,6 +25,13 @@ def test_hand_must_start_on_right_but_can_cross_left_after_tracking() -> None:
     assert points is right and admitted
     points, admitted = _start_gate(left, admitted)
     assert points is left and admitted
+
+
+def test_tracker_selects_right_hand_and_never_falls_back_to_left() -> None:
+    left = [Point(0.2, 0.5) for _ in range(21)]
+    right = [Point(0.7, 0.5) for _ in range(21)]
+    assert _select_right_hand([("Left", left), ("Right", right)]) is right
+    assert _select_right_hand([("Left", left)]) is None
 
 
 def test_open_hand_tracks() -> None:
