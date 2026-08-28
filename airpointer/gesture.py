@@ -142,8 +142,12 @@ def _palm_center(points: list[Point]) -> Point:
 
 def _pointing_target(points: list[Point]) -> Point:
     base, tip = points[5], points[8]
-    return Point(tip.x + (tip.x - base.x) * 2.0,
-                 tip.y + (tip.y - base.y) * 2.0)
+    dx, dy, dz = tip.x - base.x, tip.y - base.y, tip.z - base.z
+    length = max(math.sqrt(dx * dx + dy * dy + dz * dz), 1e-6)
+    gain = 0.55
+    return Point(0.5 + dx / length * gain,
+                 0.5 + dy / length * gain,
+                 dz / length)
 
 
 def _is_fist(points: list[Point]) -> bool:

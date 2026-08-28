@@ -43,7 +43,9 @@ class CursorController:
         self._last_hand: Point | None = None
         self._needs_absolute_anchor = True
         self._pinch_target: tuple[int, int] | None = None
+        self._pinch_raw: tuple[int, int] | None = None
         self._captured_snap: SnapResult | None = None
+        self._bias_x = self._bias_y = 0.0
         self._state: CursorState | None = None
         self._mouse_down = False
         self._active = False
@@ -70,6 +72,7 @@ class CursorController:
         if intent.event == "drag_end":
             self._mouse_up()
             self._pinch_target = None
+            self._pinch_raw = None
             self._captured_snap = None
             self._last_hand = intent.palm or intent.point
 
@@ -87,6 +90,7 @@ class CursorController:
         mode = "hover" if snap else "tracking"
         state = self._set_target(x, y, snap, mode, False)
         self._pinch_target = None
+        self._pinch_raw = None
         self._captured_snap = None
         return state
 
@@ -97,6 +101,7 @@ class CursorController:
         self._last_hand = None
         self._needs_absolute_anchor = True
         self._pinch_target = None
+        self._pinch_raw = None
         self._captured_snap = None
         self._mouse_up()
 
@@ -125,6 +130,7 @@ class CursorController:
             raw_x, raw_y = self._pointer_target(intent.point)
             snap = self.snapper.nearest(raw_x, raw_y) if self.settings.snap_enabled else None
             self._captured_snap = snap
+            self._pinch_raw = (raw_x, raw_y)
             self._pinch_target = (snap.x, snap.y) if snap else (raw_x, raw_y)
             self._last_hand = intent.palm or intent.point
         with self._lock:
@@ -142,7 +148,15 @@ class CursorController:
             self._x = self._point_x = self._target_x = self._point_target_x = x
             self._y = self._point_y = self._target_y = self._point_target_y = y
         snap = self._captured_snap
+        if snap and self._pinch_raw and self.settings.mapping_mode == "absolute":
+            self._bias_x += (snap.x - self._pinch_raw[0]) * 0.20
+            self._bias_y += (snap.y - self._pinch_raw[1]) * 0.20
+            self._bias_x = max(-self.screen_width * 0.15,
+                               min(self.screen_width * 0.15, self._bias_x))
+            self._bias_y = max(-self.screen_height * 0.15,
+                               min(self.screen_height * 0.15, self._bias_y))
         self._pinch_target = None
+        self._pinch_raw = None
         self._captured_snap = None
         self._last_hand = intent.palm or intent.point
         return self._set_target(x, y, snap, "click", False)
@@ -189,8 +203,8 @@ class CursorController:
         span_x = max(0.35, min(0.9, 0.70 / self.settings.sensitivity))
         span_y = max(0.30, min(0.85, 0.60 / self.settings.sensitivity))
         left, top = (1.0 - span_x) / 2.0, (1.0 - span_y) / 2.0
-        x = (point.x - left) / span_x * (self.screen_width - 1)
-        y = (point.y - top) / span_y * (self.screen_height - 1)
+        x = (point.x - left) / span_x * (self.screen_width - 1) + self._bias_x
+        y = (point.y - top) / span_y * (self.screen_height - 1) + self._bias_y
         return (
             max(0, min(self.screen_width - 1, round(x))),
             max(0, min(self.screen_height - 1, round(y))),

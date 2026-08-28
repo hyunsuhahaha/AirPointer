@@ -1,5 +1,5 @@
 from airpointer.camera import _start_gate
-from airpointer.gesture import InteractionEngine
+from airpointer.gesture import InteractionEngine, _pointing_target
 from airpointer.hand_tracker import Point, _select_right_hand
 from airpointer.ui_snap import _distance_to_rect, _snap_point
 
@@ -52,6 +52,18 @@ def test_pointer_projects_index_finger_direction() -> None:
     assert intent.point is not None
     assert intent.point.x < 0.25
     assert intent.point.y < 0.15
+
+
+def test_pointing_direction_is_invariant_to_hand_distance() -> None:
+    near = _hand()
+    near[5] = Point(0.62, 0.68, 0.0)
+    near[8] = Point(0.42, 0.38, -0.25)
+    far = [Point(0.5 + (point.x - 0.5) * 0.5,
+                 0.5 + (point.y - 0.5) * 0.5,
+                 point.z * 0.5) for point in near]
+    near_target, far_target = _pointing_target(near), _pointing_target(far)
+    assert abs(near_target.x - far_target.x) < 1e-9
+    assert abs(near_target.y - far_target.y) < 1e-9
 
 
 def test_front_facing_index_is_not_mistaken_for_a_fist() -> None:

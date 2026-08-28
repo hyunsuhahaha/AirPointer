@@ -101,11 +101,16 @@ def test_pinch_commits_locked_target_once(monkeypatch) -> None:
     controller = CursorController(Settings(mouse_enabled=True), LockedSnap())
     try:
         point = Point(0.5, 0.5)
+        before = controller._absolute_target(point)
         controller.apply(Intent("tracking", point))
         controller.apply(Intent("pinch", point))
         assert not clicks
         controller.apply(Intent("tracking", point, event="click"))
         assert len(clicks) == 1
         assert (222, 333) in moves
+        controller.release()
+        after = controller._absolute_target(point)
+        assert abs(after[0] - 222) < abs(before[0] - 222)
+        assert abs(after[1] - 333) < abs(before[1] - 333)
     finally:
         controller.close()
