@@ -85,10 +85,15 @@ class App:
         self._scale(frame, "Pinch threshold", 0.20, 0.55, self.settings.pinch_threshold,
                     lambda value: setattr(self.settings, "pinch_threshold", float(value)))
 
+        mouse_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frame, text="Mouse Control", variable=mouse_var,
+                        command=lambda: self.cursor.set_mouse_enabled(mouse_var.get())).pack(
+                            anchor="w", pady=(10, 2))
+
         snap_var = tk.BooleanVar(value=True)
         snap = ttk.Checkbutton(frame, text="UI Snap", variable=snap_var,
                                command=lambda: setattr(self.settings, "snap_enabled", snap_var.get()))
-        snap.pack(anchor="w", pady=10)
+        snap.pack(anchor="w", pady=(2, 10))
         if not self.snapper.available:
             snap.state(["disabled"])
             snap_var.set(False)

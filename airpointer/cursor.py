@@ -108,6 +108,11 @@ class CursorController:
             return CursorState(state.x, state.y, round(self._point_x), round(self._point_y),
                                state.pinching, state.snap, state.mode, state.confidence)
 
+    def set_mouse_enabled(self, enabled: bool) -> None:
+        if not enabled:
+            self._mouse_up()
+        self.settings.mouse_enabled = enabled
+
     def close(self) -> None:
         self.release()
         self._stop.set()
@@ -130,8 +135,9 @@ class CursorController:
     def _click(self, intent: Intent) -> CursorState:
         assert intent.point is not None
         x, y = self._pinch_target or (round(self._target_x), round(self._target_y))
-        pyautogui.moveTo(x, y, _pause=False)
-        pyautogui.click(_pause=False)
+        if self.settings.mouse_enabled:
+            pyautogui.moveTo(x, y, _pause=False)
+            pyautogui.click(_pause=False)
         with self._lock:
             self._x = self._point_x = self._target_x = self._point_target_x = x
             self._y = self._point_y = self._target_y = self._point_target_y = y
@@ -143,9 +149,10 @@ class CursorController:
 
     def _start_drag(self) -> None:
         x, y = self._pinch_target or (round(self._target_x), round(self._target_y))
-        pyautogui.moveTo(x, y, _pause=False)
-        pyautogui.mouseDown(_pause=False)
-        self._mouse_down = True
+        if self.settings.mouse_enabled:
+            pyautogui.moveTo(x, y, _pause=False)
+            pyautogui.mouseDown(_pause=False)
+            self._mouse_down = True
         with self._lock:
             self._x = self._point_x = self._target_x = self._point_target_x = x
             self._y = self._point_y = self._target_y = self._point_target_y = y
@@ -226,4 +233,5 @@ class CursorController:
                 self._point_x += (self._point_target_x - self._point_x) * alpha
                 self._point_y += (self._point_target_y - self._point_y) * alpha
                 x, y = round(self._x), round(self._y)
-            pyautogui.moveTo(x, y, _pause=False)
+            if self.settings.mouse_enabled:
+                pyautogui.moveTo(x, y, _pause=False)

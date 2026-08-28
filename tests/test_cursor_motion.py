@@ -16,6 +16,24 @@ class NoSnap:
         pass
 
 
+def test_tracking_is_visual_only_by_default(monkeypatch) -> None:
+    moves: list[tuple[int, int]] = []
+    monkeypatch.setattr(cursor_module.pyautogui, "size", lambda: (1000, 1000))
+    monkeypatch.setattr(cursor_module.pyautogui, "position",
+                        lambda: type("Position", (), {"x": 500, "y": 500})())
+    monkeypatch.setattr(cursor_module.pyautogui, "moveTo",
+                        lambda x, y, **kwargs: moves.append((int(x), int(y))))
+    controller = CursorController(Settings(snap_enabled=False), NoSnap())
+    try:
+        state = controller.apply(Intent("tracking", Point(0.2, 0.5)))
+        time.sleep(0.04)
+        assert state is not None
+        assert state.point_x < 100
+        assert moves == []
+    finally:
+        controller.close()
+
+
 def test_absolute_pointing_reaches_left_edge_from_right_side(monkeypatch) -> None:
     monkeypatch.setattr(cursor_module.pyautogui, "size", lambda: (1000, 1000))
     monkeypatch.setattr(cursor_module.pyautogui, "position",
@@ -53,7 +71,7 @@ def test_cursor_interpolates_between_camera_frames(monkeypatch) -> None:
                         lambda: type("Position", (), {"x": 0, "y": 0})())
     monkeypatch.setattr(cursor_module.pyautogui, "moveTo",
                         lambda x, y, **kwargs: moves.append((int(x), int(y))))
-    controller = CursorController(Settings(snap_enabled=False), NoSnap())
+    controller = CursorController(Settings(mouse_enabled=True, snap_enabled=False), NoSnap())
     try:
         controller.apply(Intent("tracking", Point(0.5, 0.5)))
         controller.apply(Intent("tracking", Point(0.7, 0.5)))
@@ -80,7 +98,7 @@ def test_pinch_commits_locked_target_once(monkeypatch) -> None:
         def nearest(self, x: int, y: int):
             return SnapResult(222, 333, (200, 300, 260, 350))
 
-    controller = CursorController(Settings(), LockedSnap())
+    controller = CursorController(Settings(mouse_enabled=True), LockedSnap())
     try:
         point = Point(0.5, 0.5)
         controller.apply(Intent("tracking", point))
