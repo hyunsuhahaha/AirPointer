@@ -67,6 +67,17 @@ class App:
         self.preview.pack(pady=(8, 6))
         self.preview.create_text(160, 90, text="CAMERA OFFLINE", fill="#527f91", font=("Consolas", 10))
 
+        mapping_row = ttk.Frame(frame)
+        mapping_row.pack(fill="x", pady=(7, 2))
+        ttk.Label(mapping_row, text="Mapping").pack(side="left")
+        mapping_var = tk.StringVar(value="Absolute pointing")
+        mapping = ttk.Combobox(mapping_row, textvariable=mapping_var, state="readonly", width=18,
+                               values=("Absolute pointing", "Relative hand"))
+        mapping.pack(side="right")
+        mapping.bind("<<ComboboxSelected>>", lambda _event: setattr(
+            self.settings, "mapping_mode",
+            "absolute" if mapping_var.get() == "Absolute pointing" else "relative"))
+
         self._scale(frame, "Sensitivity", 0.6, 1.8, self.settings.sensitivity,
                     lambda value: setattr(self.settings, "sensitivity", float(value)))
         self._scale(frame, "Responsiveness", 0.05, 0.35, self.settings.smoothing,

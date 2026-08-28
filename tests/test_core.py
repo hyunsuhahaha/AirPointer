@@ -19,6 +19,8 @@ def test_open_hand_tracks() -> None:
     points = _hand()
     intent = InteractionEngine().update(points, 0.0)
     assert intent.phase == "tracking" and intent.point is not None
+    assert intent.point == points[8]
+    assert intent.palm is not None
 
 
 def test_pinch_uses_hysteresis_and_emits_click_on_release() -> None:
@@ -65,9 +67,8 @@ def test_interaction_engine_filters_stationary_landmark_jitter() -> None:
     for index in range(30):
         points = _hand()
         jitter = 0.006 if index % 2 else -0.006
-        for landmark in (0, 5, 9, 13, 17):
-            point = points[landmark]
-            points[landmark] = Point(point.x + jitter, point.y)
+        point = points[8]
+        points[8] = Point(point.x + jitter, point.y)
         intent = engine.update(points, index / 30)
         outputs.append(intent.point.x)
     assert max(outputs[-10:]) - min(outputs[-10:]) < 0.004

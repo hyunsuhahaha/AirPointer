@@ -17,6 +17,7 @@ class Intent:
     event: Event | None = None
     pinch_ratio: float | None = None
     confidence: float = 1.0
+    palm: Point | None = None
 
 
 class _OneEuro:
@@ -60,17 +61,23 @@ class InteractionEngine:
         self._pinch_time: float | None = None
         self._pinch_point: Point | None = None
         self._last_point: Point | None = None
+        self._last_palm: Point | None = None
         self._x_filter, self._y_filter = _OneEuro(), _OneEuro()
+        self._palm_x_filter, self._palm_y_filter = _OneEuro(), _OneEuro()
 
     def update(self, points: list[Point] | None, timestamp: float) -> Intent:
         if not points:
             return self._missing()
 
         self._absent_run = 0
-        raw_point = _palm_center(points)
+        raw_point = points[8]
+        raw_palm = _palm_center(points)
         point = Point(self._x_filter.update(raw_point.x, timestamp),
                       self._y_filter.update(raw_point.y, timestamp))
+        palm = Point(self._palm_x_filter.update(raw_palm.x, timestamp),
+                     self._palm_y_filter.update(raw_palm.y, timestamp))
         self._last_point = point
+        self._last_palm = palm
         if _is_fist(points):
             event = "drag_end" if self._phase == "drag" else None
             self._pause()
@@ -85,11 +92,11 @@ class InteractionEngine:
         event: Event | None = None
         if self._phase == "tracking" and self._enter_run >= self.confirm_frames:
             self._phase = "pinch"
-            self._pinch_time, self._pinch_point = timestamp, point
+            self._pinch_time, self._pinch_point = timestamp, palm
             self._exit_run = 0
         elif self._phase == "pinch":
             assert self._pinch_time is not None and self._pinch_point is not None
-            moved = _distance(point, self._pinch_point)
+            moved = _distance(palm, self._pinch_point)
             if self._exit_run >= self.confirm_frames:
                 self._phase, event = "tracking", "click"
                 self._clear_pinch()
@@ -99,13 +106,13 @@ class InteractionEngine:
             self._phase, event = "tracking", "drag_end"
             self._clear_pinch()
 
-        return Intent(self._phase, point, event, ratio)
+        return Intent(self._phase, point, event, ratio, palm=palm)
 
     def _missing(self) -> Intent:
         self._absent_run += 1
         if self._absent_run < self.lost_frames and self._last_point is not None:
             confidence = 1.0 - self._absent_run / self.lost_frames
-            return Intent("lost", self._last_point, confidence=confidence)
+            return Intent("lost", self._last_point, confidence=confidence, palm=self._last_palm)
         event = "drag_end" if self._phase == "drag" else None
         self._pause()
         return Intent("paused", None, event, confidence=0.0)
@@ -120,6 +127,8 @@ class InteractionEngine:
         self._clear_pinch()
         self._x_filter.reset()
         self._y_filter.reset()
+        self._palm_x_filter.reset()
+        self._palm_y_filter.reset()
 
     def _clear_pinch(self) -> None:
         self._pinch_time = None

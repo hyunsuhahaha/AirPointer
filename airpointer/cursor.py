@@ -28,7 +28,7 @@ class CursorState:
 
 
 class CursorController:
-    """Adapts pure interaction intent to relative Windows pointer input."""
+    """Maps interaction intent to absolute pointing or optional relative input."""
 
     def __init__(self, settings: Settings, snapper: UISnapper) -> None:
         self.settings = settings
@@ -64,23 +64,23 @@ class CursorController:
 
         assert intent.point is not None
         if intent.event == "click":
-            return self._click(intent.point)
+            return self._click(intent)
         if intent.event == "drag_end":
             self._mouse_up()
             self._pinch_target = None
             self._captured_snap = None
-            self._last_hand = intent.point
+            self._last_hand = intent.palm or intent.point
 
         if intent.phase == "pinch":
-            return self._hold_pinch(intent.point)
+            return self._hold_pinch(intent)
 
         if intent.phase == "drag":
             if intent.event == "drag_start":
                 self._start_drag()
-            x, y = self._relative_target(intent.point)
+            x, y = self._drag_target(intent)
             return self._set_target(x, y, None, "drag", True)
 
-        x, y = self._relative_target(intent.point)
+        x, y = self._pointer_target(intent.point)
         snap = self.snapper.nearest(x, y) if self.settings.snap_enabled else None
         mode = "hover" if snap else "tracking"
         state = self._set_target(x, y, snap, mode, False)
@@ -111,19 +111,21 @@ class CursorController:
         self._thread.join(timeout=0.2)
         self.snapper.close()
 
-    def _hold_pinch(self, point: Point) -> CursorState:
+    def _hold_pinch(self, intent: Intent) -> CursorState:
+        assert intent.point is not None
         if self._pinch_target is None:
-            raw_x, raw_y = self._relative_target(point)
+            raw_x, raw_y = self._pointer_target(intent.point)
             snap = self.snapper.nearest(raw_x, raw_y) if self.settings.snap_enabled else None
             self._captured_snap = snap
             self._pinch_target = (snap.x, snap.y) if snap else (raw_x, raw_y)
-            self._last_hand = point
+            self._last_hand = intent.palm or intent.point
         with self._lock:
             hold_x, hold_y = round(self._x), round(self._y)
         return self._set_target(hold_x, hold_y, self._captured_snap, "pinch", True,
                                 semantic_target=self._pinch_target)
 
-    def _click(self, point: Point) -> CursorState:
+    def _click(self, intent: Intent) -> CursorState:
+        assert intent.point is not None
         x, y = self._pinch_target or (round(self._target_x), round(self._target_y))
         pyautogui.moveTo(x, y, _pause=False)
         pyautogui.click(_pause=False)
@@ -133,7 +135,7 @@ class CursorController:
         snap = self._captured_snap
         self._pinch_target = None
         self._captured_snap = None
-        self._last_hand = point
+        self._last_hand = intent.palm or intent.point
         return self._set_target(x, y, snap, "click", False)
 
     def _start_drag(self) -> None:
@@ -165,6 +167,25 @@ class CursorController:
             max(0, min(self.screen_width - 1, round(x))),
             max(0, min(self.screen_height - 1, round(y))),
         )
+
+    def _pointer_target(self, point: Point) -> tuple[int, int]:
+        if self.settings.mapping_mode == "relative":
+            return self._relative_target(point)
+        self._last_hand = None
+        span_x = max(0.35, min(0.9, 0.70 / self.settings.sensitivity))
+        span_y = max(0.30, min(0.85, 0.60 / self.settings.sensitivity))
+        left, top = (1.0 - span_x) / 2.0, (1.0 - span_y) / 2.0
+        x = (point.x - left) / span_x * (self.screen_width - 1)
+        y = (point.y - top) / span_y * (self.screen_height - 1)
+        return (
+            max(0, min(self.screen_width - 1, round(x))),
+            max(0, min(self.screen_height - 1, round(y))),
+        )
+
+    def _drag_target(self, intent: Intent) -> tuple[int, int]:
+        assert intent.point is not None
+        # Palm deltas avoid the cursor jump caused by bending the index finger to pinch.
+        return self._relative_target(intent.palm or intent.point)
 
     def _set_target(self, x: int, y: int, snap: SnapResult | None, mode: str,
                     pinching: bool, semantic_target: tuple[int, int] | None = None) -> CursorState:
