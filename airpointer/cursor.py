@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 
 import pyautogui
@@ -27,38 +28,79 @@ class CursorController:
         self.settings = settings
         self.snapper = snapper
         self.screen_width, self.screen_height = pyautogui.size()
-        self._x: float | None = None
-        self._y: float | None = None
+        start = pyautogui.position()
+        self._x, self._y = float(start.x), float(start.y)
+        self._point_x, self._point_y = self._x, self._y
+        self._target_x, self._target_y = self._x, self._y
+        self._point_target_x, self._point_target_y = self._x, self._y
+        self._state: CursorState | None = None
         self._mouse_down = False
+        self._active = False
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._animate, name="airpointer-cursor", daemon=True)
+        self._thread.start()
 
     def update(self, point: Point, pinching: bool) -> CursorState:
-        target_x, target_y = self._map(point)
-        alpha = self.settings.smoothing
-        self._x = target_x if self._x is None else self._x * (1 - alpha) + target_x * alpha
-        self._y = target_y if self._y is None else self._y * (1 - alpha) + target_y * alpha
-        x, y = int(self._x), int(self._y)
-        point_x, point_y = x, y
+        point_x, point_y = self._map(point)
+        x, y = point_x, point_y
 
         snap = None
         if self.settings.snap_enabled and not self._mouse_down:
             snap = self.snapper.nearest(x, y)
             if snap:
                 x, y = snap.x, snap.y
-                self._x, self._y = x, y
 
-        pyautogui.moveTo(x, y, _pause=False)
+        state = CursorState(x, y, point_x, point_y, pinching, snap)
+        with self._lock:
+            self._target_x, self._target_y = x, y
+            self._point_target_x, self._point_target_y = point_x, point_y
+            self._state = state
+            self._active = True
         if pinching and not self._mouse_down:
+            pyautogui.moveTo(x, y, _pause=False)
+            with self._lock:
+                self._x, self._y = x, y
             pyautogui.mouseDown(_pause=False)
             self._mouse_down = True
         elif not pinching and self._mouse_down:
             pyautogui.mouseUp(_pause=False)
             self._mouse_down = False
-        return CursorState(x, y, point_x, point_y, pinching, snap)
+        return state
 
     def release(self) -> None:
+        with self._lock:
+            self._active = False
+            self._state = None
         if self._mouse_down:
             pyautogui.mouseUp(_pause=False)
             self._mouse_down = False
+
+    def current_state(self) -> CursorState | None:
+        with self._lock:
+            if not self._active or self._state is None:
+                return None
+            state = self._state
+            return CursorState(state.x, state.y, round(self._point_x), round(self._point_y),
+                               state.pinching, state.snap)
+
+    def close(self) -> None:
+        self.release()
+        self._stop.set()
+        self._thread.join(timeout=0.2)
+
+    def _animate(self) -> None:
+        while not self._stop.wait(1 / 120):
+            with self._lock:
+                if not self._active:
+                    continue
+                alpha = self.settings.smoothing
+                self._x += (self._target_x - self._x) * alpha
+                self._y += (self._target_y - self._y) * alpha
+                self._point_x += (self._point_target_x - self._point_x) * alpha
+                self._point_y += (self._point_target_y - self._point_y) * alpha
+                x, y = round(self._x), round(self._y)
+            pyautogui.moveTo(x, y, _pause=False)
 
     def _map(self, point: Point) -> tuple[int, int]:
         span_x = 0.70 / self.settings.sensitivity

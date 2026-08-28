@@ -84,13 +84,12 @@ class App:
             self._state = state
 
     def _redraw(self) -> None:
-        with self._state_lock:
-            state = self._state
-        self.overlay.draw(state)
+        self.overlay.draw(self.cursor.current_state())
         self.root.after(16, self._redraw)
 
     def _close(self) -> None:
         self.camera.stop()
+        self.cursor.close()
         self.root.destroy()
 
     def run(self) -> None:
