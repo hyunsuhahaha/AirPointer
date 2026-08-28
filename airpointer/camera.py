@@ -47,8 +47,10 @@ class CameraLoop:
 
     def _run(self) -> None:
         capture = cv2.VideoCapture(self.settings.camera_index, cv2.CAP_DSHOW)
-        capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 360)
+        capture.set(cv2.CAP_PROP_FPS, 60)
         capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         tracker = HandTracker()
         engine = InteractionEngine(pinch_on=self.settings.pinch_threshold)
@@ -58,7 +60,8 @@ class CameraLoop:
                 if not ok:
                     time.sleep(0.05)
                     continue
-                points = tracker.process(frame)
+                tracking_frame = cv2.resize(frame, (320, 180), interpolation=cv2.INTER_AREA)
+                points = tracker.process(tracking_frame)
                 intent = engine.update(points, time.monotonic())
                 self.cursor.apply(intent)
                 self.on_frame(_make_preview(frame, points, intent))
