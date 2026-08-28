@@ -16,6 +16,8 @@ pyautogui.FAILSAFE = False
 class CursorState:
     x: int
     y: int
+    point_x: int
+    point_y: int
     pinching: bool
     snap: SnapResult | None
 
@@ -35,6 +37,7 @@ class CursorController:
         self._x = target_x if self._x is None else self._x * (1 - alpha) + target_x * alpha
         self._y = target_y if self._y is None else self._y * (1 - alpha) + target_y * alpha
         x, y = int(self._x), int(self._y)
+        point_x, point_y = x, y
 
         snap = None
         if self.settings.snap_enabled and not self._mouse_down:
@@ -50,7 +53,7 @@ class CursorController:
         elif not pinching and self._mouse_down:
             pyautogui.mouseUp(_pause=False)
             self._mouse_down = False
-        return CursorState(x, y, pinching, snap)
+        return CursorState(x, y, point_x, point_y, pinching, snap)
 
     def release(self) -> None:
         if self._mouse_down:

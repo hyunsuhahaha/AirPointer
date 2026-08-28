@@ -1,7 +1,9 @@
 from airpointer.main import App
+from airpointer.cursor import CursorState
+from airpointer.ui_snap import SnapResult
 
 
-def test_start_button_fits_in_window() -> None:
+def test_ui_fits_and_draws_pointer() -> None:
     app = App()
     try:
         app.root.update()
@@ -9,5 +11,8 @@ def test_start_button_fits_in_window() -> None:
         button_bottom = app.button.winfo_rooty() + app.button.winfo_height()
         window_bottom = app.root.winfo_rooty() + app.root.winfo_height()
         assert button_bottom <= window_bottom
+        state = CursorState(200, 200, 120, 130, False, SnapResult(200, 200, (180, 180, 220, 220)))
+        app.overlay.draw(state)
+        assert len(app.overlay.canvas.find_all()) >= 9
     finally:
         app._close()

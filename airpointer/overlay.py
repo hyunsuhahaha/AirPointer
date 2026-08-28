@@ -27,10 +27,17 @@ class Overlay:
         if state is None:
             return
         color = "#ff9f1c" if state.pinching else "#44d7b6"
-        r = 9
-        self.canvas.create_oval(state.x - r, state.y - r, state.x + r, state.y + r,
-                                outline=color, width=3)
+        x, y = state.point_x, state.point_y
+        r = 14
+        self.canvas.create_oval(x - r, y - r, x + r, y + r, outline=color, width=3)
+        self.canvas.create_oval(x - 4, y - 4, x + 4, y + 4, fill=color, outline=color)
+        self.canvas.create_line(x - 22, y, x - 10, y, fill=color, width=2)
+        self.canvas.create_line(x + 10, y, x + 22, y, fill=color, width=2)
+        self.canvas.create_line(x, y - 22, x, y - 10, fill=color, width=2)
+        self.canvas.create_line(x, y + 10, x, y + 22, fill=color, width=2)
         if state.snap:
             left, top, right, bottom = state.snap.rect
+            self.canvas.create_line(x, y, state.x, state.y, fill="#44d7b6", width=2, dash=(4, 3))
             self.canvas.create_rectangle(left, top, right, bottom, outline="#44d7b6", width=3)
-
+            self.canvas.create_oval(state.x - 5, state.y - 5, state.x + 5, state.y + 5,
+                                    fill="#44d7b6", outline="#44d7b6")
