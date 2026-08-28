@@ -1,6 +1,6 @@
 from airpointer.gesture import recognize
 from airpointer.hand_tracker import Point
-from airpointer.ui_snap import _distance_to_rect
+from airpointer.ui_snap import _distance_to_rect, _snap_point
 
 
 def _hand() -> list[Point]:
@@ -33,3 +33,7 @@ def test_distance_to_rect() -> None:
     assert _distance_to_rect(15, 15, (10, 10, 20, 20)) == 0
     assert _distance_to_rect(30, 15, (10, 10, 20, 20)) == 10
 
+
+def test_snap_uses_nearest_safe_point_instead_of_jumping_to_center() -> None:
+    assert _snap_point(20, 50, (10, 10, 110, 90)) == (20, 50)
+    assert _snap_point(0, 50, (10, 10, 110, 90)) == (14, 50)

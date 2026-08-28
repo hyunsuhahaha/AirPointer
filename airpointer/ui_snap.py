@@ -73,9 +73,9 @@ class UISnapper:
                     continue
                 box = control.BoundingRectangle
                 rect = (int(box.left), int(box.top), int(box.right), int(box.bottom))
-                cx, cy = (rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2
                 if _distance_to_rect(x, y, rect) <= r:
-                    candidates[rect] = SnapResult(cx, cy, rect)
+                    sx, sy = _snap_point(x, y, rect)
+                    candidates[rect] = SnapResult(sx, sy, rect)
             except Exception:
                 continue
         return min(candidates.values(), key=lambda item: hypot(item.x - x, item.y - y), default=None)
@@ -86,3 +86,12 @@ def _distance_to_rect(x: int, y: int, rect: tuple[int, int, int, int]) -> float:
     dx = max(left - x, 0, x - right)
     dy = max(top - y, 0, y - bottom)
     return hypot(dx, dy)
+
+
+def _snap_point(x: int, y: int, rect: tuple[int, int, int, int]) -> tuple[int, int]:
+    left, top, right, bottom = rect
+    margin = min(4, max(0, (right - left) // 2), max(0, (bottom - top) // 2))
+    return (
+        max(left + margin, min(x, right - margin)),
+        max(top + margin, min(y, bottom - margin)),
+    )

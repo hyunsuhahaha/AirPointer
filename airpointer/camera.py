@@ -43,6 +43,7 @@ class CameraLoop:
         capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         tracker = HandTracker()
+        misses = 0
         try:
             with automation_context():
                 while not self._stop.is_set() and capture.isOpened():
@@ -54,12 +55,21 @@ class CameraLoop:
                     self.on_frame(cv2.cvtColor(preview, cv2.COLOR_BGR2RGB))
                     points = tracker.process(frame)
                     if not points:
-                        self.cursor.release()
+                        misses += 1
+                        if misses >= 4:
+                            self.cursor.release()
                         continue
                     gesture = recognize(points, self.settings.pinch_threshold)
-                    if gesture.paused or not gesture.pointing:
+                    if gesture.paused:
+                        misses = 0
                         self.cursor.release()
                         continue
+                    if not gesture.pointing:
+                        misses += 1
+                        if misses >= 4:
+                            self.cursor.release()
+                        continue
+                    misses = 0
                     self.cursor.update(gesture.index_tip, gesture.pinching)
         finally:
             self.cursor.release()

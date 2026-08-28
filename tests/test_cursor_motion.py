@@ -27,3 +27,18 @@ def test_cursor_interpolates_between_camera_frames(monkeypatch) -> None:
         close = getattr(controller, "close", None)
         if close:
             close()
+
+
+def test_default_smoothing_hides_30_fps_velocity_steps() -> None:
+    alpha = Settings().smoothing
+    position = 0.0
+    target = 0.0
+    deltas: list[float] = []
+    for tick in range(80):
+        if tick % 4 == 0:
+            target += 100
+        next_position = position + (target - position) * alpha
+        if tick >= 40:
+            deltas.append(next_position - position)
+        position = next_position
+    assert max(deltas) / min(deltas) < 1.5

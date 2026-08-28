@@ -53,7 +53,7 @@ class App:
 
         self._scale(frame, "Sensitivity", 0.6, 1.8, self.settings.sensitivity,
                     lambda value: setattr(self.settings, "sensitivity", float(value)))
-        self._scale(frame, "Smoothing", 0.1, 0.8, self.settings.smoothing,
+        self._scale(frame, "Smoothing", 0.03, 0.20, self.settings.smoothing,
                     lambda value: setattr(self.settings, "smoothing", float(value)))
         self._scale(frame, "Pinch threshold", 0.20, 0.55, self.settings.pinch_threshold,
                     lambda value: setattr(self.settings, "pinch_threshold", float(value)))
