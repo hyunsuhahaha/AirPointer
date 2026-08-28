@@ -147,7 +147,17 @@ def _pointing_target(points: list[Point]) -> Point:
 
 
 def _is_fist(points: list[Point]) -> bool:
-    return all(points[tip].y >= points[pip].y for tip, pip in ((8, 6), (12, 10), (16, 14), (20, 18)))
+    fingers = ((5, 6, 8), (9, 10, 12), (13, 14, 16), (17, 18, 20))
+    return not any(_is_extended(points[mcp], points[pip], points[tip])
+                   for mcp, pip, tip in fingers)
+
+
+def _is_extended(mcp: Point, pip: Point, tip: Point) -> bool:
+    first = (pip.x - mcp.x, pip.y - mcp.y, pip.z - mcp.z)
+    second = (tip.x - pip.x, tip.y - pip.y, tip.z - pip.z)
+    lengths = math.sqrt(sum(value * value for value in first)) * math.sqrt(
+        sum(value * value for value in second))
+    return lengths > 1e-6 and sum(a * b for a, b in zip(first, second)) / lengths > 0.35
 
 
 def _distance(a: Point, b: Point) -> float:

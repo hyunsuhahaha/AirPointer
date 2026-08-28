@@ -35,6 +35,17 @@ def test_pointer_projects_index_finger_direction() -> None:
     assert intent.point.y < 0.15
 
 
+def test_front_facing_index_is_not_mistaken_for_a_fist() -> None:
+    points = _hand()
+    points[5] = Point(0.50, 0.60, 0.0)
+    points[6] = Point(0.50, 0.50, -0.2)
+    points[8] = Point(0.50, 0.51, -0.5)
+    for tip, pip in ((12, 10), (16, 14), (20, 18)):
+        points[tip] = Point(points[pip].x, points[pip].y + 0.08)
+    intent = InteractionEngine().update(points, 0.0)
+    assert intent.phase == "tracking"
+
+
 def test_pinch_uses_hysteresis_and_emits_click_on_release() -> None:
     engine = InteractionEngine()
     points = _hand()
