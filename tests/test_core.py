@@ -1,3 +1,4 @@
+from airpointer.camera import _start_gate
 from airpointer.gesture import InteractionEngine
 from airpointer.hand_tracker import Point
 from airpointer.ui_snap import _distance_to_rect, _snap_point
@@ -13,6 +14,17 @@ def _hand() -> list[Point]:
         points[tip] = Point(0.5, 0.3)
     points[4] = Point(0.2, 0.5)
     return points
+
+
+def test_hand_must_start_on_right_but_can_cross_left_after_tracking() -> None:
+    left = [Point(0.2, 0.5) for _ in range(21)]
+    right = [Point(0.7, 0.5) for _ in range(21)]
+    points, admitted = _start_gate(left, False)
+    assert points is None and not admitted
+    points, admitted = _start_gate(right, admitted)
+    assert points is right and admitted
+    points, admitted = _start_gate(left, admitted)
+    assert points is left and admitted
 
 
 def test_open_hand_tracks() -> None:

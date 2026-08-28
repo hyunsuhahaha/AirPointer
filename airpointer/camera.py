@@ -16,6 +16,7 @@ HAND_CONNECTIONS = (
     (5, 9), (9, 10), (10, 11), (11, 12), (9, 13), (13, 14), (14, 15),
     (15, 16), (13, 17), (0, 17), (17, 18), (18, 19), (19, 20),
 )
+START_ZONE_X = 0.4
 
 
 class CameraLoop:
@@ -54,6 +55,7 @@ class CameraLoop:
         capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         tracker = HandTracker()
         engine = InteractionEngine(pinch_on=self.settings.pinch_threshold)
+        admitted = False
         try:
             while not self._stop.is_set() and capture.isOpened():
                 ok, frame = capture.read()
@@ -61,8 +63,10 @@ class CameraLoop:
                     time.sleep(0.05)
                     continue
                 tracking_frame = cv2.resize(frame, (320, 180), interpolation=cv2.INTER_AREA)
-                points = tracker.process(tracking_frame)
+                points, admitted = _start_gate(tracker.process(tracking_frame), admitted)
                 intent = engine.update(points, time.monotonic())
+                if intent.phase == "paused":
+                    admitted = False
                 self.cursor.apply(intent)
                 self.on_frame(_make_preview(frame, points, intent))
         finally:
@@ -74,6 +78,13 @@ class CameraLoop:
 
 def _make_preview(frame, points, intent: Intent):
     preview = cv2.resize(cv2.flip(frame, 1), (320, 180))
+    boundary = round(START_ZONE_X * 320)
+    shade = preview.copy()
+    cv2.rectangle(shade, (0, 0), (boundary, 180), (3, 9, 13), -1)
+    preview = cv2.addWeighted(shade, 0.62, preview, 0.38, 0)
+    cv2.line(preview, (boundary, 0), (boundary, 180), (68, 229, 255), 1)
+    cv2.putText(preview, "START >", (boundary + 5, 174), cv2.FONT_HERSHEY_SIMPLEX,
+                0.35, (68, 229, 255), 1, cv2.LINE_AA)
     colors = {
         "tracking": (214, 215, 68), "pinch": (28, 159, 255), "drag": (255, 100, 220),
         "lost": (120, 120, 120), "paused": (80, 80, 80),
@@ -90,3 +101,10 @@ def _make_preview(frame, points, intent: Intent):
         label += f"  PINCH {intent.pinch_ratio:.2f}"
     cv2.putText(preview, label, (9, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.42, color, 1, cv2.LINE_AA)
     return cv2.cvtColor(preview, cv2.COLOR_BGR2RGB)
+
+
+def _start_gate(points, admitted: bool):
+    if admitted or not points:
+        return points, admitted
+    palm_x = sum(points[index].x for index in (0, 5, 9, 13, 17)) / 5
+    return (points, True) if palm_x >= START_ZONE_X else (None, False)
