@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass, replace
 from typing import Literal
 
@@ -19,17 +20,21 @@ class WinkState:
 
 
 class WinkDetector:
-    def __init__(self, closed_ratio: float = 0.75) -> None:
+    def __init__(self, closed_ratio: float = 0.75, min_hold_seconds: float = 0.15) -> None:
         self.closed_ratio = closed_ratio
+        self.min_hold_seconds = min_hold_seconds
         self._left_base: float | None = None
         self._right_base: float | None = None
-        self._left_run = self._right_run = 0
+        self._left_since: float | None = None
+        self._right_since: float | None = None
         self._latched = False
         self.left_count = self.right_count = 0
 
-    def update(self, left_ear: float | None, right_ear: float | None) -> WinkState:
+    def update(self, left_ear: float | None, right_ear: float | None,
+               timestamp: float | None = None) -> WinkState:
+        now = time.monotonic() if timestamp is None else timestamp
         if left_ear is None or right_ear is None:
-            self._left_run = self._right_run = 0
+            self._left_since = self._right_since = None
             self._latched = False
             return WinkState(left_count=self.left_count, right_count=self.right_count)
 
@@ -40,19 +45,19 @@ class WinkDetector:
         event = None
 
         if left_closed and not right_closed:
-            self._left_run += 1
-            self._right_run = 0
-            if self._left_run >= 2 and not self._latched:
+            self._left_since = now if self._left_since is None else self._left_since
+            self._right_since = None
+            if now - self._left_since >= self.min_hold_seconds and not self._latched:
                 event, self._latched = "left", True
                 self.left_count += 1
         elif right_closed and not left_closed:
-            self._right_run += 1
-            self._left_run = 0
-            if self._right_run >= 2 and not self._latched:
+            self._right_since = now if self._right_since is None else self._right_since
+            self._left_since = None
+            if now - self._right_since >= self.min_hold_seconds and not self._latched:
                 event, self._latched = "right", True
                 self.right_count += 1
         else:
-            self._left_run = self._right_run = 0
+            self._left_since = self._right_since = None
             if not left_closed and not right_closed:
                 self._latched = False
 
