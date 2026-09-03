@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from airpointer.codex_delivery import CodexAppServer, _codex_command
+from airpointer.codex_delivery import CodexAppServer, CodexBusyError, _codex_command
 from airpointer.command_gesture import CommandGesture
 from airpointer.region_selection import RegionSelector
 from airpointer.screen_buffer import ScreenReplayBuffer, Segment, _evenly_spaced
@@ -162,6 +162,27 @@ def test_codex_send_uses_local_images(tmp_path: Path) -> None:
     assert method == "turn/start"
     assert params["threadId"] == "thr_test"
     assert params["input"][1] == {"type": "localImage", "path": str(image.resolve())}
+
+
+def test_codex_active_turn_response_is_queued(tmp_path: Path) -> None:
+    image = tmp_path / "screen.png"
+    image.write_bytes(b"png")
+    server = CodexAppServer()
+
+    def request(method, _params):
+        if method == "thread/read":
+            return {"thread": {"status": {"type": "notLoaded"}}}
+        if method == "turn/start":
+            raise RuntimeError("Codex App Server: thread already has an active turn")
+        return {}
+
+    server._request = request
+    try:
+        server.send("thr_test", "Look", (image,))
+    except CodexBusyError as error:
+        assert "queued" in str(error)
+    else:
+        raise AssertionError("active turn must be treated as a retryable busy state")
 
 
 def test_codex_reader_routes_response() -> None:

@@ -215,7 +215,7 @@ export function ReplayWorkspace() {
     setGestureActions((current) => ({ ...current, [action]: enabled }));
   }, []);
 
-  const { pose, progress: gestureProgress, preview: companionPreview, selection: gestureSelection, error: gestureError } = useCompanionGesture({ enabled: gestureEnabled, token: companionToken, agentThreadId, gestures: gestureActions });
+  const { pose, progress: gestureProgress, preview: companionPreview, selection: gestureSelection, error: gestureError, ready: companionReady } = useCompanionGesture({ enabled: gestureEnabled, token: companionToken, agentThreadId, gestures: gestureActions });
 
   useEffect(() => {
     if (!stream) return;
@@ -273,7 +273,7 @@ export function ReplayWorkspace() {
             <GestureActionToggle label="손바닥 → 주먹" detail="현재 화면" checked={gestureActions.screenshot} disabled={!gestureEnabled} onChange={(value) => setGestureAction("screenshot", value)} />
             <GestureActionToggle label="주먹 → 손바닥" detail="영역 선택" checked={gestureActions.region} disabled={!gestureEnabled} onChange={(value) => setGestureAction("region", value)} />
           </div>
-          {(gestureError || companionMessage) && <small className={styles.gestureError}>{gestureError || companionMessage}</small>}
+          {(gestureError || (!companionReady && companionMessage)) && <small className={styles.gestureError}>{gestureError || companionMessage}</small>}
           <div className={styles.rule} />
           <label className={styles.field}><span>로컬 버퍼</span><select value={retention} onChange={(event) => setRetention(Number(event.target.value))} disabled={Boolean(stream)}><option value={1}>최근 1분</option><option value={3}>최근 3분</option><option value={5}>최근 5분</option></select></label>
           <label className={styles.field}><span>전송 구간</span><select value={sendSeconds} onChange={(event) => setSendSeconds(Number(event.target.value))}><option value={5}>최근 5초</option><option value={15}>최근 15초</option><option value={30}>최근 30초</option><option value={60}>최근 1분</option></select></label>

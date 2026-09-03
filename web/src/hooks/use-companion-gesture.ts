@@ -24,6 +24,7 @@ export function useCompanionGesture({ enabled, token, agentThreadId, gestures }:
   const [progress, setProgress] = useState<GestureProgress>(IDLE_PROGRESS);
   const [preview, setPreview] = useState("");
   const [error, setError] = useState("");
+  const [readyToken, setReadyToken] = useState("");
 
   useEffect(() => {
     if (!enabled || !token) {
@@ -52,10 +53,11 @@ export function useCompanionGesture({ enabled, token, agentThreadId, gestures }:
           syncedAgentThreadId = agentThreadId;
         }
         if (cancelled) return;
-        failures = 0; setError(""); setPose(state.pose); setPreview(state.preview);
+        failures = 0; setError(""); setReadyToken(state.running && state.cameraReady ? token : ""); setPose(state.pose); setPreview(state.preview);
         const palmActive = state.route === "replay" && (state.phase === "arming" || state.phase === "armed");
         setProgress(palmActive ? { phase: "holding", value: state.progress, command: null } : IDLE_PROGRESS);
       } catch {
+        setReadyToken("");
         failures += 1;
         if (failures >= 300 && !cancelled) setError("AirPointer를 시작하지 못했습니다. EXE 파일과 카메라 상태를 확인해 주세요.");
       } finally {
@@ -72,5 +74,6 @@ export function useCompanionGesture({ enabled, token, agentThreadId, gestures }:
     preview: enabled ? preview : "",
     selection: IDLE_SELECTION,
     error: enabled ? error : "",
+    ready: enabled && readyToken === token,
   };
 }

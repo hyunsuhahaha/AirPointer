@@ -62,7 +62,12 @@ class CodexAppServer:
         self._request("thread/resume", {"threadId": thread_id})
         inputs = [{"type": "text", "text": prompt}]
         inputs.extend({"type": "localImage", "path": str(path.resolve())} for path in images)
-        self._request("turn/start", {"threadId": thread_id, "input": inputs})
+        try:
+            self._request("turn/start", {"threadId": thread_id, "input": inputs})
+        except RuntimeError as error:
+            if _is_active_turn_error(error):
+                raise CodexBusyError("Agent is busy; capture is queued") from error
+            raise
 
     def close(self) -> None:
         with self._lifecycle_lock:
@@ -163,3 +168,8 @@ def _codex_command() -> list[str]:
 
 def _one_line(value: str, limit: int = 64) -> str:
     return " ".join(value.split())[:limit]
+
+
+def _is_active_turn_error(error: Exception) -> bool:
+    message = str(error).casefold()
+    return "active turn" in message or "thread is active" in message
