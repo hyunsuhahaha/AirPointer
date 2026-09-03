@@ -7,6 +7,7 @@ import tkinter as tk
 from collections import deque
 
 from .cursor import CursorState
+from .gaze import CalibrationView
 
 COLORS = {
     "tracking": "#44e5ff",
@@ -98,3 +99,15 @@ class Overlay:
         self.canvas.create_oval(x - 4, y - 4, x + 4, y + 4, fill=color, outline=color)
         self.canvas.create_text(x + 25, y - 20, text="GAZE", fill=color,
                                 font=("Consolas", 9, "bold"), anchor="w")
+
+    def draw_calibration(self, view: CalibrationView) -> None:
+        if view.target is None:
+            return
+        x, y = round(view.target[0] * self.width), round(view.target[1] * self.height)
+        color = "#ffb02e" if view.progress < 0.4 else "#b8ff5a"
+        radius = 32 - round(view.progress * 18)
+        self.canvas.create_oval(x - radius, y - radius, x + radius, y + radius,
+                                outline=color, width=4)
+        self.canvas.create_oval(x - 5, y - 5, x + 5, y + 5, fill=color, outline=color)
+        self.canvas.create_text(x, y + 48, text=f"LOOK HERE  {view.index + 1}/{view.total}",
+                                fill=color, font=("Consolas", 12, "bold"))

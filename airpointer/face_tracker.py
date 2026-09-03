@@ -5,6 +5,8 @@ import time
 from dataclasses import dataclass, replace
 from typing import Literal
 
+import numpy as np
+
 
 @dataclass(frozen=True, slots=True)
 class WinkState:
@@ -17,33 +19,7 @@ class WinkState:
     right_ear: float | None = None
     left_points: tuple[tuple[float, float], ...] = ()
     right_points: tuple[tuple[float, float], ...] = ()
-    gaze: tuple[float, float] | None = None
-
-
-class GazeEstimator:
-    def __init__(self, smoothing: float = 0.25) -> None:
-        self.smoothing = smoothing
-        self._center: tuple[float, float] | None = None
-        self._point: tuple[float, float] | None = None
-
-    def update(self, left: tuple[float, float], right: tuple[float, float]) -> tuple[float, float]:
-        eye_x = (left[0] + right[0]) / 2
-        eye_y = (left[1] + right[1]) / 2
-        if self._center is None:
-            self._center = (eye_x, eye_y)
-        target = (_clamp(0.5 - (eye_x - self._center[0]) * 3.0),
-                  _clamp(0.5 + (eye_y - self._center[1]) * 4.0))
-        if self._point is None:
-            self._point = target
-        else:
-            amount = self.smoothing
-            self._point = (self._point[0] + (target[0] - self._point[0]) * amount,
-                           self._point[1] + (target[1] - self._point[1]) * amount)
-        return self._point
-
-    def reset(self) -> None:
-        self._center = None
-        self._point = None
+    gaze_features: tuple[float, ...] | None = None
 
 
 class WinkDetector:
@@ -100,8 +76,12 @@ class FaceTracker:
     # Landmark indices are anatomical: the user's left and right eyes.
     LEFT_EYE = (362, 385, 387, 263, 373, 380)
     RIGHT_EYE = (33, 160, 158, 133, 153, 144)
-    LEFT_IRIS = 473
-    RIGHT_IRIS = 468
+    LEFT_CONTOUR = (362, 382, 381, 380, 374, 373, 390, 249,
+                    263, 466, 388, 387, 386, 385, 384, 398)
+    RIGHT_CONTOUR = (33, 7, 163, 144, 145, 153, 154, 155,
+                     133, 173, 157, 158, 159, 160, 161, 246)
+    LEFT_IRIS = (474, 475, 476, 477)
+    RIGHT_IRIS = (469, 470, 471, 472)
 
     def __init__(self, closed_ratio: float = 0.75) -> None:
         import cv2
@@ -116,13 +96,11 @@ class FaceTracker:
             min_tracking_confidence=0.5,
         )
         self._detector = WinkDetector(closed_ratio)
-        self._gaze = GazeEstimator()
 
     def process(self, frame) -> WinkState:
         rgb = self._cv2.cvtColor(frame, self._cv2.COLOR_BGR2RGB)
         result = self._mesh.process(rgb)
         if not result.multi_face_landmarks:
-            self._gaze.reset()
             return self._detector.update(None, None)
         points = result.multi_face_landmarks[0].landmark
         height, width = frame.shape[:2]
@@ -130,17 +108,15 @@ class FaceTracker:
             _eye_aspect_ratio(points, self.LEFT_EYE, width, height),
             _eye_aspect_ratio(points, self.RIGHT_EYE, width, height),
         )
-        gaze = None
+        gaze_features = None
         if not state.left_closed and not state.right_closed:
-            gaze = self._gaze.update(
-                _iris_ratio(points, self.LEFT_EYE, self.LEFT_IRIS),
-                _iris_ratio(points, self.RIGHT_EYE, self.RIGHT_IRIS),
-            )
+            gaze_features = _gaze_features(points, width, height, self.LEFT_CONTOUR,
+                                           self.RIGHT_CONTOUR, self.LEFT_IRIS, self.RIGHT_IRIS)
         return replace(
             state,
             left_points=tuple((points[index].x, points[index].y) for index in self.LEFT_EYE),
             right_points=tuple((points[index].x, points[index].y) for index in self.RIGHT_EYE),
-            gaze=gaze,
+            gaze_features=gaze_features,
         )
 
     def close(self) -> None:
@@ -159,15 +135,29 @@ def _eye_aspect_ratio(points, indices, width: int, height: int) -> float:
         2.0 * horizontal)
 
 
-def _iris_ratio(points, eye, iris: int) -> tuple[float, float]:
-    outer, upper_outer, upper_inner, inner, lower_inner, lower_outer = eye
-    left, right = sorted((points[outer].x, points[inner].x))
-    top = (points[upper_outer].y + points[upper_inner].y) / 2
-    bottom = (points[lower_inner].y + points[lower_outer].y) / 2
-    top, bottom = sorted((top, bottom))
-    return ((points[iris].x - left) / max(right - left, 1e-6),
-            (points[iris].y - top) / max(bottom - top, 1e-6))
+def _gaze_features(points, width: int, height: int, left_eye, right_eye,
+                   left_iris, right_iris) -> tuple[float, ...]:
+    u_left, v_left = _eye_uv(points, left_eye, left_iris, width, height)
+    u_right, v_right = _eye_uv(points, right_eye, right_iris, width, height)
+    return (u_left, v_left, u_right, v_right,
+            u_left ** 2, v_left ** 2, u_right ** 2, v_right ** 2,
+            u_left * v_left, u_right * v_right, u_left * u_right, v_left * v_right)
 
 
-def _clamp(value: float) -> float:
-    return min(1.0, max(0.0, value))
+def _eye_uv(points, eye, iris, width: int, height: int) -> tuple[float, float]:
+    contour = np.asarray([(points[index].x * width, points[index].y * height)
+                          for index in eye], dtype=np.float64)
+    center = contour.mean(axis=0)
+    centered = contour - center
+    axes = np.linalg.svd(centered, full_matrices=False)[2]
+    horizontal, vertical = axes[0], axes[1]
+    if horizontal[0] < 0:
+        horizontal = -horizontal
+    if vertical[1] < 0:
+        vertical = -vertical
+    scale_x = max(float(np.sqrt(np.mean((centered @ horizontal) ** 2))), 1e-6)
+    scale_y = max(float(np.sqrt(np.mean((centered @ vertical) ** 2))), 1e-6)
+    iris_center = np.asarray([(points[index].x * width, points[index].y * height)
+                              for index in iris], dtype=np.float64).mean(axis=0)
+    offset = iris_center - center
+    return float(offset @ horizontal / scale_x), float(offset @ vertical / scale_y)

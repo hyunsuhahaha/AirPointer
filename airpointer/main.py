@@ -8,6 +8,7 @@ from PIL import Image, ImageTk
 
 from .camera import CameraLoop
 from .cursor import CursorController
+from .gaze import GazeTracker
 from .overlay import Overlay
 from .settings import Settings
 from .ui_snap import UISnapper
@@ -22,6 +23,7 @@ class App:
         self.settings = Settings()
         self.snapper = UISnapper(self.settings.snap_radius)
         self.cursor = CursorController(self.settings, self.snapper)
+        self.gaze = GazeTracker()
         self._frame = None
         self._frame_version = 0
         self._drawn_frame_version = -1
@@ -29,7 +31,7 @@ class App:
         self._preview_photo = None
         self._gaze: tuple[float, float] | None = None
         self._last_mode = ""
-        self.camera = CameraLoop(self.settings, self.cursor, self._set_frame)
+        self.camera = CameraLoop(self.settings, self.cursor, self.gaze, self._set_frame)
         self.overlay = Overlay(self.root)
         self._build_ui()
         self.root.update_idletasks()
@@ -102,6 +104,10 @@ class App:
             snap_var.set(False)
             self.settings.snap_enabled = False
 
+        self.gaze_button = ttk.Button(frame, text="Calibrate Gaze (9 points)",
+                                      command=self._calibrate_gaze)
+        self.gaze_button.pack(fill="x", pady=(2, 8))
+
         self.status = ttk.Label(frame, text="SYSTEM READY", foreground="#74f7c5", font=("Consolas", 9))
         self.status.pack(anchor="w", pady=(8, 6))
         self.button = ttk.Button(frame, text="Start", command=self._toggle)
@@ -128,11 +134,24 @@ class App:
             self._gaze = gaze
             self._frame_version += 1
 
+    def _calibrate_gaze(self) -> None:
+        if not self.camera.running:
+            self.camera.start()
+            self.button.config(text="Stop")
+        self.gaze.start()
+
     def _redraw(self) -> None:
         state = self.cursor.current_state()
         self.overlay.draw(state)
         self.overlay.draw_gaze(self._gaze)
-        mode = state.mode.upper() if state else ("SEARCHING FOR HAND" if self.camera.running else "SYSTEM STANDBY")
+        calibration = self.gaze.view()
+        self.overlay.draw_calibration(calibration)
+        if calibration.target:
+            mode = f"GAZE CALIBRATION {calibration.index + 1}/{calibration.total}"
+        else:
+            mode = state.mode.upper() if state else ("SEARCHING FOR HAND" if self.camera.running else "SYSTEM STANDBY")
+        self.gaze_button.config(text="Recalibrate Gaze" if calibration.calibrated else
+                                "Calibrate Gaze (9 points)")
         if mode != self._last_mode:
             self.status.config(text=mode)
             self._last_mode = mode

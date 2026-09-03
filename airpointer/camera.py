@@ -9,6 +9,7 @@ import cv2
 from .cursor import CursorController
 from .face_tracker import FaceTracker, WinkState
 from .gesture import InteractionEngine, Intent
+from .gaze import GazeTracker
 from .hand_tracker import HandTracker
 from .settings import Settings
 
@@ -21,10 +22,11 @@ START_ZONE_X = 0.4
 
 
 class CameraLoop:
-    def __init__(self, settings: Settings, cursor: CursorController,
+    def __init__(self, settings: Settings, cursor: CursorController, gaze: GazeTracker,
                  on_frame: Callable[[object | None, tuple[float, float] | None], None]) -> None:
         self.settings = settings
         self.cursor = cursor
+        self.gaze = gaze
         self.on_frame = on_frame
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -66,14 +68,15 @@ class CameraLoop:
                     continue
                 tracking_frame = cv2.resize(frame, (320, 180), interpolation=cv2.INTER_AREA)
                 points, admitted = _start_gate(tracker.process(tracking_frame), admitted)
-                wink = face_tracker.process(tracking_frame)
+                wink = face_tracker.process(frame)
+                gaze = self.gaze.update(wink.gaze_features)
                 intent = engine.update(points, time.monotonic())
                 if intent.phase == "paused":
                     admitted = False
                 self.cursor.apply(intent)
                 if wink.event:
                     self.cursor.eye_click(wink.event)
-                self.on_frame(_make_preview(frame, points, intent, wink), wink.gaze)
+                self.on_frame(_make_preview(frame, points, intent, wink), gaze)
         finally:
             self.cursor.release()
             self.on_frame(None, None)

@@ -4,6 +4,7 @@ Windows용 웹캠 공간 포인터입니다. 검지 관절에서 끝으로 향�
 붙여 클릭/드래그하며, Windows UI Automation이 찾은 가까운 버튼·입력창·링크를 잠급니다.
 설정창에는 손 위치를 확인할 수 있는 미러 카메라 미리보기가 표시됩니다.
 기본값은 추적 HUD만 표시하는 안전한 미리보기 모드이며, `Mouse Control`을 켜야 실제 마우스가 움직입니다.
+시선 추적은 카메라를 시작한 뒤 `Calibrate Gaze (9 points)`를 누르고 표적을 차례로 바라봐야 활성화됩니다.
 
 ## 실행
 
@@ -30,15 +31,21 @@ python -m airpointer.main
 - 첫 번째로 감지된 손 한 개
 - 1€ Filter를 사용한 검지 절대 포인팅(기본값), 선택 가능한 상대 이동
 - 카메라 프레임 사이를 240Hz 고해상도 타이머로 보간하는 커서 출력
-- MJPG 640×360@60 캡처와 320×180 MediaPipe 입력을 사용한 저지연 추적
+- MJPG 640×360@60 캡처, 320×180 손 추적과 원본 해상도 얼굴·홍채 추적
 - 깊이(z)를 포함한 3D 손가락 펴짐 판정으로 카메라 정면 포인팅 지원
 - 오른쪽 60%에서 최초 인식 후에는 화면 전체로 이동 가능한 시작 게이트
 - MediaPipe handedness로 오른손만 선택해 왼손으로 추적 대상이 바뀌는 현상 방지
 - 손 크기와 무관한 3D 단위 방향 포인팅 및 Snap 클릭 오차의 세션 자동 보정
 - 왼쪽 눈 윙크 좌클릭, 오른쪽 눈 윙크 우클릭(0.15초 이상 유지, 양눈 깜빡임은 무시)
 - 카메라 미리보기에 열린 눈은 청록색, 감긴 눈은 분홍색 윤곽으로 표시
-- 양쪽 홍채의 상대 위치로 화면 응시 지점을 추정해 초록색 `GAZE` HUD로 표시
+- 9점 화면 캘리브레이션과 양쪽 눈 PCA 특징의 ridge regression으로 응시 지점을 학습해 `GAZE` HUD로 표시
 - 작은 눈과 얕은 윙크를 위한 정밀 눈 랜드마크 및 조절 가능한 Wink sensitivity
 - pinch 진입/해제 hysteresis와 captured drag
 - 비동기 UI hover lock, pinch 확정 시 1회 snap
 - 접근성 트리를 제공하는 Windows 앱과 웹 콘텐츠의 UI Snap
+
+## Gaze tracking references
+
+- [Webcam Eye-gazing Point Tracker](https://github.com/Hannibal730/Webcam-Eye-gazing-point-Tracker) — eye-contour PCA, 12-D geometry features, ridge calibration (Apache-2.0)
+- [WebGazer](https://github.com/brownhci/WebGazer) — calibration samples mapped to screen coordinates with regression
+- [EyeTrax](https://github.com/ck-zhang/EyeTrax) — Python 5/9-point calibration workflow and gaze filtering (MIT)
