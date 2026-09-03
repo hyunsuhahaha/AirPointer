@@ -118,6 +118,16 @@ class CursorController:
             self._mouse_up()
         self.settings.mouse_enabled = enabled
 
+    def eye_click(self, button: str) -> None:
+        if not self.settings.mouse_enabled:
+            return
+        with self._lock:
+            state = self._state
+        if state is None:
+            return
+        pyautogui.moveTo(state.x, state.y, _pause=False)
+        pyautogui.click(button=button, _pause=False)
+
     def close(self) -> None:
         self.release()
         self._stop.set()

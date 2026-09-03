@@ -33,6 +33,7 @@ python -m airpointer.main
 - 오른쪽 60%에서 최초 인식 후에는 화면 전체로 이동 가능한 시작 게이트
 - MediaPipe handedness로 오른손만 선택해 왼손으로 추적 대상이 바뀌는 현상 방지
 - 손 크기와 무관한 3D 단위 방향 포인팅 및 Snap 클릭 오차의 세션 자동 보정
+- 왼쪽 눈 윙크 좌클릭, 오른쪽 눈 윙크 우클릭(양눈 깜빡임은 무시)
 - pinch 진입/해제 hysteresis와 captured drag
 - 비동기 UI hover lock, pinch 확정 시 1회 snap
 - 접근성 트리를 제공하는 Windows 앱과 웹 콘텐츠의 UI Snap

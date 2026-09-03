@@ -34,6 +34,26 @@ def test_tracking_is_visual_only_by_default(monkeypatch) -> None:
         controller.close()
 
 
+def test_eye_wink_clicks_current_virtual_pointer(monkeypatch) -> None:
+    clicks: list[str] = []
+    moves: list[tuple[int, int]] = []
+    monkeypatch.setattr(cursor_module.pyautogui, "size", lambda: (1000, 1000))
+    monkeypatch.setattr(cursor_module.pyautogui, "position",
+                        lambda: type("Position", (), {"x": 500, "y": 500})())
+    monkeypatch.setattr(cursor_module.pyautogui, "moveTo",
+                        lambda x, y, **kwargs: moves.append((int(x), int(y))))
+    monkeypatch.setattr(cursor_module.pyautogui, "click",
+                        lambda button="left", **kwargs: clicks.append(button))
+    controller = CursorController(Settings(mouse_enabled=True, snap_enabled=False), NoSnap())
+    try:
+        state = controller.apply(Intent("tracking", Point(0.2, 0.5)))
+        controller.eye_click("right")
+        assert moves[-1] == (state.x, state.y)
+        assert clicks == ["right"]
+    finally:
+        controller.close()
+
+
 def test_absolute_pointing_reaches_left_edge_from_right_side(monkeypatch) -> None:
     monkeypatch.setattr(cursor_module.pyautogui, "size", lambda: (1000, 1000))
     monkeypatch.setattr(cursor_module.pyautogui, "position",

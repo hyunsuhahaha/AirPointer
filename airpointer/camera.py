@@ -7,6 +7,7 @@ from collections.abc import Callable
 import cv2
 
 from .cursor import CursorController
+from .face_tracker import FaceTracker, WinkState
 from .gesture import InteractionEngine, Intent
 from .hand_tracker import HandTracker
 from .settings import Settings
@@ -54,6 +55,7 @@ class CameraLoop:
         capture.set(cv2.CAP_PROP_FPS, 60)
         capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         tracker = HandTracker()
+        face_tracker = FaceTracker()
         engine = InteractionEngine(pinch_on=self.settings.pinch_threshold)
         admitted = False
         try:
@@ -64,19 +66,23 @@ class CameraLoop:
                     continue
                 tracking_frame = cv2.resize(frame, (320, 180), interpolation=cv2.INTER_AREA)
                 points, admitted = _start_gate(tracker.process(tracking_frame), admitted)
+                wink = face_tracker.process(tracking_frame)
                 intent = engine.update(points, time.monotonic())
                 if intent.phase == "paused":
                     admitted = False
                 self.cursor.apply(intent)
-                self.on_frame(_make_preview(frame, points, intent))
+                if wink.event:
+                    self.cursor.eye_click(wink.event)
+                self.on_frame(_make_preview(frame, points, intent, wink))
         finally:
             self.cursor.release()
             self.on_frame(None)
             tracker.close()
+            face_tracker.close()
             capture.release()
 
 
-def _make_preview(frame, points, intent: Intent):
+def _make_preview(frame, points, intent: Intent, wink: WinkState):
     preview = cv2.resize(cv2.flip(frame, 1), (320, 180))
     boundary = round(START_ZONE_X * 320)
     shade = preview.copy()
@@ -100,6 +106,16 @@ def _make_preview(frame, points, intent: Intent):
     if intent.pinch_ratio is not None:
         label += f"  PINCH {intent.pinch_ratio:.2f}"
     cv2.putText(preview, label, (9, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.42, color, 1, cv2.LINE_AA)
+    if wink.left_ear is None:
+        eye_label, eye_color = "EYES --", (120, 120, 120)
+    elif wink.event:
+        eye_label, eye_color = f"{wink.event.upper()} WINK", (255, 100, 220)
+    elif wink.left_closed and wink.right_closed:
+        eye_label, eye_color = "BLINK", (120, 120, 120)
+    else:
+        eye_label, eye_color = f"EYES  L{wink.left_count} R{wink.right_count}", (116, 247, 197)
+    cv2.putText(preview, eye_label, (205, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.38,
+                eye_color, 1, cv2.LINE_AA)
     return cv2.cvtColor(preview, cv2.COLOR_BGR2RGB)
 
 
