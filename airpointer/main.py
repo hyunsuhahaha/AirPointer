@@ -84,6 +84,8 @@ class App:
                     lambda value: setattr(self.settings, "smoothing", float(value)))
         self._scale(frame, "Pinch threshold", 0.20, 0.55, self.settings.pinch_threshold,
                     lambda value: setattr(self.settings, "pinch_threshold", float(value)))
+        self._scale(frame, "Wink sensitivity", 0.60, 0.85, self.settings.wink_sensitivity,
+                    lambda value: setattr(self.settings, "wink_sensitivity", float(value)))
 
         mouse_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(frame, text="Mouse Control", variable=mouse_var,

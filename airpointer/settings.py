@@ -11,3 +11,4 @@ class Settings:
     snap_enabled: bool = True
     snap_radius: int = 80
     pinch_threshold: float = 0.34
+    wink_sensitivity: float = 0.75

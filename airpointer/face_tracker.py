@@ -19,7 +19,8 @@ class WinkState:
 
 
 class WinkDetector:
-    def __init__(self) -> None:
+    def __init__(self, closed_ratio: float = 0.75) -> None:
+        self.closed_ratio = closed_ratio
         self._left_base: float | None = None
         self._right_base: float | None = None
         self._left_run = self._right_run = 0
@@ -34,8 +35,8 @@ class WinkDetector:
 
         self._left_base = self._left_base or left_ear
         self._right_base = self._right_base or right_ear
-        left_closed = left_ear < self._left_base * 0.60
-        right_closed = right_ear < self._right_base * 0.60
+        left_closed = left_ear < self._left_base * self.closed_ratio
+        right_closed = right_ear < self._right_base * self.closed_ratio
         event = None
 
         if left_closed and not right_closed:
@@ -68,7 +69,7 @@ class FaceTracker:
     LEFT_EYE = (362, 385, 387, 263, 373, 380)
     RIGHT_EYE = (33, 160, 158, 133, 153, 144)
 
-    def __init__(self) -> None:
+    def __init__(self, closed_ratio: float = 0.75) -> None:
         import cv2
         import mediapipe as mp
 
@@ -76,11 +77,11 @@ class FaceTracker:
         self._mesh = mp.solutions.face_mesh.FaceMesh(
             static_image_mode=False,
             max_num_faces=1,
-            refine_landmarks=False,
+            refine_landmarks=True,
             min_detection_confidence=0.5,
             min_tracking_confidence=0.5,
         )
-        self._detector = WinkDetector()
+        self._detector = WinkDetector(closed_ratio)
 
     def process(self, frame) -> WinkState:
         rgb = self._cv2.cvtColor(frame, self._cv2.COLOR_BGR2RGB)

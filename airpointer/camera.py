@@ -55,7 +55,7 @@ class CameraLoop:
         capture.set(cv2.CAP_PROP_FPS, 60)
         capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         tracker = HandTracker()
-        face_tracker = FaceTracker()
+        face_tracker = FaceTracker(self.settings.wink_sensitivity)
         engine = InteractionEngine(pinch_on=self.settings.pinch_threshold)
         admitted = False
         try:
@@ -115,7 +115,8 @@ def _make_preview(frame, points, intent: Intent, wink: WinkState):
     elif wink.left_closed and wink.right_closed:
         eye_label, eye_color = "BLINK", (120, 120, 120)
     else:
-        eye_label, eye_color = f"EYES  L{wink.left_count} R{wink.right_count}", (116, 247, 197)
+        eye_label = f"E {wink.left_ear:.2f}/{wink.right_ear:.2f}"
+        eye_color = (116, 247, 197)
     cv2.putText(preview, eye_label, (205, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.38,
                 eye_color, 1, cv2.LINE_AA)
     return cv2.cvtColor(preview, cv2.COLOR_BGR2RGB)

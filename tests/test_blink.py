@@ -26,6 +26,14 @@ def test_right_wink_emits_right_click_event() -> None:
     assert state.event == "right" and state.right_count == 1
 
 
+def test_small_eye_shallow_wink_uses_adjustable_sensitivity() -> None:
+    detector = WinkDetector(closed_ratio=0.75)
+    for _ in range(5):
+        detector.update(0.20, 0.20)
+    detector.update(0.14, 0.20)
+    assert detector.update(0.14, 0.20).event == "left"
+
+
 def test_normal_two_eye_blink_never_clicks() -> None:
     detector = WinkDetector()
     _prime(detector)
