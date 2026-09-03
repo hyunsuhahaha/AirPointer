@@ -104,7 +104,7 @@ class App:
             snap_var.set(False)
             self.settings.snap_enabled = False
 
-        self.gaze_button = ttk.Button(frame, text="Calibrate Gaze (9 points)",
+        self.gaze_button = ttk.Button(frame, text="Calibrate Gaze (13 points)",
                                       command=self._calibrate_gaze)
         self.gaze_button.pack(fill="x", pady=(2, 8))
 
@@ -151,7 +151,7 @@ class App:
         else:
             mode = state.mode.upper() if state else ("SEARCHING FOR HAND" if self.camera.running else "SYSTEM STANDBY")
         self.gaze_button.config(text="Recalibrate Gaze" if calibration.calibrated else
-                                "Calibrate Gaze (9 points)")
+                                "Calibrate Gaze (13 points)")
         if mode != self._last_mode:
             self.status.config(text=mode)
             self._last_mode = mode

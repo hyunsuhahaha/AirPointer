@@ -4,7 +4,7 @@ Windows용 웹캠 공간 포인터입니다. 검지 관절에서 끝으로 향�
 붙여 클릭/드래그하며, Windows UI Automation이 찾은 가까운 버튼·입력창·링크를 잠급니다.
 설정창에는 손 위치를 확인할 수 있는 미러 카메라 미리보기가 표시됩니다.
 기본값은 추적 HUD만 표시하는 안전한 미리보기 모드이며, `Mouse Control`을 켜야 실제 마우스가 움직입니다.
-시선 추적은 카메라를 시작한 뒤 `Calibrate Gaze (9 points)`를 누르고 표적을 차례로 바라봐야 활성화됩니다.
+시선 추적은 카메라를 시작한 뒤 `Calibrate Gaze (13 points)`를 누르고 표적을 차례로 바라봐야 활성화됩니다.
 
 ## 실행
 
@@ -38,7 +38,7 @@ python -m airpointer.main
 - 손 크기와 무관한 3D 단위 방향 포인팅 및 Snap 클릭 오차의 세션 자동 보정
 - 왼쪽 눈 윙크 좌클릭, 오른쪽 눈 윙크 우클릭(0.15초 이상 유지, 양눈 깜빡임은 무시)
 - 카메라 미리보기에 열린 눈은 청록색, 감긴 눈은 분홍색 윤곽으로 표시
-- 9점 화면 캘리브레이션과 양쪽 눈 PCA 특징의 ridge regression으로 응시 지점을 학습해 `GAZE` HUD로 표시
+- 이상치에 강한 13점 화면 캘리브레이션, 양쪽 눈 PCA 특징의 ridge regression과 1€ Filter로 `GAZE` HUD 표시
 - 작은 눈과 얕은 윙크를 위한 정밀 눈 랜드마크 및 조절 가능한 Wink sensitivity
 - pinch 진입/해제 hysteresis와 captured drag
 - 비동기 UI hover lock, pinch 확정 시 1회 snap

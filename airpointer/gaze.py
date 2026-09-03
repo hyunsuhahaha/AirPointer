@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .gesture import OneEuro
+
 
 @dataclass(frozen=True, slots=True)
 class CalibrationView:
@@ -21,30 +23,33 @@ class GazeTracker:
         (0.50, 0.50), (0.12, 0.12), (0.88, 0.12),
         (0.12, 0.88), (0.88, 0.88), (0.50, 0.12),
         (0.12, 0.50), (0.88, 0.50), (0.50, 0.88),
+        (0.31, 0.31), (0.69, 0.31), (0.31, 0.69), (0.69, 0.69),
     )
 
-    def __init__(self, settle_seconds: float = 0.35, sample_seconds: float = 0.55,
-                 smoothing: float = 0.28) -> None:
+    def __init__(self, settle_seconds: float = 0.45, sample_seconds: float = 0.65,
+                 filtering: bool = True) -> None:
         self.settle_seconds = settle_seconds
         self.sample_seconds = sample_seconds
-        self.smoothing = smoothing
+        self.filtering = filtering
         self._lock = threading.Lock()
         self._index = len(self.TARGETS)
         self._target_started: float | None = None
-        self._samples: list[np.ndarray] = []
-        self._labels: list[tuple[float, float]] = []
+        self._samples: list[list[np.ndarray]] = [[] for _ in self.TARGETS]
         self._mean: np.ndarray | None = None
         self._scale: np.ndarray | None = None
         self._weights: np.ndarray | None = None
         self._point: tuple[float, float] | None = None
+        self._x_filter = OneEuro(min_cutoff=0.5, beta=0.08)
+        self._y_filter = OneEuro(min_cutoff=0.5, beta=0.08)
 
     def start(self) -> None:
         with self._lock:
             self._index = 0
             self._target_started = None
-            self._samples.clear()
-            self._labels.clear()
+            self._samples = [[] for _ in self.TARGETS]
             self._point = None
+            self._x_filter.reset()
+            self._y_filter.reset()
 
     def update(self, features: tuple[float, ...] | None,
                now: float | None = None) -> tuple[float, float] | None:
@@ -61,12 +66,9 @@ class GazeTracker:
             normalized = (feature - self._mean) / self._scale
             prediction = np.append(normalized, 1.0) @ self._weights
             target = (_clamp(float(prediction[0])), _clamp(float(prediction[1])))
-            if self._point is None:
-                self._point = target
-            else:
-                amount = self.smoothing
-                self._point = (self._point[0] + (target[0] - self._point[0]) * amount,
-                               self._point[1] + (target[1] - self._point[1]) * amount)
+            self._point = ((self._x_filter.update(target[0], timestamp),
+                            self._y_filter.update(target[1], timestamp))
+                           if self.filtering else target)
             return self._point
 
     def view(self, now: float | None = None) -> CalibrationView:
@@ -88,8 +90,7 @@ class GazeTracker:
             self._target_started = now
         elapsed = now - self._target_started
         if elapsed >= self.settle_seconds:
-            self._samples.append(feature)
-            self._labels.append(self.TARGETS[self._index])
+            self._samples[self._index].append(feature)
         if elapsed < self.settle_seconds + self.sample_seconds:
             return
         self._index += 1
@@ -98,8 +99,8 @@ class GazeTracker:
             self._fit()
 
     def _fit(self) -> None:
-        features = np.stack(self._samples)
-        labels = np.asarray(self._labels, dtype=np.float64)
+        features = np.stack([np.median(np.stack(samples), axis=0) for samples in self._samples])
+        labels = np.asarray(self.TARGETS, dtype=np.float64)
         self._mean = features.mean(axis=0)
         self._scale = features.std(axis=0)
         self._scale[self._scale < 1e-6] = 1.0

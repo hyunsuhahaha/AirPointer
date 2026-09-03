@@ -20,7 +20,7 @@ class Intent:
     palm: Point | None = None
 
 
-class _OneEuro:
+class OneEuro:
     def __init__(self, min_cutoff: float = 1.0, beta: float = 0.04) -> None:
         self.min_cutoff = min_cutoff
         self.beta = beta
@@ -62,8 +62,8 @@ class InteractionEngine:
         self._pinch_point: Point | None = None
         self._last_point: Point | None = None
         self._last_palm: Point | None = None
-        self._x_filter, self._y_filter = _OneEuro(), _OneEuro()
-        self._palm_x_filter, self._palm_y_filter = _OneEuro(), _OneEuro()
+        self._x_filter, self._y_filter = OneEuro(), OneEuro()
+        self._palm_x_filter, self._palm_y_filter = OneEuro(), OneEuro()
 
     def update(self, points: list[Point] | None, timestamp: float) -> Intent:
         if not points:
