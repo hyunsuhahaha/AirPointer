@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import sys
-
-from airpointer.main import App
-from airpointer.companion_bridge import CompanionHttpServer, CompanionState
-from airpointer.protocol import CommandServer, command_from_arguments, register_protocol, send_command, token_from_arguments
+import traceback
 
 
 def main() -> int:
+    from airpointer.main import App
+    from airpointer.companion_bridge import CompanionHttpServer, CompanionState
+    from airpointer.protocol import (CommandServer, command_from_arguments, register_protocol,
+                                      send_command, token_from_arguments)
+
     register_protocol()
     command = command_from_arguments(sys.argv[1:])
     token = token_from_arguments(sys.argv[1:])
@@ -41,4 +43,23 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except BaseException:
+        # AirPointer.exe has no console (pythonw), so an uncaught exception
+        # anywhere before the Tk error handler is wired up (App.__init__,
+        # the control-socket bind, protocol registration, ...) would
+        # otherwise disappear silently and the app would just never show
+        # up. Show it instead so a failed start is never invisible.
+        detail = traceback.format_exc()
+        try:
+            import tkinter as tk
+            from tkinter import messagebox
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showerror("AirPointer가 시작되지 못했습니다", detail[-3000:])
+        except Exception:
+            pass
+        raise

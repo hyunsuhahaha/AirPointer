@@ -9,13 +9,6 @@ from pathlib import Path
 @dataclass(slots=True)
 class Settings:
     camera_index: int = 0
-    mouse_enabled: bool = False
-    mapping_mode: str = "absolute"
-    sensitivity: float = 1.0
-    smoothing: float = 0.18
-    snap_enabled: bool = True
-    snap_radius: int = 80
-    pinch_threshold: float = 0.34
     replay_enabled: bool = True
     replay_minutes: int = 3
     replay_seconds: int = 15

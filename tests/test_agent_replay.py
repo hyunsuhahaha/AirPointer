@@ -81,24 +81,35 @@ def test_palm_timer_progresses_continuously_over_two_seconds() -> None:
     assert 0.49 <= gesture.update(palm, 1.00).progress <= 0.51
 
 
-def test_pointing_resizes_region_and_fist_confirms_it() -> None:
-    selector = RegionSelector(1000, 800)
+def test_mouse_drag_resizes_region_and_release_confirms_it() -> None:
+    selector = RegionSelector()
     selector.start()
-    assert selector.update(_pointing(), (120, 140), 0.0).phase == "selecting"
-    resized = selector.update(_pointing(), (620, 440), 0.1)
+    assert selector.press(120, 140).phase == "selecting"
+    resized = selector.drag(620, 440)
     assert resized.rect == (120, 140, 620, 440)
-    assert selector.update(_fist(), None, 0.2).phase == "confirming"
-    captured = selector.update(_fist(), None, 0.46)
-    assert captured.captured == (120, 140, 620, 440)
-    assert selector.update(None, None, 0.5).phase == "idle"
+    view, captured = selector.release()
+    assert view.phase == "idle" and not view.active
+    assert captured == (120, 140, 620, 440)
 
 
-def test_region_selection_cancels_after_hand_is_lowered() -> None:
-    selector = RegionSelector(1000, 800, cancel_seconds=1.0)
+def test_too_small_drag_is_rejected_and_stays_open_for_retry() -> None:
+    selector = RegionSelector(min_size=32)
     selector.start()
-    selector.update(_pointing(), (120, 140), 0.0)
-    assert selector.update(None, None, 0.5).active
-    assert not selector.update(None, None, 1.51).active
+    selector.press(100, 100)
+    selector.drag(105, 104)
+    view, captured = selector.release()
+    assert captured is None
+    assert view.phase == "waiting" and view.active
+
+
+def test_reset_cancels_selection() -> None:
+    selector = RegionSelector()
+    selector.start()
+    selector.press(10, 10)
+    selector.drag(200, 200)
+    selector.reset()
+    assert not selector.active
+    assert selector.view().phase == "idle"
 
 
 def test_region_capture_writes_only_selected_image(tmp_path: Path) -> None:

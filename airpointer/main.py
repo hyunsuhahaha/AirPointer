@@ -13,12 +13,10 @@ from .capture_controller import CaptureController
 from .codex_delivery import AgentThread, CodexAppServer
 from .companion_bridge import CompanionState
 from .command_gesture import CommandEvent, CommandView
-from .cursor import CursorController
 from .overlay import Overlay
-from .region_selection import Region, SelectionView
+from .region_selection import RegionSelector, SelectionView
 from .screen_buffer import ScreenReplayBuffer, cleanup_paths
 from .settings import Settings
-from .ui_snap import UISnapper
 
 
 class App:
@@ -29,8 +27,6 @@ class App:
         self.root.configure(bg="#07131c")
         self.root.resizable(False, False)
         self.settings = Settings.load()
-        self.snapper = UISnapper(self.settings.snap_radius)
-        self.cursor = CursorController(self.settings, self.snapper)
         self._frame = None
         self._frame_version = 0
         self._drawn_frame_version = -1
@@ -54,17 +50,39 @@ class App:
         )
         self.capture = CaptureController(
             self.screen_buffer, self.codex, lambda: self.settings.replay_seconds)
+        self._region_selector = RegionSelector()
+        self._region_selecting = threading.Event()
         self.camera = CameraLoop(
-            self.settings, self.cursor, self._set_frame, self._handle_command,
-            self.companion_state.gesture_flags if self.companion_state else None)
+            self.settings, self._set_frame, self._handle_command,
+            self.companion_state.gesture_flags if self.companion_state else None,
+            self._region_selecting.is_set)
         self.overlay = Overlay(self.root)
+        self.overlay.canvas.bind("<ButtonPress-1>", self._region_press)
+        self.overlay.canvas.bind("<B1-Motion>", self._region_drag)
+        self.overlay.canvas.bind("<ButtonRelease-1>", self._region_release)
+        self.overlay.canvas.bind("<ButtonPress-3>", self._cancel_region_select)
         self._build_ui()
         self.root.update_idletasks()
         self.root.geometry(f"390x{self.root.winfo_reqheight()}")
         self.root.protocol("WM_DELETE_WINDOW", self._close)
+        self.root.report_callback_exception = self._on_callback_exception
         self.root.after(16, self._redraw)
         if start_hidden:
             self.root.withdraw()
+
+    def _on_callback_exception(self, _exc_type, exc_value, exc_tb) -> None:
+        # AirPointer.exe runs without a console (pythonw), so the default
+        # Tk behaviour of printing to stderr is invisible. Surface failures
+        # (camera/MediaPipe init, gesture handling, delivery, ...) as a
+        # visible notice and bring the window back so the user can see it.
+        import traceback
+        detail = "".join(traceback.format_exception(_exc_type, exc_value, exc_tb))[-1500:]
+        try:
+            self.root.deiconify()
+            self.root.lift()
+        except tk.TclError:
+            pass
+        self._show_native_notice("AirPointer 오류", f"{exc_value}\n\n{detail}")
 
     def _build_ui(self) -> None:
         style = ttk.Style(self.root)
@@ -76,19 +94,18 @@ class App:
         style.configure("TButton", background="#0e3a4a", foreground="#8cf1ff",
                         bordercolor="#39dff5", font=("Segoe UI", 10, "bold"), padding=8)
         style.map("TButton", background=[("active", "#14556b")])
-        style.configure("Horizontal.TScale", background="#07131c", troughcolor="#173441")
         shell = ttk.Frame(self.root, padding=(18, 14))
         shell.pack(fill="both", expand=True)
         ttk.Label(shell, text="AIRPOINTER // v0.3", foreground="#44e5ff",
                   font=("Consolas", 19, "bold")).pack(anchor="w", pady=(0, 4))
-        ttk.Label(shell, text="SPATIAL POINTER + AGENT REPLAY", foreground="#527f91",
+        ttk.Label(shell, text="GESTURE CAPTURE + AGENT REPLAY", foreground="#527f91",
                   font=("Consolas", 8)).pack(anchor="w", pady=(0, 10))
 
         notebook = ttk.Notebook(shell)
         notebook.pack(fill="both", expand=True)
         frame = ttk.Frame(notebook, padding=(12, 9))
         replay = ttk.Frame(notebook, padding=16)
-        notebook.add(frame, text="Pointer")
+        notebook.add(frame, text="Camera")
         notebook.add(replay, text="Agent Replay")
         notebook.bind("<<NotebookTabChanged>>", lambda _event: self._refresh_agents_once(
             notebook.index(notebook.select()) == 1))
@@ -105,37 +122,6 @@ class App:
                                  highlightbackground="#1d8295", highlightthickness=1)
         self.preview.pack(pady=(8, 6))
         self.preview.create_text(160, 90, text="CAMERA OFFLINE", fill="#527f91", font=("Consolas", 10))
-
-        mapping_row = ttk.Frame(frame)
-        mapping_row.pack(fill="x", pady=(7, 2))
-        ttk.Label(mapping_row, text="Mapping").pack(side="left")
-        mapping_var = tk.StringVar(value="Absolute pointing")
-        mapping = ttk.Combobox(mapping_row, textvariable=mapping_var, state="readonly", width=18,
-                               values=("Absolute pointing", "Relative hand"))
-        mapping.pack(side="right")
-        mapping.bind("<<ComboboxSelected>>", lambda _event: setattr(
-            self.settings, "mapping_mode",
-            "absolute" if mapping_var.get() == "Absolute pointing" else "relative"))
-
-        self._scale(frame, "Sensitivity", 0.6, 1.8, self.settings.sensitivity,
-                    lambda value: setattr(self.settings, "sensitivity", float(value)))
-        self._scale(frame, "Responsiveness", 0.05, 0.35, self.settings.smoothing,
-                    lambda value: setattr(self.settings, "smoothing", float(value)))
-        self._scale(frame, "Pinch threshold", 0.20, 0.55, self.settings.pinch_threshold,
-                    lambda value: setattr(self.settings, "pinch_threshold", float(value)))
-        mouse_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(frame, text="Mouse Control", variable=mouse_var,
-                        command=lambda: self.cursor.set_mouse_enabled(mouse_var.get())).pack(
-                            anchor="w", pady=(10, 2))
-
-        snap_var = tk.BooleanVar(value=True)
-        snap = ttk.Checkbutton(frame, text="UI Snap", variable=snap_var,
-                               command=lambda: setattr(self.settings, "snap_enabled", snap_var.get()))
-        snap.pack(anchor="w", pady=(2, 10))
-        if not self.snapper.available:
-            snap.state(["disabled"])
-            snap_var.set(False)
-            self.settings.snap_enabled = False
 
         self.status = ttk.Label(frame, text="SYSTEM READY", foreground="#74f7c5", font=("Consolas", 9))
         self.status.pack(anchor="w", pady=(8, 6))
@@ -191,11 +177,6 @@ class App:
         combo.pack(side="right")
         combo.bind("<<ComboboxSelected>>", lambda _event: command(variable.get().split()[0]))
 
-    @staticmethod
-    def _scale(parent, label, start, end, value, command) -> None:
-        ttk.Label(parent, text=label).pack(anchor="w", pady=(7, 0))
-        ttk.Scale(parent, from_=start, to=end, value=value, command=command).pack(fill="x")
-
     def _toggle(self) -> None:
         if self.camera.running:
             self._stop_tracking()
@@ -203,16 +184,13 @@ class App:
             self._start_tracking()
 
     def _start_tracking(self) -> None:
-        # Browser gesture mode never controls the OS mouse; the pointer is only
-        # rendered temporarily while choosing a capture region.
-        self.cursor.set_mouse_enabled(False)
         if self.companion_state:
             self.companion_state.set_running(True)
         if self.settings.replay_enabled:
             self.screen_buffer.start()
         self.camera.start()
         self.button.config(text="Stop")
-        self.status.config(text="TRACKING // FIST TO CLUTCH")
+        self.status.config(text="TRACKING // PALM OR FIST TO CAPTURE")
 
     def _stop_tracking(self) -> None:
         self.camera.stop()
@@ -238,28 +216,27 @@ class App:
         elif command == "quit":
             self._close()
 
-    def _set_frame(self, frame, command: CommandView = CommandView(),
-                   selection: SelectionView = SelectionView(), pose: str = "none") -> None:
+    def _set_frame(self, frame, command: CommandView = CommandView(), pose: str = "none") -> None:
         with self._frame_lock:
             self._frame = frame
             self._command = command
-            self._selection = selection
             self._pose = pose
             self._frame_version += 1
         if self.companion_state:
             self.companion_state.publish(frame, pose, command)
 
     def _redraw(self) -> None:
-        state = self.cursor.current_state()
-        self.overlay.draw(state)
+        self.overlay.clear()
         self.overlay.draw_selection(self._selection)
         delivery = self.capture.status()
         buffer = self.screen_buffer.status()
         self.overlay.draw_command(self._command, delivery, buffer)
         if self._selection.active:
             mode = f"AREA CAPTURE // {self._selection.phase.upper()}"
+        elif self.camera.running:
+            mode = f"TRACKING // {self._pose.upper()}"
         else:
-            mode = state.mode.upper() if state else ("SEARCHING FOR HAND" if self.camera.running else "SYSTEM STANDBY")
+            mode = "SYSTEM STANDBY"
         if mode != self._last_mode:
             self.status.config(text=mode)
             self._last_mode = mode
@@ -289,23 +266,67 @@ class App:
 
     def _close(self) -> None:
         self._cancel_replay_prompt()
+        self._cancel_region_select()
         self.camera.stop()
         self.capture.close()
-        self.cursor.close()
         self.settings.agent_thread_id = self._agent_thread_id
         self.settings.save()
         self.root.destroy()
 
-    def _handle_command(self, event: CommandEvent | str, region: Region | None = None) -> None:
+    def _handle_command(self, event: CommandEvent, _region: None = None) -> None:
         if event == "replay":
             try:
                 self.root.after(0, self._begin_replay_prompt)
             except tk.TclError:
                 pass
             return
+        if event == "region_select":
+            try:
+                self.root.after(0, self._begin_region_select)
+            except tk.TclError:
+                pass
+            return
         browser_target = self.companion_state.agent_thread_id() if self.companion_state else ""
-        self.capture.trigger("region" if event == "region" else "screenshot",
-                             browser_target or self._agent_thread_id, region)
+        self.capture.trigger("screenshot", browser_target or self._agent_thread_id)
+
+    def _begin_region_select(self) -> None:
+        if self._region_selecting.is_set():
+            return
+        self._region_selecting.set()
+        self._selection = self._region_selector.start()
+        self.overlay.set_interactive(True)
+
+    def _region_press(self, event) -> None:
+        if not self._region_selecting.is_set():
+            return
+        self._selection = self._region_selector.press(event.x_root, event.y_root)
+
+    def _region_drag(self, event) -> None:
+        if not self._region_selecting.is_set():
+            return
+        self._selection = self._region_selector.drag(event.x_root, event.y_root)
+
+    def _region_release(self, _event=None) -> None:
+        if not self._region_selecting.is_set():
+            return
+        view, captured = self._region_selector.release()
+        self._selection = view
+        if captured is None:
+            return
+        self._end_region_select()
+        browser_target = self.companion_state.agent_thread_id() if self.companion_state else ""
+        self.capture.trigger("region", browser_target or self._agent_thread_id, captured)
+
+    def _cancel_region_select(self, _event=None) -> None:
+        if not self._region_selecting.is_set():
+            return
+        self._region_selector.reset()
+        self._end_region_select()
+
+    def _end_region_select(self) -> None:
+        self._region_selecting.clear()
+        self._selection = SelectionView()
+        self.overlay.set_interactive(False)
 
     def _begin_replay_prompt(self) -> None:
         if self._prompt_window is not None or self._prompt_paths:
@@ -438,10 +459,20 @@ class App:
         window = tk.Toplevel(self.root)
         window.attributes("-topmost", True)
         window.title(title)
-        window.geometry("420x130+40+40")
-        ttk.Label(window, text=title, font=("Segoe UI", 13, "bold")).pack(padx=18, pady=(18, 6))
-        ttk.Label(window, text=detail, wraplength=380).pack(padx=18)
-        window.after(5000, window.destroy)
+        ttk.Label(window, text=title, font=("Segoe UI", 13, "bold")).pack(
+            padx=18, pady=(18, 6), anchor="w")
+        if len(detail) > 200:
+            window.geometry("640x360+40+40")
+            text = tk.Text(window, wrap="word", bg="#11110f", fg="#f5f1e8",
+                           relief="flat", padx=12, pady=10, font=("Consolas", 9))
+            text.insert("1.0", detail)
+            text.config(state="disabled")
+            text.pack(fill="both", expand=True, padx=18)
+            ttk.Button(window, text="Close", command=window.destroy).pack(pady=10)
+        else:
+            window.geometry("420x130+40+40")
+            ttk.Label(window, text=detail, wraplength=380).pack(padx=18)
+            window.after(5000, window.destroy)
 
     def _set_replay_enabled(self, enabled: bool) -> None:
         self.settings.replay_enabled = enabled

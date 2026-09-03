@@ -40,6 +40,7 @@ class CodexAppServer:
             "sortKey": "updated_at",
             "sortDirection": "desc",
             "sourceKinds": ["cli", "vscode", "exec", "appServer", "unknown"],
+            "archived": False,
         }
         if cwd:
             params["cwd"] = cwd
@@ -59,11 +60,15 @@ class CodexAppServer:
         status = read.get("thread", {}).get("status", {})
         if status.get("type") == "active":
             raise CodexBusyError("Agent is busy; capture is queued")
-        self._request("thread/resume", {"threadId": thread_id})
+        self._request("thread/resume", {"threadId": thread_id, "excludeTurns": True})
         inputs = [{"type": "text", "text": prompt}]
         inputs.extend({"type": "localImage", "path": str(path.resolve())} for path in images)
         try:
-            self._request("turn/start", {"threadId": thread_id, "input": inputs})
+            self._request("turn/start", {
+                "threadId": thread_id,
+                "turnTrigger": "airpointer_gesture",
+                "input": inputs,
+            })
         except RuntimeError as error:
             if _is_active_turn_error(error):
                 raise CodexBusyError("Agent is busy; capture is queued") from error

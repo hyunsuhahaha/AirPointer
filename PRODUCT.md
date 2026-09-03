@@ -31,7 +31,7 @@ The user explicitly starts browser screen sharing. One-second recording segments
 - The browser can capture a user-selected screen, window, or tab only after permission.
 - Browser recordings remain in memory until the user explicitly requests analysis.
 - The deployed React app uses a server route for Responses API calls so API keys never enter browser code.
-- The native Python AirPointer remains the path for Windows cursor control, UI Automation snapping, and sending directly to a local Codex task.
+- The native Python AirPointer remains the path for gesture-driven local screen capture (mouse-drag region selection, palm-hold replay) and sending directly to a local Codex task. It does not control the OS mouse cursor.
 - The deployed web app sends still images sampled from the replay because model image input is the reliable cross-platform interface.
 - Inferred deployment target: Vercel. This can be replaced without changing the browser capture module.
 
