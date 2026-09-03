@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 
@@ -14,6 +14,8 @@ class WinkState:
     right_count: int = 0
     left_ear: float | None = None
     right_ear: float | None = None
+    left_points: tuple[tuple[float, float], ...] = ()
+    right_points: tuple[tuple[float, float], ...] = ()
 
 
 class WinkDetector:
@@ -87,9 +89,14 @@ class FaceTracker:
             return self._detector.update(None, None)
         points = result.multi_face_landmarks[0].landmark
         height, width = frame.shape[:2]
-        return self._detector.update(
+        state = self._detector.update(
             _eye_aspect_ratio(points, self.LEFT_EYE, width, height),
             _eye_aspect_ratio(points, self.RIGHT_EYE, width, height),
+        )
+        return replace(
+            state,
+            left_points=tuple((points[index].x, points[index].y) for index in self.LEFT_EYE),
+            right_points=tuple((points[index].x, points[index].y) for index in self.RIGHT_EYE),
         )
 
     def close(self) -> None:

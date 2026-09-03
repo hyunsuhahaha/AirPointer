@@ -106,6 +106,8 @@ def _make_preview(frame, points, intent: Intent, wink: WinkState):
     if intent.pinch_ratio is not None:
         label += f"  PINCH {intent.pinch_ratio:.2f}"
     cv2.putText(preview, label, (9, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.42, color, 1, cv2.LINE_AA)
+    _draw_eye(preview, wink.left_points, wink.left_closed)
+    _draw_eye(preview, wink.right_points, wink.right_closed)
     if wink.left_ear is None:
         eye_label, eye_color = "EYES --", (120, 120, 120)
     elif wink.event:
@@ -117,6 +119,17 @@ def _make_preview(frame, points, intent: Intent, wink: WinkState):
     cv2.putText(preview, eye_label, (205, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.38,
                 eye_color, 1, cv2.LINE_AA)
     return cv2.cvtColor(preview, cv2.COLOR_BGR2RGB)
+
+
+def _draw_eye(frame, points: tuple[tuple[float, float], ...], closed: bool) -> None:
+    if not points:
+        return
+    pixels = [(round((1.0 - x) * 320), round(y * 180)) for x, y in points]
+    color = (220, 100, 255) if closed else (255, 229, 68)
+    for start, end in zip(pixels, pixels[1:] + pixels[:1]):
+        cv2.line(frame, start, end, color, 2, cv2.LINE_AA)
+    for point in pixels:
+        cv2.circle(frame, point, 2, color, -1, cv2.LINE_AA)
 
 
 def _start_gate(points, admitted: bool):

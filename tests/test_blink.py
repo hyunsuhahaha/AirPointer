@@ -1,3 +1,6 @@
+import numpy as np
+
+from airpointer.camera import _draw_eye
 from airpointer.face_tracker import WinkDetector
 
 
@@ -29,3 +32,11 @@ def test_normal_two_eye_blink_never_clicks() -> None:
     assert detector.update(0.10, 0.10).event is None
     assert detector.update(0.10, 0.10).event is None
     assert detector.update(0.30, 0.30).event is None
+
+
+def test_detected_eye_points_are_drawn_on_preview() -> None:
+    frame = np.zeros((180, 320, 3), dtype=np.uint8)
+    points = ((0.40, 0.40), (0.42, 0.38), (0.46, 0.38),
+              (0.48, 0.40), (0.46, 0.42), (0.42, 0.42))
+    _draw_eye(frame, points, closed=False)
+    assert np.count_nonzero(frame) > 0
