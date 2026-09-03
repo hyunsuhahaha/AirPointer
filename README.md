@@ -5,6 +5,8 @@ Windows용 웹캠 공간 포인터입니다. 검지 관절에서 끝으로 향�
 설정창에는 손 위치를 확인할 수 있는 미러 카메라 미리보기가 표시됩니다.
 기본값은 추적 HUD만 표시하는 안전한 미리보기 모드이며, `Mouse Control`을 켜야 실제 마우스가 움직입니다.
 시선 추적은 카메라를 시작한 뒤 `Calibrate Gaze (13 points)`를 누르고 표적을 차례로 바라봐야 활성화됩니다.
+`Agent Replay` 탭에서는 최근 화면을 최대 5분 동안 로컬 순환 버퍼에만 보관하고, 손바닥→주먹으로
+현재 화면을, 손바닥을 1.2초 유지하면 최근 구간의 핵심 프레임을 선택한 Codex 작업으로 전달합니다.
 
 ## 실행
 
@@ -43,6 +45,16 @@ python -m airpointer.main
 - pinch 진입/해제 hysteresis와 captured drag
 - 비동기 UI hover lock, pinch 확정 시 1회 snap
 - 접근성 트리를 제공하는 Windows 앱과 웹 콘텐츠의 UI Snap
+- 1초 MP4 조각으로 구성된 로컬 화면 순환 버퍼(기본 3분, 250MB 상한)
+- 손바닥→주먹 현재 화면 전송, 손바닥 유지 최근 5/15/30/60초 전송
+- Codex App Server 작업 선택과 `localImage` 입력, 바쁜 작업 자동 대기 및 실패 재시도
+
+## Agent Replay
+
+Codex CLI가 설치되고 로그인되어 있어야 합니다. `Agent Replay` 탭을 열어 `Refresh Tasks`로 작업을
+불러온 뒤 전송 대상을 선택하세요. 화면 버퍼는 AirPointer 추적을 시작할 때 켜지고 중지 또는 종료 시
+삭제됩니다. Agent에는 MP4 원본 대신 시간순 핵심 PNG 프레임 6장이 전달됩니다. 화면 우측 상단의
+`BUFFER` HUD로 기록 여부를 항상 확인할 수 있습니다.
 
 ## Gaze tracking references
 

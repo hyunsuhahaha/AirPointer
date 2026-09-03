@@ -7,6 +7,7 @@ from collections.abc import Callable
 import cv2
 
 from .cursor import CursorController
+from .command_gesture import CommandEvent, CommandGesture, CommandView
 from .face_tracker import FaceTracker, WinkState
 from .gesture import InteractionEngine, Intent
 from .gaze import GazeTracker
@@ -23,11 +24,13 @@ START_ZONE_X = 0.4
 
 class CameraLoop:
     def __init__(self, settings: Settings, cursor: CursorController, gaze: GazeTracker,
-                 on_frame: Callable[[object | None, tuple[float, float] | None], None]) -> None:
+                 on_frame: Callable[[object | None, tuple[float, float] | None, CommandView], None],
+                 on_command: Callable[[CommandEvent], None]) -> None:
         self.settings = settings
         self.cursor = cursor
         self.gaze = gaze
         self.on_frame = on_frame
+        self.on_command = on_command
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -45,7 +48,7 @@ class CameraLoop:
     def stop(self) -> None:
         self._stop.set()
         self.cursor.release()
-        self.on_frame(None, None)
+        self.on_frame(None, None, CommandView())
         if self._thread and self._thread is not threading.current_thread():
             self._thread.join(timeout=1.0)
 
@@ -59,6 +62,7 @@ class CameraLoop:
         tracker = HandTracker()
         face_tracker = FaceTracker(self.settings.wink_sensitivity)
         engine = InteractionEngine(pinch_on=self.settings.pinch_threshold)
+        commands = CommandGesture()
         admitted = False
         try:
             while not self._stop.is_set() and capture.isOpened():
@@ -70,22 +74,30 @@ class CameraLoop:
                 points, admitted = _start_gate(tracker.process(tracking_frame), admitted)
                 wink = face_tracker.process(frame)
                 gaze = self.gaze.update(wink.gaze_features)
-                intent = engine.update(points, time.monotonic())
+                timestamp = time.monotonic()
+                command = commands.update(points, timestamp)
+                intent = engine.update(points, timestamp)
                 if intent.phase == "paused":
                     admitted = False
-                self.cursor.apply(intent)
-                if wink.event:
+                if command.blocks_pointer:
+                    self.cursor.release()
+                else:
+                    self.cursor.apply(intent)
+                if wink.event and not command.blocks_pointer:
                     self.cursor.eye_click(wink.event)
-                self.on_frame(_make_preview(frame, points, intent, wink), gaze)
+                if command.event:
+                    self.on_command(command.event)
+                self.on_frame(_make_preview(frame, points, intent, wink, command), gaze, command)
         finally:
             self.cursor.release()
-            self.on_frame(None, None)
+            self.on_frame(None, None, CommandView())
             tracker.close()
             face_tracker.close()
             capture.release()
 
 
-def _make_preview(frame, points, intent: Intent, wink: WinkState):
+def _make_preview(frame, points, intent: Intent, wink: WinkState,
+                  command: CommandView = CommandView()):
     preview = cv2.resize(cv2.flip(frame, 1), (320, 180))
     boundary = round(START_ZONE_X * 320)
     shade = preview.copy()
@@ -105,7 +117,7 @@ def _make_preview(frame, points, intent: Intent, wink: WinkState):
             cv2.line(preview, pixels[a], pixels[b], color, 1, cv2.LINE_AA)
         for x, y in pixels:
             cv2.circle(preview, (x, y), 2, color, -1, cv2.LINE_AA)
-    label = intent.phase.upper()
+    label = ("CAPTURE " + command.phase.upper()) if command.blocks_pointer else intent.phase.upper()
     if intent.pinch_ratio is not None:
         label += f"  PINCH {intent.pinch_ratio:.2f}"
     cv2.putText(preview, label, (9, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.42, color, 1, cv2.LINE_AA)

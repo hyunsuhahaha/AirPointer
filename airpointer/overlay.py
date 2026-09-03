@@ -111,3 +111,21 @@ class Overlay:
         self.canvas.create_oval(x - 5, y - 5, x + 5, y + 5, fill=color, outline=color)
         self.canvas.create_text(x, y + 48, text=f"LOOK HERE  {view.index + 1}/{view.total}",
                                 fill=color, font=("Consolas", 12, "bold"))
+
+    def draw_command(self, command, delivery, buffer) -> None:
+        if buffer.running:
+            seconds = int(buffer.seconds)
+            self.canvas.create_text(self.width - 24, 22,
+                                    text=f"● BUFFER {seconds // 60:02d}:{seconds % 60:02d}",
+                                    fill="#74f7c5", font=("Consolas", 9, "bold"), anchor="e")
+        if command.phase in ("arming", "armed"):
+            x, y, radius = self.width // 2, self.height // 2, 54
+            extent = max(4, round(360 * command.progress))
+            self.canvas.create_arc(x - radius, y - radius, x + radius, y + radius,
+                                   start=90, extent=-extent, outline="#ffb02e", width=6)
+            self.canvas.create_text(x, y, text="CAPTURE\nARMED", justify="center",
+                                    fill="#fff07a", font=("Consolas", 11, "bold"))
+        if delivery.mode not in ("READY",):
+            color = "#ff6767" if "FAILED" in delivery.mode or "ERROR" in delivery.mode else "#44e5ff"
+            self.canvas.create_text(self.width - 24, 44, text=delivery.mode, fill=color,
+                                    font=("Consolas", 9, "bold"), anchor="e")

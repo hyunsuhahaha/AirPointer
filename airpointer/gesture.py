@@ -78,7 +78,7 @@ class InteractionEngine:
                      self._palm_y_filter.update(raw_palm.y, timestamp))
         self._last_point = point
         self._last_palm = palm
-        if _is_fist(points):
+        if is_fist(points):
             event = "drag_end" if self._phase == "drag" else None
             self._pause()
             return Intent("paused", None, event, confidence=0.0)
@@ -150,10 +150,16 @@ def _pointing_target(points: list[Point]) -> Point:
                  dz / length)
 
 
-def _is_fist(points: list[Point]) -> bool:
+def is_fist(points: list[Point]) -> bool:
     fingers = ((5, 6, 8), (9, 10, 12), (13, 14, 16), (17, 18, 20))
     return not any(_is_extended(points[mcp], points[pip], points[tip])
                    for mcp, pip, tip in fingers)
+
+
+def is_open_palm(points: list[Point]) -> bool:
+    fingers = ((5, 6, 8), (9, 10, 12), (13, 14, 16), (17, 18, 20))
+    return all(_is_extended(points[mcp], points[pip], points[tip])
+               for mcp, pip, tip in fingers)
 
 
 def _is_extended(mcp: Point, pip: Point, tip: Point) -> bool:
