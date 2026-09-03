@@ -2,12 +2,11 @@
 setlocal
 cd /d "%~dp0"
 
-set "AIRPOINTER_PYTHON=.venv\Scripts\pythonw.exe"
-if not exist "%AIRPOINTER_PYTHON%" (
-    echo AirPointer is not installed yet.
-    echo Run the setup commands in README.md first.
-    pause
-    exit /b 1
+if exist "portable\AirPointer.exe" (
+    start "" "portable\AirPointer.exe"
+    exit /b 0
 )
 
-start "" "%AIRPOINTER_PYTHON%" -m airpointer.main
+set "AIRPOINTER_PYTHON=.venv\Scripts\pythonw.exe"
+if not exist "%AIRPOINTER_PYTHON%" set "AIRPOINTER_PYTHON=pythonw.exe"
+start "" "%AIRPOINTER_PYTHON%" "%~dp0airpointer_launcher.py"

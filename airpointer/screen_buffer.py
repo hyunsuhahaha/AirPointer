@@ -12,7 +12,9 @@ from typing import Callable
 
 import cv2
 import numpy as np
-from PIL import ImageGrab
+from PIL import Image, ImageGrab
+
+from .region_selection import Region
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,7 +38,8 @@ class ScreenReplayBuffer:
 
     def __init__(self, retention_seconds: Callable[[], int], fps: Callable[[], int],
                  root: Path | None = None, max_bytes: int = 250 * 1024 * 1024,
-                 grab: Callable[[], np.ndarray] | None = None) -> None:
+                 grab: Callable[[], np.ndarray] | None = None,
+                 grab_region: Callable[[Region], Image.Image] | None = None) -> None:
         local = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
         self.root = (root or local / "AirPointer" / "replay").resolve()
         self.dispatch = self.root.parent / "dispatch"
@@ -44,6 +47,7 @@ class ScreenReplayBuffer:
         self.fps = fps
         self.max_bytes = max_bytes
         self._grab = grab or _grab_screen
+        self._grab_region = grab_region or _grab_region
         self._segments: deque[Segment] = deque()
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -95,6 +99,15 @@ class ScreenReplayBuffer:
         path = self.dispatch / f"screenshot-{uuid.uuid4().hex}.png"
         if not cv2.imwrite(str(path), self._grab()):
             raise RuntimeError("Could not save screenshot")
+        return (path,)
+
+    def capture_region(self, rect: Region) -> tuple[Path, ...]:
+        left, top, right, bottom = rect
+        if right <= left or bottom <= top:
+            raise ValueError("Capture region must have a positive width and height")
+        self.dispatch.mkdir(parents=True, exist_ok=True)
+        path = self.dispatch / f"region-{uuid.uuid4().hex}.png"
+        self._grab_region(rect).convert("RGB").save(path, format="PNG")
         return (path,)
 
     def export_recent(self, seconds: int, frame_count: int = 6) -> tuple[Path, ...]:
@@ -198,6 +211,10 @@ def _grab_screen() -> np.ndarray:
         frame = cv2.resize(frame, (round(width * scale), round(height * scale)),
                            interpolation=cv2.INTER_AREA)
     return frame
+
+
+def _grab_region(rect: Region) -> Image.Image:
+    return ImageGrab.grab(bbox=rect, all_screens=True)
 
 
 def _evenly_spaced(items: list[Segment], count: int) -> list[Segment]:

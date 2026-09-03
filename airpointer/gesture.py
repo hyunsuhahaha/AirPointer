@@ -162,6 +162,34 @@ def is_open_palm(points: list[Point]) -> bool:
                for mcp, pip, tip in fingers)
 
 
+def is_pointing(points: list[Point]) -> bool:
+    """True when the index finger is extended and the other fingers are folded."""
+    index = _is_extended(points[5], points[6], points[8])
+    folded = not any(_is_extended(points[mcp], points[pip], points[tip])
+                     for mcp, pip, tip in ((9, 10, 12), (13, 14, 16), (17, 18, 20)))
+    return index and folded
+
+
+def classify_pose(points: list[Point]) -> str:
+    """The original browser classifier, now used as the native source of truth."""
+    if len(points) < 21:
+        return "none"
+    wrist = points[0]
+    tips = (8, 12, 16, 20)
+    pips = (6, 10, 14, 18)
+    extended = [
+        _distance(wrist, points[tip]) > _distance(wrist, points[pip]) * 1.18
+        for tip, pip in zip(tips, pips)
+    ]
+    if all(extended):
+        return "palm"
+    if extended[0] and not any(extended[1:]):
+        return "point"
+    if not any(extended):
+        return "fist"
+    return "other"
+
+
 def _is_extended(mcp: Point, pip: Point, tip: Point) -> bool:
     first = (pip.x - mcp.x, pip.y - mcp.y, pip.z - mcp.z)
     second = (tip.x - pip.x, tip.y - pip.y, tip.z - pip.z)

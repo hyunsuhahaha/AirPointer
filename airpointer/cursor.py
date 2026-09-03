@@ -113,20 +113,14 @@ class CursorController:
             return CursorState(state.x, state.y, round(self._point_x), round(self._point_y),
                                state.pinching, state.snap, state.mode, state.confidence)
 
+    def project(self, point: Point) -> tuple[int, int]:
+        """Map a hand point to screen coordinates without showing or moving the cursor."""
+        return self._absolute_target(point)
+
     def set_mouse_enabled(self, enabled: bool) -> None:
         if not enabled:
             self._mouse_up()
         self.settings.mouse_enabled = enabled
-
-    def eye_click(self, button: str) -> None:
-        if not self.settings.mouse_enabled:
-            return
-        with self._lock:
-            state = self._state
-        if state is None:
-            return
-        pyautogui.moveTo(state.x, state.y, _pause=False)
-        pyautogui.click(button=button, _pause=False)
 
     def close(self) -> None:
         self.release()

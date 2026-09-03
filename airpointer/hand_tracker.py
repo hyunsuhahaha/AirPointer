@@ -40,4 +40,8 @@ class HandTracker:
 
 
 def _select_right_hand(candidates: list[tuple[str, list[Point]]]) -> list[Point] | None:
-    return next((points for label, points in candidates if label == "Right"), None)
+    if not candidates:
+        return None
+    # Prefer the right hand for pointer control, but never discard the only
+    # visible hand. MediaPipe handedness can also flip with camera mirroring.
+    return next((points for label, points in candidates if label == "Right"), candidates[0][1])

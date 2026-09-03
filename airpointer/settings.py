@@ -16,7 +16,6 @@ class Settings:
     snap_enabled: bool = True
     snap_radius: int = 80
     pinch_threshold: float = 0.34
-    wink_sensitivity: float = 0.75
     replay_enabled: bool = True
     replay_minutes: int = 3
     replay_seconds: int = 15

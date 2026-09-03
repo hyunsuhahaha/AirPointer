@@ -31,7 +31,17 @@ def test_tracker_selects_right_hand_and_never_falls_back_to_left() -> None:
     left = [Point(0.2, 0.5) for _ in range(21)]
     right = [Point(0.7, 0.5) for _ in range(21)]
     assert _select_right_hand([("Left", left), ("Right", right)]) is right
-    assert _select_right_hand([("Left", left)]) is None
+    assert _select_right_hand([("Left", left)]) is left
+
+
+def test_native_pose_classifier_matches_the_browser_contract() -> None:
+    from airpointer.gesture import classify_pose
+
+    assert classify_pose(_hand()) == "palm"
+    fist = _hand()
+    for tip, pip in ((8, 6), (12, 10), (16, 14), (20, 18)):
+        fist[tip] = fist[pip]
+    assert classify_pose(fist) == "fist"
 
 
 def test_open_hand_tracks() -> None:

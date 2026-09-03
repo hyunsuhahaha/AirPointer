@@ -8,9 +8,10 @@ from pathlib import Path
 from typing import Callable, Literal
 
 from .codex_delivery import CodexAppServer, CodexBusyError
+from .region_selection import Region
 from .screen_buffer import ScreenReplayBuffer, cleanup_paths
 
-CaptureKind = Literal["screenshot", "replay"]
+CaptureKind = Literal["screenshot", "region", "replay"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,24 +27,40 @@ class CaptureController:
         self.buffer = screen_buffer
         self.codex = codex
         self.replay_seconds = replay_seconds
-        self._queue: queue.Queue[tuple[CaptureKind, str, tuple[Path, ...] | None] | None] = queue.Queue(
-            maxsize=2)
+        self._queue: queue.Queue[
+            tuple[CaptureKind, str, Region | None, tuple[Path, ...] | None, str | None] | None
+        ] = queue.Queue(maxsize=2)
         self._status = DeliveryStatus()
         self._status_lock = threading.Lock()
-        self._pending: tuple[CaptureKind, str, tuple[Path, ...]] | None = None
+        self._pending: tuple[CaptureKind, str, Region | None, tuple[Path, ...], str | None] | None = None
         self._stop = threading.Event()
         self._worker = threading.Thread(target=self._run, name="airpointer-delivery", daemon=True)
         self._worker.start()
 
-    def trigger(self, kind: CaptureKind, thread_id: str) -> None:
+    def trigger(self, kind: CaptureKind, thread_id: str, region: Region | None = None) -> None:
         if not thread_id:
             self._set_status("SELECT AGENT", "Choose an Agent target")
             return
         try:
-            self._queue.put_nowait((kind, thread_id, None))
-            self._set_status("CAPTURING", "Current screen" if kind == "screenshot" else "Recent replay")
+            self._queue.put_nowait((kind, thread_id, region, None, None))
+            detail = ("Selected area" if kind == "region" else
+                      "Current screen" if kind == "screenshot" else "Recent replay")
+            self._set_status("CAPTURING", detail)
         except queue.Full:
             self._set_status("QUEUE FULL", "Wait for the current capture")
+
+    def send_prepared(self, kind: CaptureKind, thread_id: str, paths: tuple[Path, ...],
+                      prompt: str) -> bool:
+        if not thread_id or not paths or not prompt.strip():
+            self._set_status("PROMPT REQUIRED", "Select a task and enter a question")
+            return False
+        try:
+            self._queue.put_nowait((kind, thread_id, None, paths, prompt.strip()))
+            self._set_status("QUEUED", "Question and frozen replay")
+            return True
+        except queue.Full:
+            self._set_status("QUEUE FULL", "Wait for the current capture")
+            return False
 
     def retry(self) -> None:
         pending, self._pending = self._pending, None
@@ -74,20 +91,32 @@ class CaptureController:
             task = self._queue.get()
             if task is None:
                 return
-            kind, thread_id, paths = task
+            kind, thread_id, region, paths, prompt = task
             if paths is None:
                 try:
-                    paths = (self.buffer.capture_still() if kind == "screenshot" else
-                             self.buffer.export_recent(int(self.replay_seconds())))
+                    if kind == "screenshot":
+                        paths = self.buffer.capture_still()
+                    elif kind == "region":
+                        if region is None:
+                            raise ValueError("Selected capture area is missing")
+                        paths = self.buffer.capture_region(region)
+                    else:
+                        paths = self.buffer.export_recent(int(self.replay_seconds()))
                 except Exception as error:
                     self._set_status("CAPTURE FAILED", str(error))
                     continue
-            self._deliver(kind, thread_id, paths)
+            self._deliver(kind, thread_id, paths, prompt)
 
-    def _deliver(self, kind: CaptureKind, thread_id: str, paths: tuple[Path, ...]) -> None:
-        prompt = ("현재 화면을 캡처했습니다. 화면에서 발생한 문제를 분석해 주세요." if kind == "screenshot" else
-                  "문제가 발생하기 직전 화면 기록입니다. 첨부 이미지는 과거에서 현재 순서입니다. "
-                  "화면 변화를 분석해 원인과 해결 방법을 알려 주세요.")
+    def _deliver(self, kind: CaptureKind, thread_id: str, paths: tuple[Path, ...],
+                 user_prompt: str | None = None) -> None:
+        context = ("선택한 화면 영역을 캡처했습니다."
+                   if kind == "region" else "현재 화면을 캡처했습니다."
+                   if kind == "screenshot" else
+                   "제스처 완료 시점 기준 최근 화면 기록입니다. 첨부 이미지는 과거에서 현재 순서입니다.")
+        default_request = ("이 영역을 중심으로 문제를 분석해 주세요." if kind == "region" else
+                           "화면에서 발생한 문제를 분석해 주세요." if kind == "screenshot" else
+                           "화면 변화를 분석해 원인과 해결 방법을 알려 주세요.")
+        prompt = f"{context}\n\n사용자의 요청:\n{user_prompt or default_request}"
         self._set_status("SENDING", f"{len(paths)} image(s)")
         while not self._stop.is_set():
             try:
@@ -97,7 +126,7 @@ class CaptureController:
                 self._stop.wait(2.0)
                 continue
             except Exception as error:
-                self._pending = (kind, thread_id, paths)
+                self._pending = (kind, thread_id, None, paths, user_prompt)
                 self._set_status("SEND FAILED", str(error))
                 return
             cleanup_paths(paths)

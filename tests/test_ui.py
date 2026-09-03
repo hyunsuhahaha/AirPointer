@@ -1,10 +1,12 @@
 from airpointer.main import App
 from airpointer.cursor import CursorState
 from airpointer.ui_snap import SnapResult
+from airpointer.region_selection import SelectionView
 import numpy as np
+from pathlib import Path
 
 
-def test_ui_fits_and_draws_pointer() -> None:
+def test_ui_fits_and_draws_pointer(tmp_path: Path) -> None:
     app = App()
     try:
         app.root.update()
@@ -17,6 +19,15 @@ def test_ui_fits_and_draws_pointer() -> None:
         assert app.preview.winfo_ismapped() and app._preview_photo is not None
         state = CursorState(200, 200, 120, 130, False, SnapResult(200, 200, (180, 180, 220, 220)))
         app.overlay.draw(state)
+        app.overlay.draw_selection(SelectionView("selecting", (80, 90, 320, 260), (320, 260)))
         assert len(app.overlay.canvas.find_all()) >= 9
+        frozen = tmp_path / "frame.png"
+        frozen.write_bytes(b"frozen")
+        app._show_replay_prompt((frozen,), "")
+        app.root.update()
+        assert app._prompt_window is not None and app._prompt_window.winfo_viewable()
+        assert app._prompt_text.winfo_viewable()
+        app._cancel_replay_prompt()
+        assert not frozen.exists()
     finally:
         app._close()

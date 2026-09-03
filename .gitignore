@@ -1,5 +1,12 @@
 .venv/
 __pycache__/
 .pytest_cache/
+.pytest-tmp*/
 *.py[cod]
 .impeccable/
+build/
+.pyinstaller-work/
+dist/
+portable/
+.codex-video-tools/
+airpointer-runtime-check.png
