@@ -1,5 +1,7 @@
 # AirPointer
 
+> 웹 출품작 이름: **방금그거뭐였지**
+
 Windows용 웹캠 공간 포인터입니다. 검지 관절에서 끝으로 향하는 방향을 화면에 투영하고 엄지와 검지를
 붙여 클릭/드래그하며, Windows UI Automation이 찾은 가까운 버튼·입력창·링크를 잠급니다.
 설정창에는 손 위치를 확인할 수 있는 미러 카메라 미리보기가 표시됩니다.
@@ -20,6 +22,23 @@ py -3.11 -m venv .venv
 python -m pip install -r requirements.txt
 python -m airpointer.main
 ```
+
+## 웹 버전 실행 및 배포
+
+`web/`은 AI Championship 2026 제출용 Next.js 앱입니다. 브라우저의 화면 공유로 최근 1~5분을
+메모리 순환 버퍼에 보관하고, 현재 화면 또는 최근 5/15/30/60초의 대표 프레임을 Responses API로
+분석합니다. 카메라를 허용하면 MediaPipe 제스처도 사용할 수 있습니다.
+
+```powershell
+cd web
+Copy-Item .env.example .env.local
+# .env.local의 OPENAI_API_KEY를 실제 키로 변경
+npm install
+npm run dev
+```
+
+Vercel에서는 Root Directory를 `web`으로 지정하고 `OPENAI_API_KEY`를 환경 변수로 추가하면 됩니다.
+화면 공유와 카메라는 보안 컨텍스트가 필요하므로 배포 환경에서는 HTTPS를 사용해야 합니다.
 
 편 손의 검지를 움직이면 카메라 왼쪽·오른쪽이 화면 양 끝에 대응합니다. 설정의 `Mapping`에서
 `Relative hand`를 고르면 터치패드처럼 상대 이동할 수도 있습니다. 짧게 pinch 후 놓으면 클릭, pinch를 유지하거나
