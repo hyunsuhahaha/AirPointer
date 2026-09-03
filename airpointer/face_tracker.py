@@ -23,13 +23,16 @@ class WinkState:
 class GazeEstimator:
     def __init__(self, smoothing: float = 0.25) -> None:
         self.smoothing = smoothing
+        self._center: tuple[float, float] | None = None
         self._point: tuple[float, float] | None = None
 
     def update(self, left: tuple[float, float], right: tuple[float, float]) -> tuple[float, float]:
         eye_x = (left[0] + right[0]) / 2
         eye_y = (left[1] + right[1]) / 2
-        target = (_clamp(0.5 - (eye_x - 0.5) * 3.0),
-                  _clamp(0.5 + (eye_y - 0.5) * 4.0))
+        if self._center is None:
+            self._center = (eye_x, eye_y)
+        target = (_clamp(0.5 - (eye_x - self._center[0]) * 3.0),
+                  _clamp(0.5 + (eye_y - self._center[1]) * 4.0))
         if self._point is None:
             self._point = target
         else:
@@ -39,6 +42,7 @@ class GazeEstimator:
         return self._point
 
     def reset(self) -> None:
+        self._center = None
         self._point = None
 
 

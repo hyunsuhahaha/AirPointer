@@ -55,10 +55,10 @@ def test_normal_two_eye_blink_never_clicks() -> None:
 
 def test_gaze_estimator_maps_eye_motion_and_smooths_it() -> None:
     gaze = GazeEstimator(smoothing=0.5)
-    assert gaze.update((0.50, 0.50), (0.50, 0.50)) == (0.5, 0.5)
-    moved = gaze.update((0.40, 0.45), (0.40, 0.45))
-    assert moved[0] > 0.5 and moved[1] < 0.5
-    assert moved[0] < 0.8 and moved[1] > 0.3
+    assert gaze.update((0.48, 0.35), (0.48, 0.35)) == (0.5, 0.5)
+    moved = gaze.update((0.43, 0.40), (0.43, 0.40))
+    assert 0.5 < moved[0] < 0.8
+    assert 0.5 < moved[1] < 0.8
 
 
 def test_detected_eye_points_are_drawn_on_preview() -> None:
