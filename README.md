@@ -51,7 +51,10 @@ npm install
 npm run dev
 ```
 
-Agent 전송에는 API 키 대신 로그인된 Codex CLI가 필요합니다. 웹 화면에서 `Codex Agent` 작업을
+Agent 전송에는 API 키 대신 로그인된 Codex CLI가 필요합니다. Codex 데스크톱 앱이 설치돼 있어도
+`codex` 실행 파일이 PATH에 없을 수 있습니다(버전별 해시 폴더 아래 설치되는 경우). 이 경우
+`web/.env.local`에 `CODEX_EXECUTABLE=<codex.exe 전체 경로>`를 추가하세요
+(예: `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe`). 웹 화면에서 `Codex Agent` 작업을
 선택한 다음 화면 공유와 제스처를 켜세요. 선택한 작업이 실행 중이면 캡처를 유지한 채 자동으로
 재시도합니다. Replay Capsule에는 개요 이미지와 타임스탬프가 있는 원본 WebM 조각이 들어가며,
 Agent는 `-0.5초`처럼 원하는 과거 시점을 전체 해상도 프레임으로 다시 조회할 수 있습니다.
@@ -71,11 +74,15 @@ Vercel에서는 Root Directory를 `web`으로 지정하고 `OPENAI_API_KEY`를 �
 - 1초 MP4 조각으로 구성된 로컬 화면 순환 버퍼(기본 3분, 250MB 상한)
 - 주먹→손바닥으로 영역 선택 모드 진입, 이후 실제 마우스 클릭 드래그로 영역 지정 및 확정(오른쪽 클릭 취소)
 - 손바닥 유지 최근 5/15/30/60초 전송
-- Codex App Server 작업 선택과 `localImage` 입력, 바쁜 작업 자동 대기 및 실패 재시도
+- Codex 작업 선택과 로컬 이미지 첨부, 바쁜 작업 자동 대기 및 실패 재시도
 
 ## Agent Replay
 
-Codex CLI가 설치되고 로그인되어 있어야 합니다. `Agent Replay` 탭을 열어 `Refresh Tasks`로 작업을
-불러온 뒤 전송 대상을 선택하세요. 화면 버퍼는 AirPointer 추적을 시작할 때 켜지고 중지 또는 종료 시
-삭제됩니다. Agent에는 MP4 원본 대신 시간순 핵심 PNG 프레임 6장이 전달됩니다. 화면 우측 상단의
-`BUFFER` HUD로 기록 여부를 항상 확인할 수 있습니다.
+네이티브 앱은 자체적으로 Codex App Server를 띄우지 않고, `web/`이 이미 사용 중인 로컬
+Codex 연결(`http://127.0.0.1:3000/api/agent`)을 그대로 사용합니다. 그래서 **`npm run dev`로
+web 앱이 켜져 있어야** `Agent Replay` 탭에서 작업 목록을 불러오고 전송할 수 있습니다
+(AirPointer.exe가 매 빌드마다 서명 없는 새 바이너리가 되면서 Windows 스마트 앱 컨트롤이 자식
+프로세스 실행을 막는 경우가 있어, 그 경로를 아예 쓰지 않도록 했습니다). `Agent Replay` 탭을
+열어 `Refresh Tasks`로 작업을 불러온 뒤 전송 대상을 선택하세요. 화면 버퍼는 AirPointer 추적을
+시작할 때 켜지고 중지 또는 종료 시 삭제됩니다. Agent에는 MP4 원본 대신 시간순 핵심 PNG 프레임
+6장이 전달됩니다. 화면 우측 상단의 `BUFFER` HUD로 기록 여부를 항상 확인할 수 있습니다.

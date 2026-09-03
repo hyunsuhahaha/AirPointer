@@ -1,12 +1,14 @@
+import io
 import json
-import queue
 import time
+import urllib.error
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
 
-from airpointer.codex_delivery import CodexAppServer, CodexBusyError, _codex_command
+from airpointer import codex_delivery
+from airpointer.codex_delivery import CodexAppServer, CodexBusyError
 from airpointer.command_gesture import CommandGesture
 from airpointer.region_selection import RegionSelector
 from airpointer.screen_buffer import ScreenReplayBuffer, Segment, _evenly_spaced
@@ -155,50 +157,51 @@ def test_settings_round_trip(tmp_path: Path) -> None:
     assert loaded.replay_minutes == 5 and loaded.agent_thread_id == "thr_test"
 
 
-def test_codex_send_uses_local_images(tmp_path: Path) -> None:
+def test_codex_send_posts_frames_as_data_urls(tmp_path: Path) -> None:
     image = tmp_path / "screen.png"
     image.write_bytes(b"png")
     server = CodexAppServer()
     calls = []
 
-    def request(method, params):
-        calls.append((method, params))
-        if method == "thread/read":
-            return {"thread": {"status": {"type": "idle"}}}
-        return {}
+    def request(method, path, body=None):
+        calls.append((method, path, body))
+        return {"delivered": True}
 
     server._request = request
     server.send("thr_test", "Look", (image,))
-    method, params = calls[-1]
-    assert method == "turn/start"
-    assert params["threadId"] == "thr_test"
-    assert params["input"][1] == {"type": "localImage", "path": str(image.resolve())}
+    method, path, body = calls[-1]
+    assert method == "POST" and path == "/api/agent"
+    assert body["threadId"] == "thr_test"
+    assert body["userPrompt"] == "Look"
+    assert body["frames"][0].startswith("data:image/png;base64,")
 
 
-def test_codex_active_turn_response_is_queued(tmp_path: Path) -> None:
-    image = tmp_path / "screen.png"
-    image.write_bytes(b"png")
+def test_codex_busy_response_raises_busy_error(monkeypatch) -> None:
     server = CodexAppServer()
 
-    def request(method, _params):
-        if method == "thread/read":
-            return {"thread": {"status": {"type": "notLoaded"}}}
-        if method == "turn/start":
-            raise RuntimeError("Codex App Server: thread already has an active turn")
-        return {}
+    def fake_urlopen(_request, timeout=None):
+        body = json.dumps({"queued": True, "error": "Agent is busy; capture is queued"}).encode("utf-8")
+        raise urllib.error.HTTPError("http://x/api/agent", 409, "busy", None, io.BytesIO(body))
 
-    server._request = request
+    monkeypatch.setattr(codex_delivery.urllib.request, "urlopen", fake_urlopen)
     try:
-        server.send("thr_test", "Look", (image,))
+        server.send("thr_test", "Look", ())
     except CodexBusyError as error:
-        assert "queued" in str(error)
+        assert "busy" in str(error).lower()
     else:
-        raise AssertionError("active turn must be treated as a retryable busy state")
+        raise AssertionError("a 409 response must be treated as a retryable busy state")
 
 
-def test_codex_reader_routes_response() -> None:
+def test_codex_connection_failure_mentions_dev_server(monkeypatch) -> None:
     server = CodexAppServer()
-    target = queue.Queue(maxsize=1)
-    server._pending[7] = target
-    assert json.loads('{"id": 7, "result": {}}')["id"] == 7
-    assert _codex_command()
+
+    def fake_urlopen(_request, timeout=None):
+        raise urllib.error.URLError("Connection refused")
+
+    monkeypatch.setattr(codex_delivery.urllib.request, "urlopen", fake_urlopen)
+    try:
+        server.list_threads()
+    except RuntimeError as error:
+        assert "npm run dev" in str(error)
+    else:
+        raise AssertionError("an unreachable dev server must raise a clear, actionable error")

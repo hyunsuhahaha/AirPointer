@@ -1,11 +1,9 @@
 from __future__ import annotations
 
+import base64
 import json
-import os
-import queue
-import shutil
-import subprocess
-import threading
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,154 +20,72 @@ class CodexBusyError(RuntimeError):
 
 
 class CodexAppServer:
-    """Small synchronous interface over the Codex app-server JSON-RPC transport."""
+    """Sends capture requests through the local AirPointer web app's
+    `/api/agent` route instead of spawning a Codex App Server subprocess
+    directly. AirPointer.exe is an unsigned, frequently-rebuilt binary, so
+    Windows Smart App Control tends to block it from launching child
+    processes; the web app (already running for the browser companion,
+    port 3000 by default) already has a working path to Codex."""
 
-    def __init__(self, request_timeout: float = 20.0) -> None:
+    def __init__(self, base_url: str = "http://127.0.0.1:3000", request_timeout: float = 45.0) -> None:
+        self.base_url = base_url.rstrip("/")
         self.request_timeout = request_timeout
-        self._process: subprocess.Popen[str] | None = None
-        self._reader: threading.Thread | None = None
-        self._write_lock = threading.Lock()
-        self._lifecycle_lock = threading.RLock()
-        self._pending_lock = threading.Lock()
-        self._pending: dict[int, queue.Queue[dict]] = {}
-        self._next_id = 0
 
     def list_threads(self, cwd: str | None = None) -> list[AgentThread]:
-        params: dict[str, object] = {
-            "limit": 50,
-            "sortKey": "updated_at",
-            "sortDirection": "desc",
-            "sourceKinds": ["cli", "vscode", "exec", "appServer", "unknown"],
-        }
-        if cwd:
-            params["cwd"] = cwd
-        result = self._request("thread/list", params)
+        payload = self._request("GET", "/api/agent")
         threads = []
-        for item in result.get("data", []):
-            title = item.get("name") or item.get("preview") or item.get("id", "Untitled")
-            status = item.get("status", {})
+        for item in payload.get("threads", []):
+            title = item.get("title") or item.get("id", "Untitled")
             threads.append(AgentThread(str(item["id"]), _one_line(str(title)),
-                                       str(status.get("type", "unknown"))))
+                                       str(item.get("status", "unknown"))))
         return threads
 
     def send(self, thread_id: str, prompt: str, images: tuple[Path, ...]) -> None:
         if not thread_id:
             raise RuntimeError("Select an Agent target first")
-        read = self._request("thread/read", {"threadId": thread_id, "includeTurns": False})
-        status = read.get("thread", {}).get("status", {})
-        if status.get("type") == "active":
-            raise CodexBusyError("Agent is busy; capture is queued")
-        self._request("thread/resume", {"threadId": thread_id})
-        inputs = [{"type": "text", "text": prompt}]
-        inputs.extend({"type": "localImage", "path": str(path.resolve())} for path in images)
-        try:
-            self._request("turn/start", {"threadId": thread_id, "input": inputs})
-        except RuntimeError as error:
-            if _is_active_turn_error(error):
-                raise CodexBusyError("Agent is busy; capture is queued") from error
-            raise
+        body = {
+            "threadId": thread_id,
+            "mode": "current",
+            "seconds": 0,
+            "frames": [_to_data_url(path) for path in images],
+            "userPrompt": prompt,
+        }
+        self._request("POST", "/api/agent", body)
 
     def close(self) -> None:
-        with self._lifecycle_lock:
-            process, self._process = self._process, None
-        if process and process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                process.kill()
+        pass
 
-    def _request(self, method: str, params: dict) -> dict:
-        self._ensure_started()
-        return self._request_started(method, params)
-
-    def _request_started(self, method: str, params: dict) -> dict:
-        request_id = self._allocate_id()
-        response_queue: queue.Queue[dict] = queue.Queue(maxsize=1)
-        with self._pending_lock:
-            self._pending[request_id] = response_queue
+    def _request(self, method: str, path: str, body: dict | None = None) -> dict:
+        url = f"{self.base_url}{path}"
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        headers = {"Content-Type": "application/json"} if data is not None else {}
+        request = urllib.request.Request(url, data=data, method=method, headers=headers)
         try:
-            self._write({"method": method, "id": request_id, "params": params})
-            try:
-                response = response_queue.get(timeout=self.request_timeout)
-            except queue.Empty as error:
-                self.close()
-                raise RuntimeError(f"Codex App Server timed out during {method}") from error
-        finally:
-            with self._pending_lock:
-                self._pending.pop(request_id, None)
-        if "error" in response:
-            message = response["error"].get("message", str(response["error"]))
-            raise RuntimeError(f"Codex App Server: {message}")
-        return response.get("result", {})
-
-    def _ensure_started(self) -> None:
-        with self._lifecycle_lock:
-            if self._process and self._process.poll() is None:
-                return
-            command = _codex_command()
-            creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-            self._process = subprocess.Popen(
-                command + ["app-server", "--stdio"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL, text=True, encoding="utf-8", bufsize=1,
-                creationflags=creationflags,
-            )
-            self._reader = threading.Thread(target=self._read_loop, name="airpointer-codex-reader",
-                                            daemon=True)
-            self._reader.start()
-            try:
-                self._request_started("initialize", {
-                    "clientInfo": {"name": "airpointer", "title": "AirPointer", "version": "0.3.0"}
-                })
-                self._write({"method": "initialized", "params": {}})
-            except Exception:
-                process, self._process = self._process, None
-                if process and process.poll() is None:
-                    process.terminate()
-                raise
-
-    def _read_loop(self) -> None:
-        process = self._process
-        if not process or not process.stdout:
-            return
-        for line in process.stdout:
-            try:
-                message = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            request_id = message.get("id")
-            with self._pending_lock:
-                target = self._pending.get(request_id)
-            if target:
-                target.put(message)
-
-    def _write(self, message: dict) -> None:
-        process = self._process
-        if not process or not process.stdin:
-            raise RuntimeError("Codex App Server is not running")
-        with self._write_lock:
-            process.stdin.write(json.dumps(message, ensure_ascii=False) + "\n")
-            process.stdin.flush()
-
-    def _allocate_id(self) -> int:
-        with self._pending_lock:
-            self._next_id += 1
-            return self._next_id
+            with urllib.request.urlopen(request, timeout=self.request_timeout) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            payload = _read_json(error)
+            message = payload.get("error") or f"AirPointer 웹 서버 오류 (HTTP {error.code})"
+            if error.code == 409 or payload.get("queued"):
+                raise CodexBusyError(message) from error
+            raise RuntimeError(message) from error
+        except urllib.error.URLError as error:
+            raise RuntimeError(
+                f"AirPointer 웹 서버({self.base_url})에 연결할 수 없습니다. "
+                f"`npm run dev`가 실행 중인지 확인하세요. ({error.reason})") from error
 
 
-def _codex_command() -> list[str]:
-    executable = shutil.which("codex.exe") or shutil.which("codex.cmd") or shutil.which("codex")
-    if not executable:
-        raise RuntimeError("Codex CLI was not found. Install or update Codex first")
-    if os.name == "nt" and Path(executable).suffix.lower() in (".cmd", ".bat"):
-        return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", executable]
-    return [executable]
+def _read_json(error: urllib.error.HTTPError) -> dict:
+    try:
+        return json.loads(error.read().decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+        return {}
+
+
+def _to_data_url(path: Path) -> str:
+    mime = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
+    return f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"
 
 
 def _one_line(value: str, limit: int = 64) -> str:
     return " ".join(value.split())[:limit]
-
-
-def _is_active_turn_error(error: Exception) -> bool:
-    message = str(error).casefold()
-    return "active turn" in message or "thread is active" in message

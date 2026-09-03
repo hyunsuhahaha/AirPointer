@@ -401,9 +401,7 @@ class App:
     def _load_prompt_agents(self) -> None:
         def load() -> None:
             try:
-                threads = self.codex.list_threads(str(Path.cwd()))
-                if not threads:
-                    threads = self.codex.list_threads()
+                threads = self.codex.list_threads()
                 error = ""
             except Exception as caught:
                 threads, error = [], str(caught)
@@ -500,9 +498,7 @@ class App:
 
         def load() -> None:
             try:
-                threads = self.codex.list_threads(str(__import__("pathlib").Path.cwd()))
-                if not threads:
-                    threads = self.codex.list_threads()
+                threads = self.codex.list_threads()
                 error = ""
             except Exception as caught:
                 threads, error = [], str(caught)
