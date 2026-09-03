@@ -3,7 +3,31 @@ $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location -LiteralPath $projectRoot
 
-python -m PyInstaller --noconfirm --clean --workpath ".pyinstaller-work" --distpath "portable" "AirPointer.spec"
+# UPX roughly halves the size of the big native DLLs (cv2, mediapipe's
+# bundled OpenCV, ...), which matters because the built exe needs to stay
+# under GitHub's 100MB per-file limit to be committed directly. Installed
+# via `winget install UPX.UPX`; PyInstaller silently skips compression if
+# it can't find it, so this is best-effort.
+$upxDir = $null
+$upxCommand = Get-Command upx -ErrorAction SilentlyContinue
+if ($upxCommand) {
+    $upxDir = Split-Path -Parent $upxCommand.Source
+} else {
+    $upxCandidate = Get-ChildItem -Path "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\UPX.UPX_*\upx-*" -Directory -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending | Select-Object -First 1
+    if ($upxCandidate) { $upxDir = $upxCandidate.FullName }
+}
+
+$pyinstallerArgs = @("--noconfirm", "--clean", "--workpath", ".pyinstaller-work", "--distpath", "portable")
+if ($upxDir) {
+    Write-Host "Using UPX from: $upxDir"
+    $pyinstallerArgs += @("--upx-dir", $upxDir)
+} else {
+    Write-Warning "UPX not found (winget install UPX.UPX) -- building without compression, exe will be larger."
+}
+$pyinstallerArgs += "AirPointer.spec"
+
+python -m PyInstaller @pyinstallerArgs
 if ($LASTEXITCODE -ne 0) {
     throw "PyInstaller failed with exit code $LASTEXITCODE"
 }

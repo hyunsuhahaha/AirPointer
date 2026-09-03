@@ -17,6 +17,8 @@ type PendingAgentCapture =
   | { mode: "current"; threadId: string; seconds: number; frames: string[]; region?: boolean }
   | { mode: "replay"; threadId: string; seconds: number; capsule: ReplayCapsule };
 type GestureAction = "replay" | "screenshot" | "region";
+type StageBox = { left: number; top: number; width: number; height: number };
+type ResizeDir = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 
 const PROMPT_PRESETS = [
   "이 상황이 어떻게 된 건지 설명해줘",
@@ -24,10 +26,30 @@ const PROMPT_PRESETS = [
   "여기서 다음에 무엇을 해야 하는지 알려줘",
 ];
 
+const STAGE_MIN_WIDTH = 320;
+const STAGE_MIN_HEIGHT = 220;
+
+const RESIZE_DIRS: { dir: ResizeDir; label: string }[] = [
+  { dir: "n", label: "위쪽" },
+  { dir: "s", label: "아래쪽" },
+  { dir: "e", label: "오른쪽" },
+  { dir: "w", label: "왼쪽" },
+  { dir: "ne", label: "오른쪽 위 대각선" },
+  { dir: "nw", label: "왼쪽 위 대각선" },
+  { dir: "se", label: "오른쪽 아래 대각선" },
+  { dir: "sw", label: "왼쪽 아래 대각선" },
+];
+
 const AIRPOINTER_PROTOCOL = "airpointer://";
+const AIRPOINTER_DOWNLOAD_URL = "/downloads/AirPointer.exe";
 
 export function ReplayWorkspace() {
   const screenVideo = useRef<HTMLVideoElement>(null);
+  const stageViewportRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const stageMoveStart = useRef<{ pointerX: number; pointerY: number; box: StageBox } | null>(null);
+  const stageResizeStart = useRef<{ pointerX: number; pointerY: number; box: StageBox; dir: ResizeDir } | null>(null);
+  const [stageBox, setStageBox] = useState<StageBox | null>(null);
   const [companionToken, setCompanionToken] = useState("");
   const buffer = useRef(new BrowserReplayBuffer(3 * 60_000));
   const [stream, setStream] = useState<MediaStream | null>(null);
@@ -47,6 +69,81 @@ export function ReplayWorkspace() {
   const [pendingCapture, setPendingCapture] = useState<PendingAgentCapture | null>(null);
   const [agentPrompt, setAgentPrompt] = useState("");
   const [companionMessage, setCompanionMessage] = useState("");
+
+  const getStageBox = useCallback((): StageBox => {
+    if (stageBox) return stageBox;
+    const stageRect = stageRef.current?.getBoundingClientRect();
+    const viewportRect = stageViewportRef.current?.getBoundingClientRect();
+    if (!stageRect || !viewportRect) return { left: 0, top: 0, width: 640, height: 410 };
+    return { left: stageRect.left - viewportRect.left, top: stageRect.top - viewportRect.top, width: stageRect.width, height: stageRect.height };
+  }, [stageBox]);
+
+  const resetStageBox = useCallback(() => setStageBox(null), []);
+
+  const beginStageMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if ((event.target as HTMLElement).closest("button, a, input, select, textarea")) return;
+    event.preventDefault();
+    const box = getStageBox();
+    stageMoveStart.current = { pointerX: event.clientX, pointerY: event.clientY, box };
+    document.body.style.userSelect = "none";
+    const onMove = (moveEvent: PointerEvent) => {
+      if (!stageMoveStart.current) return;
+      const { pointerX, pointerY, box } = stageMoveStart.current;
+      setStageBox({ ...box, left: box.left + (moveEvent.clientX - pointerX), top: box.top + (moveEvent.clientY - pointerY) });
+    };
+    const onUp = () => {
+      stageMoveStart.current = null;
+      document.body.style.userSelect = "";
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp, { once: true });
+  }, [getStageBox]);
+
+  const resizeBoxFromDelta = (box: StageBox, dir: ResizeDir, dx: number, dy: number): StageBox => {
+    let { left, top, width, height } = box;
+    if (dir.includes("e")) width = Math.max(STAGE_MIN_WIDTH, box.width + dx);
+    if (dir.includes("w")) { width = Math.max(STAGE_MIN_WIDTH, box.width - dx); left = box.left + (box.width - width); }
+    if (dir.includes("s")) height = Math.max(STAGE_MIN_HEIGHT, box.height + dy);
+    if (dir.includes("n")) { height = Math.max(STAGE_MIN_HEIGHT, box.height - dy); top = box.top + (box.height - height); }
+    return { left, top, width, height };
+  };
+
+  const beginStageResize = useCallback((event: React.PointerEvent<HTMLButtonElement>, dir: ResizeDir) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const box = getStageBox();
+    stageResizeStart.current = { pointerX: event.clientX, pointerY: event.clientY, box, dir };
+    document.body.style.userSelect = "none";
+    const onMove = (moveEvent: PointerEvent) => {
+      if (!stageResizeStart.current) return;
+      const { pointerX, pointerY, box, dir } = stageResizeStart.current;
+      setStageBox(resizeBoxFromDelta(box, dir, moveEvent.clientX - pointerX, moveEvent.clientY - pointerY));
+    };
+    const onUp = () => {
+      stageResizeStart.current = null;
+      document.body.style.userSelect = "";
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp, { once: true });
+  }, [getStageBox]);
+
+  const onStageResizeKeyDown = useCallback((event: React.KeyboardEvent<HTMLButtonElement>, dir: ResizeDir) => {
+    const horizontal = dir.includes("e") || dir.includes("w");
+    const vertical = dir.includes("n") || dir.includes("s");
+    let dx = 0;
+    let dy = 0;
+    if (horizontal && event.key === "ArrowLeft") dx = -20;
+    else if (horizontal && event.key === "ArrowRight") dx = 20;
+    else if (vertical && event.key === "ArrowUp") dy = -20;
+    else if (vertical && event.key === "ArrowDown") dy = 20;
+    else return;
+    event.preventDefault();
+    setStageBox(resizeBoxFromDelta(getStageBox(), dir, dx, dy));
+  }, [getStageBox]);
 
   const stopSharing = useCallback(() => {
     stream?.getTracks().forEach((track) => track.stop());
@@ -250,11 +347,30 @@ export function ReplayWorkspace() {
       <section className={styles.hero} id="top">
         <div className={styles.stageColumn}>
           <div className={styles.stageHeader}><span>LIVE DESKTOP</span><span>{stream ? "CAPTURING" : "NOT CONNECTED"}</span></div>
-          <div className={styles.stage}>
-            <video ref={screenVideo} className={`${styles.screenVideo} ${stream ? styles.visible : ""}`} muted playsInline />
-            {!stream && <div className={styles.emptyStage}><Desktop size={54} weight="thin" /><strong>방금 지나간 화면을 놓치지 마세요</strong><span>공유한 화면은 브라우저 메모리 안에서만 순환합니다.</span><button className={styles.primary} onClick={() => void startSharing()}><Play size={18} weight="fill" /> 화면 공유 시작</button></div>}
-            {stream && <div className={styles.liveFlag}><span /> REC</div>}
-            <div className={styles.nowLine} style={{ left: `${Math.max(2, bufferPercent)}%` }}><span>NOW</span></div>
+          <div className={styles.stageViewport} ref={stageViewportRef}>
+            <div
+              className={styles.stage}
+              ref={stageRef}
+              style={stageBox ? { left: stageBox.left, top: stageBox.top, width: stageBox.width, height: stageBox.height } : undefined}
+              onPointerDown={beginStageMove}
+              onDoubleClick={(event) => { if (!(event.target as HTMLElement).closest("button, a")) resetStageBox(); }}
+            >
+              <video ref={screenVideo} className={`${styles.screenVideo} ${stream ? styles.visible : ""}`} muted playsInline />
+              {!stream && <div className={styles.emptyStage}><Desktop size={54} weight="thin" /><strong>방금 지나간 화면을 놓치지 마세요</strong><span>공유한 화면은 브라우저 메모리 안에서만 순환합니다.</span><button className={styles.primary} onClick={() => void startSharing()}><Play size={18} weight="fill" /> 화면 공유 시작</button></div>}
+              {stream && <div className={styles.liveFlag}><span /> REC</div>}
+              <div className={styles.nowLine} style={{ left: `${Math.max(2, bufferPercent)}%` }}><span>NOW</span></div>
+              {RESIZE_DIRS.map(({ dir, label }) => (
+                <button
+                  key={dir}
+                  type="button"
+                  className={`${styles.resizeHandle} ${styles[`resize${dir.toUpperCase()}`]}`}
+                  onPointerDown={(event) => beginStageResize(event, dir)}
+                  onKeyDown={(event) => onStageResizeKeyDown(event, dir)}
+                  onDoubleClick={(event) => { event.stopPropagation(); resetStageBox(); }}
+                  aria-label={`화면 미리보기 ${label} 크기 조절 (더블클릭으로 초기화)`}
+                />
+              ))}
+            </div>
           </div>
           <div className={styles.transport}>
             <span className={styles.timecode}>{timeLabel}</span>
@@ -267,13 +383,13 @@ export function ReplayWorkspace() {
         <aside className={styles.commandDock}>
           <p className={styles.eyebrow}>REPLAY TO AGENT</p>
           <div className={`${styles.cameraPanel} ${styles.commandCamera}`}>{companionPreview && <img src={companionPreview} alt="AirPointer 카메라 미리보기" />}<div className={styles.cameraHud}><span><HandPalm size={16} /> {pose === "palm" ? "손바닥 인식" : pose === "fist" ? "주먹 인식" : pose === "point" ? "검지 인식" : pose === "none" ? "손 찾는 중" : "동작 대기"}</span><span>CAM 01 · EXE</span></div>{gestureEnabled && gestureProgress.phase !== "idle" && gestureSelection.phase === "idle" && <div className={styles.gestureTimer} data-active role="progressbar" aria-label="제스처 유지 시간" aria-valuemin={0} aria-valuemax={1} aria-valuenow={gestureProgress.value}><div className={styles.gestureTimerRing} style={{ background: `conic-gradient(var(--accent) ${gestureProgress.value * 360}deg, rgba(255,255,255,.14) 0deg)` }}><span><b>{Math.round(gestureProgress.value * 100)}</b></span></div><p>손바닥 2초</p></div>}</div>
-          <div className={styles.gestureControls}><label className={styles.switch}><input type="checkbox" checked={gestureEnabled} onChange={(event) => changeGestureEnabled(event.target.checked)} /><span /><b>{gestureEnabled ? "제스처 + AirPointer 켜짐" : "제스처 + AirPointer 켜기"}</b></label></div>
+          <div className={styles.gestureControls}><label className={styles.switch}><input type="checkbox" checked={gestureEnabled} onChange={(event) => changeGestureEnabled(event.target.checked)} /><span /><b>{gestureEnabled ? "제스처 + AirPointer 켜짐" : "제스처 + AirPointer 켜기"}</b></label><a className={styles.downloadLink} href={AIRPOINTER_DOWNLOAD_URL}>AirPointer 처음이신가요? 다운로드</a></div>
           <div className={styles.gestureActions} aria-label="제스처별 설정">
             <GestureActionToggle label="손바닥 2초" detail="15초 REPLAY" checked={gestureActions.replay} disabled={!gestureEnabled} onChange={(value) => setGestureAction("replay", value)} />
             <GestureActionToggle label="손바닥 → 주먹" detail="현재 화면" checked={gestureActions.screenshot} disabled={!gestureEnabled} onChange={(value) => setGestureAction("screenshot", value)} />
             <GestureActionToggle label="주먹 → 손바닥" detail="영역 선택" checked={gestureActions.region} disabled={!gestureEnabled} onChange={(value) => setGestureAction("region", value)} />
           </div>
-          {(gestureError || (!companionReady && companionMessage)) && <small className={styles.gestureError}>{gestureError || companionMessage}</small>}
+          {(gestureError || (!companionReady && companionMessage)) && <small className={styles.gestureError}>{gestureError || companionMessage}{gestureError && <> <a href={AIRPOINTER_DOWNLOAD_URL}>AirPointer 다운로드</a></>}</small>}
           <div className={styles.rule} />
           <label className={styles.field}><span>로컬 버퍼</span><select value={retention} onChange={(event) => setRetention(Number(event.target.value))} disabled={Boolean(stream)}><option value={1}>최근 1분</option><option value={3}>최근 3분</option><option value={5}>최근 5분</option></select></label>
           <label className={styles.field}><span>전송 구간</span><select value={sendSeconds} onChange={(event) => setSendSeconds(Number(event.target.value))}><option value={5}>최근 5초</option><option value={15}>최근 15초</option><option value={30}>최근 30초</option><option value={60}>최근 1분</option></select></label>
