@@ -25,6 +25,7 @@ class Overlay:
         self.window.attributes("-topmost", True)
         self.window.attributes("-transparentcolor", "#010101")
         width, height = self.window.winfo_screenwidth(), self.window.winfo_screenheight()
+        self.width, self.height = width, height
         self.window.geometry(f"{width}x{height}+0+0")
         self.canvas = tk.Canvas(self.window, bg="#010101", highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
@@ -87,3 +88,13 @@ class Overlay:
                                 width=2, dash=() if solid else (5, 4))
         self.canvas.create_oval(state.x - 4, state.y - 4, state.x + 4, state.y + 4,
                                 fill=color, outline=color)
+
+    def draw_gaze(self, gaze: tuple[float, float] | None) -> None:
+        if gaze is None:
+            return
+        x, y = round(gaze[0] * self.width), round(gaze[1] * self.height)
+        color = "#b8ff5a"
+        self.canvas.create_oval(x - 19, y - 19, x + 19, y + 19, outline=color, width=2)
+        self.canvas.create_oval(x - 4, y - 4, x + 4, y + 4, fill=color, outline=color)
+        self.canvas.create_text(x + 25, y - 20, text="GAZE", fill=color,
+                                font=("Consolas", 9, "bold"), anchor="w")

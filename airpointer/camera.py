@@ -22,7 +22,7 @@ START_ZONE_X = 0.4
 
 class CameraLoop:
     def __init__(self, settings: Settings, cursor: CursorController,
-                 on_frame: Callable[[object | None], None]) -> None:
+                 on_frame: Callable[[object | None, tuple[float, float] | None], None]) -> None:
         self.settings = settings
         self.cursor = cursor
         self.on_frame = on_frame
@@ -43,7 +43,7 @@ class CameraLoop:
     def stop(self) -> None:
         self._stop.set()
         self.cursor.release()
-        self.on_frame(None)
+        self.on_frame(None, None)
         if self._thread and self._thread is not threading.current_thread():
             self._thread.join(timeout=1.0)
 
@@ -73,10 +73,10 @@ class CameraLoop:
                 self.cursor.apply(intent)
                 if wink.event:
                     self.cursor.eye_click(wink.event)
-                self.on_frame(_make_preview(frame, points, intent, wink))
+                self.on_frame(_make_preview(frame, points, intent, wink), wink.gaze)
         finally:
             self.cursor.release()
-            self.on_frame(None)
+            self.on_frame(None, None)
             tracker.close()
             face_tracker.close()
             capture.release()

@@ -37,6 +37,7 @@ python -m airpointer.main
 - 손 크기와 무관한 3D 단위 방향 포인팅 및 Snap 클릭 오차의 세션 자동 보정
 - 왼쪽 눈 윙크 좌클릭, 오른쪽 눈 윙크 우클릭(0.15초 이상 유지, 양눈 깜빡임은 무시)
 - 카메라 미리보기에 열린 눈은 청록색, 감긴 눈은 분홍색 윤곽으로 표시
+- 양쪽 홍채의 상대 위치로 화면 응시 지점을 추정해 초록색 `GAZE` HUD로 표시
 - 작은 눈과 얕은 윙크를 위한 정밀 눈 랜드마크 및 조절 가능한 Wink sensitivity
 - pinch 진입/해제 hysteresis와 captured drag
 - 비동기 UI hover lock, pinch 확정 시 1회 snap

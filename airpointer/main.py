@@ -27,6 +27,7 @@ class App:
         self._drawn_frame_version = -1
         self._frame_lock = threading.Lock()
         self._preview_photo = None
+        self._gaze: tuple[float, float] | None = None
         self._last_mode = ""
         self.camera = CameraLoop(self.settings, self.cursor, self._set_frame)
         self.overlay = Overlay(self.root)
@@ -121,14 +122,16 @@ class App:
             self.button.config(text="Stop")
             self.status.config(text="TRACKING // FIST TO CLUTCH")
 
-    def _set_frame(self, frame) -> None:
+    def _set_frame(self, frame, gaze: tuple[float, float] | None = None) -> None:
         with self._frame_lock:
             self._frame = frame
+            self._gaze = gaze
             self._frame_version += 1
 
     def _redraw(self) -> None:
         state = self.cursor.current_state()
         self.overlay.draw(state)
+        self.overlay.draw_gaze(self._gaze)
         mode = state.mode.upper() if state else ("SEARCHING FOR HAND" if self.camera.running else "SYSTEM STANDBY")
         if mode != self._last_mode:
             self.status.config(text=mode)

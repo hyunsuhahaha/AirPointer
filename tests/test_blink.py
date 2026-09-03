@@ -1,7 +1,7 @@
 import numpy as np
 
 from airpointer.camera import _draw_eye
-from airpointer.face_tracker import WinkDetector
+from airpointer.face_tracker import GazeEstimator, WinkDetector
 
 
 def _prime(detector: WinkDetector) -> None:
@@ -51,6 +51,14 @@ def test_normal_two_eye_blink_never_clicks() -> None:
     assert detector.update(0.10, 0.10, 1.00).event is None
     assert detector.update(0.10, 0.10, 1.20).event is None
     assert detector.update(0.30, 0.30, 1.25).event is None
+
+
+def test_gaze_estimator_maps_eye_motion_and_smooths_it() -> None:
+    gaze = GazeEstimator(smoothing=0.5)
+    assert gaze.update((0.50, 0.50), (0.50, 0.50)) == (0.5, 0.5)
+    moved = gaze.update((0.40, 0.45), (0.40, 0.45))
+    assert moved[0] > 0.5 and moved[1] < 0.5
+    assert moved[0] < 0.8 and moved[1] > 0.3
 
 
 def test_detected_eye_points_are_drawn_on_preview() -> None:
