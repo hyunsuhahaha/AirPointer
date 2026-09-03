@@ -7,6 +7,8 @@ Windows용 웹캠 공간 포인터입니다. 검지 관절에서 끝으로 향�
 
 ## 실행
 
+설치가 끝난 PC에서는 `AirPointer.bat`을 더블클릭하면 콘솔 창 없이 실행됩니다.
+
 Python 3.11 권장(MediaPipe 호환 범위가 가장 안정적):
 
 ```powershell
