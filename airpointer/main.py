@@ -361,9 +361,15 @@ class App:
 
         panel = tk.Frame(window, bg="#11110f", padx=18, pady=16)
         panel.pack(fill="both", expand=True, padx=2, pady=2)
+        header_row = tk.Frame(panel, bg="#11110f")
+        header_row.pack(fill="x")
         self._prompt_header_var = tk.StringVar(value="REPLAY CAPTURED")
-        tk.Label(panel, textvariable=self._prompt_header_var, bg="#11110f", fg="#ff8a50",
-                 font=("Consolas", 10, "bold")).pack(anchor="w")
+        tk.Label(header_row, textvariable=self._prompt_header_var, bg="#11110f", fg="#ff8a50",
+                 font=("Consolas", 10, "bold")).pack(side="left", anchor="w")
+        tk.Button(header_row, text="✕", command=self._cancel_replay_prompt, bg="#11110f",
+                 fg="#ff8a50", activebackground="#2a1c14", activeforeground="#ff8a50",
+                 relief="flat", bd=0, font=("Consolas", 11, "bold"),
+                 cursor="hand2").pack(side="right")
         self._prompt_agent_var = tk.StringVar(value="Codex 작업 불러오는 중…")
         self._prompt_agent_combo = ttk.Combobox(panel, textvariable=self._prompt_agent_var,
                                                 state="readonly", width=58)
@@ -413,6 +419,7 @@ class App:
         if error:
             self._prompt_agent_var.set("Codex 작업을 불러오지 못했습니다")
             self._prompt_header_var.set("REPLAY CAPTURED · CODEX ERROR")
+            self._show_native_notice("Codex 작업을 불러오지 못했습니다", error)
             return
         self._prompt_agent_ids = {f"{thread.title} · {thread.id[-6:]}": thread.id for thread in threads}
         labels = tuple(self._prompt_agent_ids)
