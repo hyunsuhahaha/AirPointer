@@ -18,6 +18,8 @@ import win32process
 from pywinauto import Desktop
 from pywinauto.keyboard import send_keys
 
+from .win32_focus import force_foreground
+
 TARGET_PROCESSES = {"ChatGPT.exe", "Orca.exe"}
 ATTACHMENT_NAME = "User attachment"
 
@@ -81,28 +83,39 @@ def find_codex_window_and_composer():
     return None
 
 
-def _force_foreground(target_hwnd: int) -> None:
-    """SetForegroundWindow refuses to hand focus to a background process
-    under Windows' focus-stealing prevention unless the calling thread
-    looks "recently interactive". AttachThreadInput to the current
-    foreground window (not the target) plus a synthetic Alt tap is the
-    standard, widely-used way to satisfy that heuristic from a script."""
-    current_thread = win32api.GetCurrentThreadId()
-    foreground_hwnd = win32gui.GetForegroundWindow()
-    foreground_thread, _ = win32process.GetWindowThreadProcessId(foreground_hwnd) if foreground_hwnd else (0, 0)
-    attached = False
-    if foreground_thread and foreground_thread != current_thread:
-        attached = bool(win32process.AttachThreadInput(current_thread, foreground_thread, True))
+def _sidebar_conversation_buttons(window):
+    """Yields (title, button) for each sidebar conversation entry.
+    Identified structurally -- immediately followed by "채팅 고정" then
+    "채팅 보관" buttons -- rather than by screen position (the window can
+    be anywhere) or by name alone (the main panel header repeats the
+    active conversation's title as its own, separate button)."""
     try:
-        win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
+        buttons = window.descendants(control_type="Button")
+    except Exception:
+        return
+    for index in range(len(buttons) - 2):
         try:
-            win32gui.ShowWindow(target_hwnd, win32con.SW_RESTORE)
-            win32gui.SetForegroundWindow(target_hwnd)
-        finally:
-            win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
-    finally:
-        if attached:
-            win32process.AttachThreadInput(current_thread, foreground_thread, False)
+            if (buttons[index + 1].element_info.name == "채팅 고정"
+                    and buttons[index + 2].element_info.name == "채팅 보관"):
+                yield buttons[index].element_info.name, buttons[index]
+        except Exception:
+            continue
+
+
+def list_conversations(window) -> list[str]:
+    return [title for title, _ in _sidebar_conversation_buttons(window)]
+
+
+def select_conversation(window, title: str) -> bool:
+    """Clicks the sidebar entry matching `title` exactly, switching Codex
+    Desktop's active conversation. Returns False and does nothing else if
+    no exact match is found -- the caller falls back to whatever's
+    already open rather than erroring out."""
+    for candidate_title, button in _sidebar_conversation_buttons(window):
+        if candidate_title == title:
+            button.click_input()
+            return True
+    return False
 
 
 def focus_window_and_composer(window, composer) -> None:
@@ -114,7 +127,7 @@ def focus_window_and_composer(window, composer) -> None:
             pass
     if win32gui.GetForegroundWindow() != target_hwnd:
         try:
-            _force_foreground(target_hwnd)
+            force_foreground(target_hwnd)
         except Exception:
             pass
     try:
@@ -203,10 +216,20 @@ def submit(window, composer) -> None:
     send_keys("{ENTER}")
 
 
-def paste_capture_and_ask(image_paths: Sequence[Path], prompt: str) -> None:
-    """Full pipeline: find the window, focus it, paste the image(s) (one
-    multi-file paste regardless of count), paste the prompt, submit,
-    restore whatever window was focused before."""
+def paste_capture_and_ask(image_paths: Sequence[Path], prompt: str,
+                           conversation_title: str | None = None) -> None:
+    """Full pipeline: find the window, focus it, optionally switch to a
+    named conversation, paste the image(s) (one multi-file paste
+    regardless of count), paste the prompt, submit, restore whatever
+    window was focused before.
+
+    conversation_title, when given, is looked up in the sidebar and
+    clicked before pasting -- if no exact match is found, this silently
+    falls back to sending to whatever conversation is already open,
+    exactly like conversation_title=None, rather than raising. Note: the
+    conversation Codex Desktop had open before the switch is *not*
+    restored afterward (unlike the foreground window) -- only "which app
+    has focus" is undone here, not "which conversation was selected"."""
     if not image_paths:
         raise DesktopPasteError("전송할 이미지가 없습니다.")
     previous_hwnd = win32gui.GetForegroundWindow()
@@ -215,6 +238,11 @@ def paste_capture_and_ask(image_paths: Sequence[Path], prompt: str) -> None:
         raise DesktopPasteError("Codex Desktop 창을 찾지 못했습니다.")
     window, composer = found
     try:
+        if conversation_title and select_conversation(window, conversation_title):
+            time.sleep(0.3)  # let the composer/content repaint after switching
+            refreshed = find_codex_window_and_composer()
+            if refreshed:
+                window, composer = refreshed
         paste_images(window, composer, image_paths)
         paste_prompt(window, composer, prompt)
         submit(window, composer)

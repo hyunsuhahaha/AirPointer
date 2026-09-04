@@ -13,15 +13,17 @@ from .capture_controller import CaptureController
 from .codex_delivery import AgentThread, CodexAppServerDelivery, DesktopPasteDelivery
 from .companion_bridge import CompanionState
 from .command_gesture import CommandEvent, CommandView
+from .conversation_picker import ConversationPicker
 from .overlay import Overlay
 from .region_selection import RegionSelector, SelectionView
 from .screen_buffer import ScreenReplayBuffer, cleanup_paths
 from .settings import Settings
+from .win32_focus import force_foreground
 
-# DesktopPasteDelivery doesn't target a specific thread by id -- it always
-# sends to whatever Codex Desktop currently has focused -- so there's no
-# real thread id to store/select. This placeholder just satisfies
-# CaptureController's "a target must be chosen" check.
+# Fallback used only for a delivery backend with requires_thread_selection
+# = False (none currently) -- there's no real thread id to store in that
+# case, just a placeholder that satisfies CaptureController's "a target
+# must be chosen" check.
 DESKTOP_PASTE_TARGET = "desktop"
 
 
@@ -44,8 +46,8 @@ class App:
         self.companion_state = companion_state
         self._last_mode = ""
         self.codex = DesktopPasteDelivery()
-        self._agent_thread_id = (self.settings.agent_thread_id
-                                  if self.codex.requires_thread_selection else DESKTOP_PASTE_TARGET)
+        initial_target = self.settings.agent_thread_id if self.codex.requires_thread_selection else DESKTOP_PASTE_TARGET
+        self._agent_thread_id = initial_target or self._fallback_target()
         self._agent_labels: dict[str, str] = {}
         self._refreshing_agents = False
         self._prompt_window: tk.Toplevel | None = None
@@ -156,10 +158,11 @@ class App:
         ttk.Label(frame, text="AGENT TARGET", foreground="#44e5ff",
                   font=("Consolas", 10, "bold")).pack(anchor="w", pady=(0, 6))
         if self.codex.requires_thread_selection:
-            self.agent_var = tk.StringVar(value="Select a Codex task")
-            self.agent_combo = ttk.Combobox(frame, textvariable=self.agent_var, state="readonly", width=36)
-            self.agent_combo.pack(fill="x")
-            self.agent_combo.bind("<<ComboboxSelected>>", self._select_agent)
+            placeholder = ("Codex 작업 검색..." if self.codex.requires_explicit_target
+                          else "현재 열려 있는 대화 (검색하려면 입력)")
+            self.agent_picker = ConversationPicker(frame, self._select_agent, bg="#02090d", fg="#bdeeff",
+                                                    accent="#44e5ff", muted="#527f91", placeholder=placeholder)
+            self.agent_picker.pack(fill="x")
             ttk.Button(frame, text="Refresh Tasks", command=self._refresh_agents).pack(fill="x", pady=(6, 14))
         else:
             ttk.Label(frame, text="● 현재 열려 있는 Codex 대화", foreground="#74f7c5",
@@ -226,6 +229,23 @@ class App:
         if self.companion_state:
             self.companion_state.set_running(False)
 
+    @staticmethod
+    def _activate_window(window) -> None:
+        """Reliably brings `window` to the real OS foreground.
+        window.focus_force() alone can silently no-op when this process
+        lacks Windows' "recently interactive" standing -- which is
+        exactly the case here, since these windows get raised from a
+        background camera-gesture callback or a companion-bridge socket
+        command, never a genuine click. See win32_focus.py (the same fix
+        desktop_paste.py needs for Codex Desktop's own window)."""
+        window.deiconify()
+        window.lift()
+        try:
+            force_foreground(window.winfo_id())
+        except Exception:
+            pass
+        window.focus_force()
+
     def handle_external_command(self, command: str, token: str = "") -> None:
         if self.companion_state:
             self.companion_state.authorize(token)
@@ -236,9 +256,7 @@ class App:
             self._stop_tracking()
             self.root.withdraw()
         elif command == "show":
-            self.root.deiconify()
-            self.root.lift()
-            self.root.focus_force()
+            self._activate_window(self.root)
         elif command == "quit":
             self._close()
 
@@ -396,14 +414,16 @@ class App:
                  fg="#ff8a50", activebackground="#2a1c14", activeforeground="#ff8a50",
                  relief="flat", bd=0, font=("Consolas", 11, "bold"),
                  cursor="hand2").pack(side="right")
-        self._prompt_agent_var = tk.StringVar(value="Codex 작업 불러오는 중…")
         if self.codex.requires_thread_selection:
-            self._prompt_agent_combo = ttk.Combobox(panel, textvariable=self._prompt_agent_var,
-                                                    state="readonly", width=58)
-            self._prompt_agent_combo.pack(fill="x", pady=(14, 10))
+            placeholder = ("Codex 작업 검색..." if self.codex.requires_explicit_target
+                          else "현재 열려 있는 대화 (검색하려면 입력)")
+            self._prompt_agent_picker = ConversationPicker(panel, self._on_prompt_agent_picked,
+                                                            bg="#090908", fg="#f5f1e8",
+                                                            accent="#ff6b22", muted="#7a5a4a",
+                                                            placeholder=placeholder)
+            self._prompt_agent_picker.pack(fill="x", pady=(14, 10))
         else:
-            self._prompt_agent_var.set("● 현재 열려 있는 Codex 대화")
-            tk.Label(panel, textvariable=self._prompt_agent_var, bg="#11110f", fg="#74f7c5",
+            tk.Label(panel, text="● 현재 열려 있는 Codex 대화", bg="#11110f", fg="#74f7c5",
                      font=("Consolas", 10)).pack(anchor="w", pady=(14, 10))
 
         self._prompt_text = tk.Text(panel, height=8, wrap="word", bg="#090908", fg="#f5f1e8",
@@ -413,9 +433,7 @@ class App:
         self._prompt_text.bind("<Return>", self._on_prompt_return)
         window.bind("<Escape>", self._on_prompt_escape)
         window.protocol("WM_DELETE_WINDOW", self._cancel_replay_prompt)
-        window.deiconify()
-        window.lift()
-        window.focus_force()
+        self._activate_window(window)
         self._prompt_text.focus_set()
         if self.codex.requires_thread_selection:
             self._load_prompt_agents()
@@ -447,23 +465,27 @@ class App:
         if self._prompt_window is None:
             return
         if error:
-            self._prompt_agent_var.set("Codex 작업을 불러오지 못했습니다")
             self._prompt_header_var.set("REPLAY CAPTURED · CODEX ERROR")
             self._show_native_notice("Codex 작업을 불러오지 못했습니다", error)
             return
-        self._prompt_agent_ids = {f"{thread.title} · {thread.id[-6:]}": thread.id for thread in threads}
-        labels = tuple(self._prompt_agent_ids)
-        self._prompt_agent_combo.config(values=labels)
-        selected = next((label for label, thread_id in self._prompt_agent_ids.items()
-                         if thread_id == self._agent_thread_id), labels[0] if labels else "")
-        self._prompt_agent_var.set(selected or "전송 가능한 Codex 작업 없음")
+        self._prompt_agent_ids = {self._agent_label(thread): thread.id for thread in threads}
+        labels = list(self._prompt_agent_ids)
+        self._prompt_agent_picker.set_options(labels)
+        if self.codex.requires_explicit_target and labels:
+            selected = next((label for label, thread_id in self._prompt_agent_ids.items()
+                             if thread_id == self._agent_thread_id), labels[0])
+            self._prompt_agent_picker.set_value(selected)
+
+    def _on_prompt_agent_picked(self, _label: str) -> None:
+        if self._prompt_header_var.get() == "REPLAY CAPTURED · SELECT CONVERSATION":
+            self._prompt_header_var.set("REPLAY CAPTURED")
 
     def _submit_replay_prompt(self) -> None:
         if self._prompt_window is None:
             return
         prompt = self._prompt_text.get("1.0", "end").strip()
         if self.codex.requires_thread_selection:
-            thread_id = self._prompt_agent_ids.get(self._prompt_agent_var.get(), "")
+            thread_id = self._prompt_agent_ids.get(self._prompt_agent_picker.get(), "") or self._fallback_target()
             if not thread_id:
                 self._prompt_header_var.set("REPLAY CAPTURED · SELECT CONVERSATION")
                 return
@@ -544,27 +566,43 @@ class App:
 
         threading.Thread(target=load, name="airpointer-agent-list", daemon=True).start()
 
+    @staticmethod
+    def _agent_label(thread: AgentThread) -> str:
+        # DesktopPasteDelivery's threads have no real id distinct from the
+        # title (see codex_delivery.py); appending id[-6:] in that case
+        # would just repeat a fragment of the title right back at itself.
+        return thread.title if thread.id == thread.title else f"{thread.title} · {thread.id[-6:]}"
+
+    def _fallback_target(self) -> str:
+        # CodexAppServerDelivery has no "current thread" concept -- an
+        # empty target must keep blocking delivery (requires_explicit_target
+        # = True -> "" stays ""). DesktopPasteDelivery's "" is a real,
+        # supported choice ("whatever's already open"), but CaptureController
+        # still needs a *non-empty* thread_id to not treat it as "nothing
+        # selected" -- DESKTOP_PASTE_TARGET is a sentinel that never matches
+        # a real conversation title, so it passes through as that default.
+        return "" if self.codex.requires_explicit_target else DESKTOP_PASTE_TARGET
+
     def _apply_agents(self, threads: list[AgentThread], error: str) -> None:
         self._refreshing_agents = False
         if error:
             self.delivery_status.config(text=f"CODEX ERROR • {error}")
             return
-        self._agent_labels = {
-            f"{thread.title} · {thread.id[-6:]}": thread.id for thread in threads
-        }
-        labels = tuple(self._agent_labels)
-        self.agent_combo.config(values=labels)
-        selected = next((label for label, thread_id in self._agent_labels.items()
-                         if thread_id == self._agent_thread_id), labels[0] if labels else "")
-        if selected:
-            self.agent_var.set(selected)
-            self._agent_thread_id = self._agent_labels[selected]
-            self.delivery_status.config(text=f"CODEX CONNECTED • {len(labels)} TASKS")
-        else:
+        self._agent_labels = {self._agent_label(thread): thread.id for thread in threads}
+        labels = list(self._agent_labels)
+        self.agent_picker.set_options(labels)
+        if not labels:
             self.delivery_status.config(text="NO CODEX TASKS FOUND")
+            return
+        if self.codex.requires_explicit_target:
+            selected = next((label for label, thread_id in self._agent_labels.items()
+                             if thread_id == self._agent_thread_id), labels[0])
+            self.agent_picker.set_value(selected)
+            self._agent_thread_id = self._agent_labels[selected]
+        self.delivery_status.config(text=f"CODEX CONNECTED • {len(labels)} TASKS")
 
-    def _select_agent(self, _event=None) -> None:
-        self._agent_thread_id = self._agent_labels.get(self.agent_var.get(), "")
+    def _select_agent(self, label: str) -> None:
+        self._agent_thread_id = self._agent_labels.get(label, "") or self._fallback_target()
         self.settings.agent_thread_id = self._agent_thread_id
 
     def run(self) -> None:

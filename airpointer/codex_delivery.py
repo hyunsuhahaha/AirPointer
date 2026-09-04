@@ -35,6 +35,10 @@ class CodexAppServerDelivery:
     port 3000 by default) already has a working path to Codex."""
 
     requires_thread_selection = True
+    # There's no "current" thread over HTTP -- a target must always be
+    # picked explicitly, unlike DesktopPasteDelivery where leaving the
+    # picker blank is a legitimate choice (whatever's already open).
+    requires_explicit_target = True
 
     def __init__(self, base_url: str = "http://127.0.0.1:3000", request_timeout: float = 45.0) -> None:
         self.base_url = base_url.rstrip("/")
@@ -87,17 +91,23 @@ class CodexAppServerDelivery:
 
 
 class DesktopPasteDelivery:
-    """Delivers captures via clipboard + OS keyboard automation into
-    whatever Codex conversation is already open on screen (see
-    desktop_paste.py), instead of any Codex protocol -- no writer lock to
-    steal, nothing to corrupt. `thread_id` is accepted only for interface
-    compatibility with CodexAppServerDelivery; there's no thread to target,
-    it's whatever Codex Desktop currently has focused."""
+    """Delivers captures via clipboard + OS keyboard automation into Codex
+    Desktop (see desktop_paste.py), instead of any Codex protocol -- no
+    writer lock to steal, nothing to corrupt. `thread_id`, when given, is
+    matched against the sidebar's conversation titles and clicked to
+    switch Codex Desktop to that conversation before sending; when empty
+    or not found, it just sends to whatever conversation is already open."""
 
-    requires_thread_selection = False
+    requires_thread_selection = True
+    requires_explicit_target = False
 
     def list_threads(self, cwd: str | None = None) -> list[AgentThread]:
-        return []
+        from . import desktop_paste
+        found = desktop_paste.find_codex_window_and_composer()
+        if not found:
+            return []
+        window, _composer = found
+        return [AgentThread(title, title, "unknown") for title in desktop_paste.list_conversations(window)]
 
     def send(self, thread_id: str, prompt: str, images: tuple[Path, ...],
               kind: str = "screenshot") -> None:
@@ -105,7 +115,7 @@ class DesktopPasteDelivery:
             raise RuntimeError("전송할 화면이 없습니다.")
         from . import desktop_paste
         default_prompt = DEFAULT_PROMPTS.get(kind, DEFAULT_PROMPTS["screenshot"])
-        desktop_paste.paste_capture_and_ask(images, prompt.strip() or default_prompt)
+        desktop_paste.paste_capture_and_ask(images, prompt.strip() or default_prompt, thread_id or None)
 
     def close(self) -> None:
         pass
