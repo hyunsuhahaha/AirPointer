@@ -13,6 +13,7 @@ class AgentThread:
     id: str
     title: str
     status: str
+    project: str = ""
 
 
 class CodexBusyError(RuntimeError):
@@ -54,7 +55,7 @@ class CodexAppServerDelivery:
         return threads
 
     def send(self, thread_id: str, prompt: str, images: tuple[Path, ...],
-              kind: str = "screenshot") -> None:
+              kind: str = "screenshot", window_history: str = "") -> None:
         if not thread_id:
             raise RuntimeError("Select an Agent target first")
         body = {
@@ -64,11 +65,16 @@ class CodexAppServerDelivery:
             "seconds": 0,
             "frames": [_to_data_url(path) for path in images],
             "userPrompt": prompt,
+            "windowHistory": window_history,
         }
         self._request("POST", "/api/agent", body)
 
     def close(self) -> None:
         pass
+
+    def warmup(self) -> None:
+        """No-op: this backend talks to Codex over HTTP, so there's no
+        Electron accessibility tree to pre-warm (see DesktopPasteDelivery)."""
 
     def _request(self, method: str, path: str, body: dict | None = None) -> dict:
         url = f"{self.base_url}{path}"
@@ -100,6 +106,10 @@ class DesktopPasteDelivery:
 
     requires_thread_selection = True
     requires_explicit_target = False
+    # Lets the UI show conversations grouped like Codex Desktop's own
+    # sidebar (see ConversationPicker.set_grouped) -- CodexAppServerDelivery
+    # has no such concept, so its threads all carry project = "".
+    supports_project_groups = True
 
     def list_threads(self, cwd: str | None = None) -> list[AgentThread]:
         from . import desktop_paste
@@ -107,18 +117,47 @@ class DesktopPasteDelivery:
         if not found:
             return []
         window, _composer = found
-        return [AgentThread(title, title, "unknown") for title in desktop_paste.list_conversations(window)]
+        return [AgentThread(title, title, "unknown", project)
+                for project, titles in desktop_paste.list_conversations_by_project(window)
+                for title in titles]
 
     def send(self, thread_id: str, prompt: str, images: tuple[Path, ...],
-              kind: str = "screenshot") -> None:
+              kind: str = "screenshot", window_history: str = "") -> None:
         if not images:
             raise RuntimeError("전송할 화면이 없습니다.")
         from . import desktop_paste
         default_prompt = DEFAULT_PROMPTS.get(kind, DEFAULT_PROMPTS["screenshot"])
-        desktop_paste.paste_capture_and_ask(images, prompt.strip() or default_prompt, thread_id or None)
+        text = prompt.strip() or default_prompt
+        if window_history:
+            # This path never hits makePrompt() (see route.ts), so the
+            # activity log has to be folded in here -- kept to one prefixed
+            # block, same shape as the section makePrompt() adds server-side,
+            # so the two delivery paths read the same even though they're
+            # built in different places. window_history is really "recent
+            # activity" now (window switches AND clicks, see main.py's
+            # _activity_summary) -- kept the parameter name to avoid
+            # touching every call site for a label change.
+            text = f"최근 활동:\n{window_history}\n\n{text}"
+        desktop_paste.paste_capture_and_ask(images, text, thread_id or None)
 
     def close(self) -> None:
         pass
+
+    def warmup(self) -> None:
+        """Best-effort, read-only pre-warm of Codex Desktop's UI Automation
+        tree. Electron/Chromium builds its accessibility tree lazily on the
+        first query against a window, which can take upward of 20-30s
+        (measured); calling this once at startup, before any real send,
+        hides that cost instead of the user eating it on their first
+        capture. Touches no clipboard, keyboard, or focus -- safe to call
+        speculatively even if Codex Desktop isn't running yet (just finds
+        nothing and returns) or the caller races a real send (worst case,
+        both just do the same read-only lookup)."""
+        try:
+            from . import desktop_paste
+            desktop_paste.find_codex_window_and_composer()
+        except Exception:
+            pass
 
 
 def _read_json(error: urllib.error.HTTPError) -> dict:

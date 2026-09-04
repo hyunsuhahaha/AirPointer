@@ -20,11 +20,31 @@ def test_ui_fits_and_draws_pointer(tmp_path: Path) -> None:
         assert len(app.overlay.canvas.find_all()) >= 4
         frozen = tmp_path / "frame.png"
         frozen.write_bytes(b"frozen")
-        app._show_replay_prompt((frozen,), "")
+        app._show_capture_prompt("replay", (frozen,), "")
         app.root.update()
         assert app._prompt_window is not None and app._prompt_window.winfo_viewable()
         assert app._prompt_text.winfo_viewable()
-        app._cancel_replay_prompt()
+        app._cancel_capture_prompt()
+        assert not frozen.exists()
+    finally:
+        app._close()
+
+
+def test_screenshot_capture_also_opens_prompt(tmp_path: Path) -> None:
+    # Screenshot used to send instantly with a default question (mirroring
+    # the palm->fist gesture); the prompt window is now shared across every
+    # capture kind (see main.App._begin_capture_prompt), so a screenshot
+    # dispatch should show the same prompt UI replay already did, just
+    # labeled for the kind that triggered it.
+    app = App()
+    try:
+        frozen = tmp_path / "frame.png"
+        frozen.write_bytes(b"frozen")
+        app._show_capture_prompt("screenshot", (frozen,), "")
+        app.root.update()
+        assert app._prompt_window is not None and app._prompt_window.winfo_viewable()
+        assert app._prompt_header_var.get() == "SCREEN CAPTURED"
+        app._cancel_capture_prompt()
         assert not frozen.exists()
     finally:
         app._close()

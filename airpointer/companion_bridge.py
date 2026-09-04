@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlparse
 from PIL import Image
 
 from .command_gesture import CommandView
+from .hotkeys import parse_binding
 
 
 class CompanionState:
@@ -21,7 +22,13 @@ class CompanionState:
         self._tokens: set[str] = set()
         self._agent_thread_id = ""
         self._gestures = {"replay": True, "screenshot": True, "region": True}
+        # Empty until the browser sends bindings -- App falls back to the
+        # local Settings file's own hotkeys in that case (see main.py's
+        # _resolve_hotkey_bindings), so an un-configured companion never
+        # silently disables the feature.
+        self._hotkeys: dict[str, str] = {}
         self._running = False
+        self._mode: str | None = None
         self._camera_ready = False
         self._pose = "none"
         self._phase = "idle"
@@ -38,9 +45,10 @@ class CompanionState:
                 while len(self._tokens) > 32:
                     self._tokens.pop()
 
-    def set_running(self, running: bool) -> None:
+    def set_running(self, running: bool, mode: str | None = None) -> None:
         with self._lock:
             self._running = running
+            self._mode = mode if running else None
             if not running:
                 self._camera_ready = False
                 self._pose = "none"
@@ -50,7 +58,8 @@ class CompanionState:
                 self._preview = ""
 
     def configure(self, token: str, agent_thread_id: str,
-                  gestures: dict[str, bool] | None = None) -> bool:
+                  gestures: dict[str, bool] | None = None,
+                  hotkeys: dict[str, str] | None = None) -> bool:
         with self._lock:
             if not token or token not in self._tokens:
                 return False
@@ -59,6 +68,12 @@ class CompanionState:
                 for key in self._gestures:
                     if key in gestures:
                         self._gestures[key] = bool(gestures[key])
+            if hotkeys is not None:
+                # Invalid entries (typo'd modifier, no modifier at all) are
+                # dropped rather than rejecting the whole update -- one bad
+                # combo shouldn't take the other two actions' hotkeys down too.
+                self._hotkeys = {action: combo for action, combo in hotkeys.items()
+                                 if action in self._gestures and parse_binding(combo)}
             return True
 
     def agent_thread_id(self) -> str:
@@ -68,6 +83,10 @@ class CompanionState:
     def gesture_flags(self) -> tuple[bool, bool, bool]:
         with self._lock:
             return self._gestures["replay"], self._gestures["screenshot"], self._gestures["region"]
+
+    def hotkeys(self) -> dict[str, str]:
+        with self._lock:
+            return dict(self._hotkeys)
 
     def publish(self, frame, pose: str, command: CommandView) -> None:
         now = time.monotonic()
@@ -95,6 +114,7 @@ class CompanionState:
                 return None
             return {
                 "running": self._running,
+                "mode": self._mode,
                 "cameraReady": self._camera_ready,
                 "pose": self._pose,
                 "phase": self._phase,
@@ -152,10 +172,15 @@ class CompanionHttpServer:
                             key not in {"replay", "screenshot", "region"} or not isinstance(value, bool)
                             for key, value in raw_gestures.items()):
                         raise ValueError("gestures must contain booleans")
+                    raw_hotkeys = payload.get("hotkeys", {})
+                    if not isinstance(raw_hotkeys, dict) or any(
+                            not isinstance(key, str) or not isinstance(value, str) or len(value) > 64
+                            for key, value in raw_hotkeys.items()):
+                        raise ValueError("hotkeys must contain strings")
                 except (ValueError, json.JSONDecodeError):
                     self.send_error(400)
                     return
-                if not state_ref.configure(token, thread_id, raw_gestures):
+                if not state_ref.configure(token, thread_id, raw_gestures, raw_hotkeys):
                     self.send_error(403)
                     return
                 self.send_response(204)

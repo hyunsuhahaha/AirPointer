@@ -24,6 +24,7 @@ type PreparedCapture = {
   seconds: number;
   userPrompt: string;
   imagePaths: string[];
+  windowHistory: string;
   capsule?: { manifestPath: string; segmentCount: number; triggeredAt: number };
 };
 
@@ -83,7 +84,7 @@ async function prepareImageCapture(request: Request, captureDir: string): Promis
     await writeFile(path, parsed.data);
     return path;
   }));
-  return { threadId: body.threadId, mode: body.mode, kind: body.kind || "screenshot", seconds: body.seconds, userPrompt: body.userPrompt.trim(), imagePaths };
+  return { threadId: body.threadId, mode: body.mode, kind: body.kind || "screenshot", seconds: body.seconds, userPrompt: body.userPrompt.trim(), imagePaths, windowHistory: (body.windowHistory || "").trim() };
 }
 
 async function prepareCapsule(request: Request, captureDir: string): Promise<PreparedCapture> {
@@ -121,7 +122,7 @@ async function prepareCapsule(request: Request, captureDir: string): Promise<Pre
   const manifestPath = join(captureDir, "replay-manifest.json");
   const helperPath = join(process.cwd(), "scripts", "replay-frame.mjs");
   await writeFile(manifestPath, JSON.stringify({ version: 1, createdAt: Date.now(), startedAt: metadata.startedAt, triggeredAt: metadata.triggeredAt, seconds: metadata.seconds, overviewPaths: imagePaths, segments, frameQuery: { helperPath, commandExample: `node "${helperPath}" "${manifestPath}" -0.5`, description: "마지막 숫자는 제스처 기준 상대 초입니다. 음수는 이전 화면이며 여러 값을 한 번에 전달할 수 있습니다." } }, null, 2), "utf8");
-  return { threadId: metadata.threadId, mode: "replay", kind: "replay", seconds: metadata.seconds, userPrompt: metadata.userPrompt.trim(), imagePaths, capsule: { manifestPath, segmentCount: segments.length, triggeredAt: metadata.triggeredAt } };
+  return { threadId: metadata.threadId, mode: "replay", kind: "replay", seconds: metadata.seconds, userPrompt: metadata.userPrompt.trim(), imagePaths, windowHistory: "", capsule: { manifestPath, segmentCount: segments.length, triggeredAt: metadata.triggeredAt } };
 }
 
 // Single source of truth for prompt wording: both the browser (JSON or
@@ -137,11 +138,11 @@ async function prepareCapsule(request: Request, captureDir: string): Promise<Pre
 async function makePrompt(capture: PreparedCapture) {
   const template = await loadPromptTemplate();
   const userPrompt = capture.userPrompt || template.defaultRequestByKind[capture.kind];
-  if (!capture.capsule) return `${template.wrapperIntro}
-
-맥락: ${template.contextByKind[capture.kind]}
-
-사용자의 요청:
+  // One line, not a section -- this is a cheap "what app was the user on"
+  // signal (see airpointer/window_tracker.py), not meant to compete with
+  // the screen frames for the model's attention.
+  const windowHistoryLine = capture.windowHistory ? `${template.windowHistoryLabel} ${capture.windowHistory}\n\n` : "";
+  if (!capture.capsule) return `${windowHistoryLine}사용자의 요청:
 ${userPrompt}
 
 ${template.wrapperOutro}`;
@@ -161,7 +162,7 @@ Replay Capsule manifest: ${capture.capsule.manifestPath}
 마지막 숫자는 제스처 완료 시점 기준 상대 초입니다. 예를 들어 -0.5는 0.5초 전입니다. 위 요청에 필요한 장면이 개요에 없다면 인접 시점을 추가 조회한 뒤 답하세요. 캡슐은 60분 후 자동 삭제됩니다.`;
 }
 
-type AgentPayload = { threadId: string; mode: "current" | "replay"; kind?: CaptureKind; seconds: number; frames: string[]; userPrompt: string };
+type AgentPayload = { threadId: string; mode: "current" | "replay"; kind?: CaptureKind; seconds: number; frames: string[]; userPrompt: string; windowHistory?: string };
 type CapsuleMetadata = { threadId: string; mode: "replay"; seconds: number; userPrompt: string; startedAt: number; triggeredAt: number; segments: Array<{ startedAt: number; durationMs: number; mimeType: string }> };
 
 function isPayload(value: unknown): value is AgentPayload {
@@ -173,6 +174,7 @@ function isPayload(value: unknown): value is AgentPayload {
   return typeof body.threadId === "string" && body.threadId.length > 0 && isOptionalPrompt(body.userPrompt)
     && (body.mode === "current" || body.mode === "replay")
     && (body.kind === undefined || ["screenshot", "region", "replay"].includes(body.kind as string))
+    && (body.windowHistory === undefined || isOptionalPrompt(body.windowHistory))
     && typeof body.seconds === "number" && Number.isFinite(body.seconds) && Array.isArray(body.frames) && body.frames.length > 0 && body.frames.every((frame) => typeof frame === "string" && /^data:image\/(jpeg|png);base64,/.test(frame));
 }
 

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ArrowClockwise, ArrowCounterClockwise, Camera, Check, CircleNotch, Desktop, Gear, HandPalm, LockKey, PaperPlaneTilt, Play, Stop, WarningCircle, X } from "@phosphor-icons/react";
 import { useCompanionGesture } from "@/hooks/use-companion-gesture";
+import type { HotkeyBindings } from "@/hooks/use-companion-gesture";
 import { BrowserReplayBuffer, frameFromVideo } from "@/lib/replay-buffer";
 import type { ReplayCapsule } from "@/lib/replay-buffer";
 import type { PromptTemplate } from "@/lib/prompt-template";
@@ -62,7 +63,17 @@ export function ReplayWorkspace() {
   const [message, setMessage] = useState("화면 공유를 시작하면 최근 장면이 이 기기에만 쌓입니다.");
   const [elapsed, setElapsed] = useState(0);
   const [gestureEnabled, setGestureEnabled] = useState(false);
+  // Chosen before AirPointer is turned on, not a toggle you flip while it's
+  // running -- picks which airpointer:// command changeGestureEnabled sends
+  // (see protocol.py's VALID_COMMANDS: "start" vs "start_hotkey").
+  const [launchMode, setLaunchMode] = useState<"gesture" | "hotkey">("gesture");
   const [gestureActions, setGestureActions] = useState({ replay: true, screenshot: true, region: true });
+  // Native default (airpointer/hotkeys.py's DEFAULT_BINDINGS) -- kept in
+  // sync by convention, not by import, since the two run in different
+  // languages/runtimes. Whatever's set here is what actually gets registered
+  // on the native side: AirPointer always defers to the browser's config
+  // once it's connected (see main.py's _resolve_hotkey_bindings).
+  const [hotkeyBindings, setHotkeyBindings] = useState<HotkeyBindings>({ screenshot: "ctrl+alt+s", replay: "ctrl+alt+d", region: "ctrl+alt+r" });
   const [agentThreads, setAgentThreads] = useState<AgentThread[]>([]);
   const [agentThreadId, setAgentThreadId] = useState("");
   const [agentState, setAgentState] = useState<AgentState>("loading");
@@ -358,18 +369,23 @@ export function ReplayWorkspace() {
     // Calling this later from the asynchronous camera-ready callback is blocked by Chrome.
     const token = enabled ? window.crypto.randomUUID() : companionToken;
     setCompanionLaunchIssue("");
-    const outcome = launchAirPointer(enabled ? "start" : "quit", token);
+    const outcome = launchAirPointer(enabled ? (launchMode === "hotkey" ? "start_hotkey" : "start") : "quit", token);
     if (enabled && outcome) void outcome.then((issue) => setCompanionLaunchIssue(issue || ""));
     setCompanionToken(enabled ? token : "");
     setGestureEnabled(enabled);
     setCompanionMessage(enabled ? "AirPointer를 시작하고 있습니다." : "");
-  }, [companionToken]);
+  }, [companionToken, launchMode]);
 
   const setGestureAction = useCallback((action: GestureAction, enabled: boolean) => {
     setGestureActions((current) => ({ ...current, [action]: enabled }));
   }, []);
 
-  const { pose, progress: gestureProgress, preview: companionPreview, selection: gestureSelection, error: gestureError, ready: companionReady, connected: companionConnected } = useCompanionGesture({ enabled: gestureEnabled, token: companionToken, agentThreadId, gestures: gestureActions });
+  const setHotkeyBinding = useCallback((action: GestureAction, combo: string) => {
+    setHotkeyBindings((current) => ({ ...current, [action]: combo }));
+  }, []);
+
+  const { pose, progress: gestureProgress, preview: companionPreview, selection: gestureSelection, error: gestureError, ready: companionReady, connected: companionConnected, activeMode } = useCompanionGesture({ enabled: gestureEnabled, token: companionToken, agentThreadId, gestures: gestureActions, hotkeys: hotkeyBindings });
+  const hotkeyMode = activeMode ? activeMode === "hotkey" : launchMode === "hotkey";
 
   // Reset the boot-progress estimate the moment the switch turns off, during
   // render rather than as a setState call inside the effect below.
@@ -429,6 +445,15 @@ export function ReplayWorkspace() {
     return null;
   }, [companionLaunchIssue, gestureError]);
   const agentStateLabel = useMemo(() => ({ loading: "연결 중", idle: "AGENT 대기", preparing: "맥락 고정 중", drafting: "프롬프트 대기", sending: "AGENT 전송 중", queued: "AGENT 전송 대기", done: "AGENT 전송 완료", error: "AGENT 확인 필요" })[agentState], [agentState]);
+  // Hotkey mode never starts the camera, so there's no "카메라 준비 중" stage --
+  // once the native process answers at all, it's ready.
+  const dockHudLabel = !gestureEnabled ? "동작 대기"
+    : !companionConnected ? "AirPointer 연결 대기 중"
+    : hotkeyMode ? (companionReady ? "단축키 대기 중" : "AirPointer 연결 대기 중")
+    : !companionReady ? "카메라 준비 중"
+    : pose === "palm" ? "손바닥 인식" : pose === "fist" ? "주먹 인식" : pose === "point" ? "검지 인식" : pose === "none" ? "손 찾는 중" : "동작 대기";
+  const dockLoadingLabel = hotkeyMode ? "AirPointer 시작 중" : companionConnected ? "카메라 준비 중" : "AirPointer 연결 중";
+  const dockBadgeLabel = gestureEnabled && companionReady ? (hotkeyMode ? "HOTKEY · EXE" : "CAM 01 · EXE") : "EXE 연결 안 됨";
 
   return (
     <main className={styles.shell}>
@@ -475,13 +500,31 @@ export function ReplayWorkspace() {
 
         <aside className={styles.commandDock}>
           <div className={styles.eyebrowRow}><p className={styles.eyebrow}>REPLAY TO AGENT</p><button type="button" className={styles.settingsButton} onClick={() => void openPromptSettings()} aria-label="프롬프트 설정"><Gear size={15} /></button></div>
-          <div className={`${styles.cameraPanel} ${styles.commandCamera}`} data-connected={gestureEnabled && companionReady}>{companionPreview && <img src={companionPreview} alt="AirPointer 카메라 미리보기" />}{gestureEnabled && !companionReady && <div className={styles.cameraLoading} role="status">{companionStatus ? <><WarningCircle size={26} /><p>{companionStatus.text}</p>{companionStatus.showDownload && <a href={AIRPOINTER_DOWNLOAD_URL}>AirPointer 다운로드</a>}</> : <><CircleNotch className={styles.spin} size={26} /><p>{companionConnected ? "카메라 준비 중" : "AirPointer 연결 중"}… {bootProgress}%</p><div className={styles.cameraLoadingBar} aria-hidden="true"><span style={{ width: `${bootProgress}%` }} /></div></>}</div>}<div className={styles.cameraHud}><span><HandPalm size={16} /> {!gestureEnabled ? "동작 대기" : !companionConnected ? "AirPointer 연결 대기 중" : !companionReady ? "카메라 준비 중" : pose === "palm" ? "손바닥 인식" : pose === "fist" ? "주먹 인식" : pose === "point" ? "검지 인식" : pose === "none" ? "손 찾는 중" : "동작 대기"}</span><span>{gestureEnabled && companionReady ? "CAM 01 · EXE" : "EXE 연결 안 됨"}</span></div>{gestureEnabled && gestureProgress.phase !== "idle" && gestureSelection.phase === "idle" && <div className={styles.gestureTimer} data-active role="progressbar" aria-label="제스처 유지 시간" aria-valuemin={0} aria-valuemax={1} aria-valuenow={gestureProgress.value}><div className={styles.gestureTimerRing} style={{ background: `conic-gradient(var(--accent) ${gestureProgress.value * 360}deg, rgba(255,255,255,.14) 0deg)` }}><span><b>{Math.round(gestureProgress.value * 100)}</b></span></div><p>손바닥 2초</p></div>}</div>
-          <div className={styles.gestureControls}><label className={styles.switch}><input type="checkbox" checked={gestureEnabled} onChange={(event) => changeGestureEnabled(event.target.checked)} /><span /><b>{gestureEnabled ? "제스처 + AirPointer 켜짐" : "제스처 + AirPointer 켜기"}</b></label><a className={styles.downloadLink} href={AIRPOINTER_DOWNLOAD_URL}>AirPointer 처음이신가요? 다운로드</a></div>
-          <div className={styles.gestureActions} aria-label="제스처별 설정">
+          <div className={`${styles.cameraPanel} ${styles.commandCamera}`} data-connected={gestureEnabled && companionReady}>
+            {!hotkeyMode && companionPreview && <img src={companionPreview} alt="AirPointer 카메라 미리보기" />}
+            {gestureEnabled && !companionReady && <div className={styles.cameraLoading} role="status">{companionStatus ? <><WarningCircle size={26} /><p>{companionStatus.text}</p>{companionStatus.showDownload && <a href={AIRPOINTER_DOWNLOAD_URL}>AirPointer 다운로드</a>}</> : <><CircleNotch className={styles.spin} size={26} /><p>{dockLoadingLabel}… {bootProgress}%</p><div className={styles.cameraLoadingBar} aria-hidden="true"><span style={{ width: `${bootProgress}%` }} /></div></>}</div>}
+            <div className={styles.cameraHud}><span><HandPalm size={16} /> {dockHudLabel}</span><span>{dockBadgeLabel}</span></div>
+            {!hotkeyMode && gestureEnabled && gestureProgress.phase !== "idle" && gestureSelection.phase === "idle" && <div className={styles.gestureTimer} data-active role="progressbar" aria-label="제스처 유지 시간" aria-valuemin={0} aria-valuemax={1} aria-valuenow={gestureProgress.value}><div className={styles.gestureTimerRing} style={{ background: `conic-gradient(var(--accent) ${gestureProgress.value * 360}deg, rgba(255,255,255,.14) 0deg)` }}><span><b>{Math.round(gestureProgress.value * 100)}</b></span></div><p>손바닥 2초</p></div>}
+          </div>
+          <p className={styles.settingsGroupLabel}>시작 모드 · AirPointer를 켜기 전에 선택하세요</p>
+          <div className={styles.gestureActions} aria-label="시작 모드 선택">
+            <LaunchModeOption label="제스처 모드" detail="카메라로 손동작 인식" active={launchMode === "gesture"} disabled={gestureEnabled} onSelect={() => setLaunchMode("gesture")} />
+            <LaunchModeOption label="단축키 모드" detail="카메라 없이 키보드로" active={launchMode === "hotkey"} disabled={gestureEnabled} onSelect={() => setLaunchMode("hotkey")} />
+          </div>
+          <div className={styles.gestureControls}><label className={styles.switch}><input type="checkbox" checked={gestureEnabled} onChange={(event) => changeGestureEnabled(event.target.checked)} /><span /><b>{launchMode === "hotkey" ? "단축키" : "제스처"} + AirPointer {gestureEnabled ? "켜짐" : "켜기"}</b></label><a className={styles.downloadLink} href={AIRPOINTER_DOWNLOAD_URL}>AirPointer 처음이신가요? 다운로드</a></div>
+          {launchMode === "gesture" && <div className={styles.gestureActions} aria-label="제스처별 설정">
             <GestureActionToggle label="손바닥 2초" detail="15초 REPLAY" checked={gestureActions.replay} disabled={!gestureEnabled} onChange={(value) => setGestureAction("replay", value)} />
             <GestureActionToggle label="손바닥 → 주먹" detail="현재 화면" checked={gestureActions.screenshot} disabled={!gestureEnabled} onChange={(value) => setGestureAction("screenshot", value)} />
             <GestureActionToggle label="주먹 → 손바닥" detail="영역 선택" checked={gestureActions.region} disabled={!gestureEnabled} onChange={(value) => setGestureAction("region", value)} />
-          </div>
+          </div>}
+          {launchMode === "hotkey" && <>
+            <p className={styles.settingsGroupLabel}>단축키 · 꺼진 상태에서도 미리 정할 수 있습니다</p>
+            <div className={styles.gestureActions} aria-label="단축키 설정">
+              <HotkeyRecorder label="현재 화면" combo={hotkeyBindings.screenshot} disabled={false} onChange={(value) => setHotkeyBinding("screenshot", value)} />
+              <HotkeyRecorder label="최근 리플레이" combo={hotkeyBindings.replay} disabled={false} onChange={(value) => setHotkeyBinding("replay", value)} />
+              <HotkeyRecorder label="영역 선택" combo={hotkeyBindings.region} disabled={false} onChange={(value) => setHotkeyBinding("region", value)} />
+            </div>
+          </>}
           {(companionStatus || (!companionReady && companionMessage)) && <small className={styles.gestureError}>{companionStatus ? companionStatus.text : companionMessage}{companionStatus?.showDownload && <> <a href={AIRPOINTER_DOWNLOAD_URL}>AirPointer 다운로드</a></>}</small>}
           <div className={styles.rule} />
           <label className={styles.field}><span>로컬 버퍼</span><select value={retention} onChange={(event) => setRetention(Number(event.target.value))} disabled={Boolean(stream)}><option value={1}>최근 1분</option><option value={3}>최근 3분</option><option value={5}>최근 5분</option></select></label>
@@ -546,10 +589,8 @@ export function ReplayWorkspace() {
             <p className={styles.settingsHint}>매번 직접 입력하는 질문(요청) 내용은 여기서 바꿀 수 없습니다. 그 질문을 감싸는 문구만 편집합니다.</p>
             {promptSettingsState === "loading" && <div className={styles.settingsLoading}><CircleNotch className={styles.spin} size={20} /> 불러오는 중…</div>}
             {promptTemplate && promptSettingsState !== "loading" && <div className={styles.settingsForm}>
-              <label className={styles.settingsField}><span>도입 문구</span><input type="text" value={promptTemplate.wrapperIntro} onChange={(event) => setPromptTemplate({ ...promptTemplate, wrapperIntro: event.target.value })} /></label>
               <label className={styles.settingsField}><span>마무리 문구</span><input type="text" value={promptTemplate.wrapperOutro} onChange={(event) => setPromptTemplate({ ...promptTemplate, wrapperOutro: event.target.value })} /></label>
-              <p className={styles.settingsGroupLabel}>상황별 맥락 설명</p>
-              {(["screenshot", "region", "replay"] as const).map((kind) => <label className={styles.settingsField} key={`context-${kind}`}><span>{{ screenshot: "현재 화면", region: "선택 영역", replay: "최근 화면 기록" }[kind]}</span><input type="text" value={promptTemplate.contextByKind[kind]} onChange={(event) => setPromptTemplate({ ...promptTemplate, contextByKind: { ...promptTemplate.contextByKind, [kind]: event.target.value } })} /></label>)}
+              <label className={styles.settingsField}><span>최근 활성 창 이력 라벨 · AirPointer.exe 캡처에만 붙음</span><input type="text" value={promptTemplate.windowHistoryLabel} onChange={(event) => setPromptTemplate({ ...promptTemplate, windowHistoryLabel: event.target.value })} /></label>
               <p className={styles.settingsGroupLabel}>질문을 안 남겼을 때 기본 질문</p>
               {(["screenshot", "region", "replay"] as const).map((kind) => <label className={styles.settingsField} key={`default-${kind}`}><span>{{ screenshot: "현재 화면", region: "선택 영역", replay: "최근 화면 기록" }[kind]}</span><input type="text" value={promptTemplate.defaultRequestByKind[kind]} onChange={(event) => setPromptTemplate({ ...promptTemplate, defaultRequestByKind: { ...promptTemplate.defaultRequestByKind, [kind]: event.target.value } })} /></label>)}
               <p className={styles.settingsGroupLabel}>Replay Capsule 전용 (손바닥 2초 홀드로 보낼 때)</p>
@@ -576,19 +617,59 @@ function GestureActionToggle({ label, detail, checked, disabled, onChange }: { l
   return <label className={styles.gestureAction} data-active={checked && !disabled}><span><b>{label}</b><small>{detail}</small></span><input type="checkbox" checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} /><i>{checked ? "ON" : "OFF"}</i></label>;
 }
 
+function LaunchModeOption({ label, detail, active, disabled, onSelect }: { label: string; detail: string; active: boolean; disabled: boolean; onSelect: () => void }) {
+  return <label className={styles.gestureAction} data-active={active}><span><b>{label}</b><small>{detail}</small></span><input type="radio" name="airpointer-launch-mode" checked={active} disabled={disabled} onChange={onSelect} /><i>{active ? "●" : "○"}</i></label>;
+}
+
+const HOTKEY_MODIFIER_KEYS = new Set(["Control", "Alt", "Shift", "Meta"]);
+
+// A recorded combo is sent to AirPointer verbatim as e.g. "ctrl+alt+s" and
+// parsed by airpointer/hotkeys.py's parse_binding -- keep the vocabulary
+// (modifier names, and JS's own event.key spelling for named keys like
+// "ArrowUp"/"Escape") in sync with that function if either side changes.
+function HotkeyRecorder({ label, combo, disabled, onChange }: { label: string; combo: string; disabled: boolean; onChange: (combo: string) => void }) {
+  const [recording, setRecording] = useState(false);
+
+  const onKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (!recording) return;
+    event.preventDefault();
+    if (event.key === "Escape") { setRecording(false); return; }
+    if (HOTKEY_MODIFIER_KEYS.has(event.key)) return;
+    const parts: string[] = [];
+    if (event.ctrlKey) parts.push("ctrl");
+    if (event.altKey) parts.push("alt");
+    if (event.shiftKey) parts.push("shift");
+    if (event.metaKey) parts.push("win");
+    if (!parts.length) return; // a bare key would register as a global hotkey -- reject, keep waiting
+    parts.push(event.key === " " ? "space" : event.key.toLowerCase());
+    onChange(parts.join("+"));
+    setRecording(false);
+  };
+
+  return (
+    <div className={styles.gestureAction} data-active={!disabled}>
+      <span><b>{label}</b><small>{combo.toUpperCase()}</small></span>
+      <button type="button" disabled={disabled} onClick={() => setRecording(true)}
+              onKeyDown={onKeyDown} onBlur={() => setRecording(false)}>
+        {recording ? "키 입력 대기…" : "변경"}
+      </button>
+    </div>
+  );
+}
+
 const isLocalCompanion = () => typeof window !== "undefined" && ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
 
 // Local dev spawns AirPointer.exe directly and can tell us exactly why that
 // failed (missing file vs. some other spawn error); returns undefined when
 // there's nothing more specific to say (production, or the "quit" command).
-function launchAirPointer(command: "start" | "quit", token: string): Promise<"missing" | "error" | undefined> | undefined {
+function launchAirPointer(command: "start" | "start_hotkey" | "quit", token: string): Promise<"missing" | "error" | undefined> | undefined {
   if (isLocalCompanion()) {
     const request = fetch("/api/companion", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ command, token }),
     });
-    if (command !== "start") { void request; return undefined; }
+    if (command === "quit") { void request; return undefined; }
     return request
       .then(async (response) => {
         if (response.ok) return undefined;

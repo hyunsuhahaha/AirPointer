@@ -4,9 +4,11 @@ import { useEffect, useState } from "react";
 import type { GesturePose, GestureProgress, RegionSelectionView } from "@/lib/gesture";
 
 type GestureActions = { replay: boolean; screenshot: boolean; region: boolean };
-type Options = { enabled: boolean; token: string; agentThreadId: string; gestures: GestureActions };
+export type HotkeyBindings = { replay: string; screenshot: string; region: string };
+type Options = { enabled: boolean; token: string; agentThreadId: string; gestures: GestureActions; hotkeys: HotkeyBindings };
 type Snapshot = {
   running: boolean;
+  mode: "gesture" | "hotkey" | null;
   cameraReady: boolean;
   pose: GesturePose;
   phase: "idle" | "arming" | "armed" | "cooldown";
@@ -19,12 +21,13 @@ type Snapshot = {
 const IDLE_PROGRESS: GestureProgress = { phase: "idle", value: 0, command: null };
 const IDLE_SELECTION: RegionSelectionView = { phase: "idle", rect: null, pointer: null, progress: 0, captured: null };
 
-export function useCompanionGesture({ enabled, token, agentThreadId, gestures }: Options) {
+export function useCompanionGesture({ enabled, token, agentThreadId, gestures, hotkeys }: Options) {
   const [pose, setPose] = useState<GesturePose>("none");
   const [progress, setProgress] = useState<GestureProgress>(IDLE_PROGRESS);
   const [preview, setPreview] = useState("");
   const [error, setError] = useState("");
   const [readyToken, setReadyToken] = useState("");
+  const [activeMode, setActiveMode] = useState<"gesture" | "hotkey" | null>(null);
   // Distinct from `ready` (companion running AND camera warmed up): this only
   // tracks whether the companion's status server has ever answered at all,
   // so the UI can tell "AirPointer isn't running" apart from "it's running
@@ -64,17 +67,21 @@ export function useCompanionGesture({ enabled, token, agentThreadId, gestures }:
           const configResponse = await fetch(configUrl, {
             method: localProxy ? "PUT" : "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ agentThreadId, gestures }),
+            body: JSON.stringify({ agentThreadId, gestures, hotkeys }),
           });
           if (!configResponse.ok) throw new Error("companion configuration failed");
           syncedAgentThreadId = agentThreadId;
         }
         if (cancelled) return;
-        firstFailureAt = 0; setError(""); setConnected(true); setReadyToken(state.running && state.cameraReady ? token : ""); setPose(state.pose); setPreview(state.preview);
+        // Hotkey mode never touches the camera, so cameraReady never turns
+        // true there -- readiness in that mode is just "the process says
+        // it's running," same as gesture mode is once the camera warms up.
+        const ready = state.running && (state.mode === "hotkey" || state.cameraReady);
+        firstFailureAt = 0; setError(""); setConnected(true); setReadyToken(ready ? token : ""); setActiveMode(state.mode); setPose(state.pose); setPreview(state.preview);
         const palmActive = state.route === "replay" && (state.phase === "arming" || state.phase === "armed");
         setProgress(palmActive ? { phase: "holding", value: state.progress, command: null } : IDLE_PROGRESS);
       } catch {
-        setReadyToken("");
+        setReadyToken(""); setActiveMode(null);
         if (!firstFailureAt) firstFailureAt = Date.now();
         // A freshly built/downloaded AirPointer.exe is a PyInstaller onefile
         // bundle: Windows extracts it to a temp dir AND, being an unrecognized
@@ -90,7 +97,7 @@ export function useCompanionGesture({ enabled, token, agentThreadId, gestures }:
     };
     void poll();
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [agentThreadId, enabled, gestures, token]);
+  }, [agentThreadId, enabled, gestures, hotkeys, token]);
 
   return {
     pose: enabled ? pose : "none" as GesturePose,
@@ -100,5 +107,6 @@ export function useCompanionGesture({ enabled, token, agentThreadId, gestures }:
     error: enabled ? error : "",
     ready: enabled && readyToken === token,
     connected: enabled && connected,
+    activeMode: enabled ? activeMode : null,
   };
 }

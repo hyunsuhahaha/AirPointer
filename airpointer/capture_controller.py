@@ -24,10 +24,12 @@ class DeliveryStatus:
 class CaptureController:
     def __init__(self, screen_buffer: ScreenReplayBuffer,
                  codex: CodexAppServerDelivery | DesktopPasteDelivery,
-                 replay_seconds: Callable[[], int]) -> None:
+                 replay_seconds: Callable[[], int],
+                 window_history: Callable[[], str] | None = None) -> None:
         self.buffer = screen_buffer
         self.codex = codex
         self.replay_seconds = replay_seconds
+        self.window_history = window_history or (lambda: "")
         self._queue: queue.Queue[
             tuple[CaptureKind, str, Region | None, tuple[Path, ...] | None, str | None] | None
         ] = queue.Queue(maxsize=2)
@@ -119,7 +121,8 @@ class CaptureController:
         self._set_status("SENDING", f"{len(paths)} image(s)")
         while not self._stop.is_set():
             try:
-                self.codex.send(thread_id, (user_prompt or "").strip(), paths, kind)
+                self.codex.send(thread_id, (user_prompt or "").strip(), paths, kind,
+                                 window_history=self.window_history())
             except CodexBusyError as error:
                 self._set_status("QUEUED", str(error))
                 self._stop.wait(2.0)

@@ -63,10 +63,49 @@ def set_clipboard_text(text: str) -> None:
         win32clipboard.CloseClipboard()
 
 
-def find_codex_window_and_composer():
+_cache: tuple[int, object, object] | None = None  # (hwnd, window, composer)
+
+
+def _composer_alive(composer) -> bool:
+    """Cheap, read-only liveness check for a cached composer element --
+    a destroyed UIA element raises on property access instead of just
+    returning a stale value."""
+    try:
+        composer.element_info.control_type
+        return True
+    except Exception:
+        return False
+
+
+def _find_composer_in_window(window):
+    """Re-locates the composer Edit control inside an already-known window
+    (e.g. after switching conversations) without re-enumerating every
+    top-level window on the desktop."""
+    try:
+        edits = window.descendants(control_type="Edit")
+    except Exception:
+        return None
+    return edits[0] if edits else None
+
+
+def find_codex_window_and_composer(use_cache: bool = True):
     """Returns (window, composer) for the first Codex Desktop window that
     actually has a locatable composer -- never just the first window whose
-    process name matches, per the "never guess" review note."""
+    process name matches, per the "never guess" review note.
+
+    Electron/Chromium apps build their UI Automation tree lazily, so the
+    first-ever query against a given Codex Desktop window can take upward
+    of 20-30s (measured); a full `Desktop(backend="uia").windows()` scan
+    even once warm still costs a few hundred ms. Both are avoided on a
+    cache hit -- see `warmup()` in codex_delivery.py for hiding the first
+    cost before the user ever sends anything, and `_composer_alive` for
+    why a cache hit is safe to trust without re-scanning."""
+    global _cache
+    if use_cache and _cache is not None:
+        hwnd, cached_window, cached_composer = _cache
+        if win32gui.IsWindow(hwnd) and _composer_alive(cached_composer):
+            return cached_window, cached_composer
+        _cache = None
     desktop = Desktop(backend="uia")
     for window in desktop.windows():
         try:
@@ -74,29 +113,29 @@ def find_codex_window_and_composer():
                 continue
         except Exception:
             continue
-        try:
-            edits = window.descendants(control_type="Edit")
-        except Exception:
-            continue
-        if edits:
-            return window, edits[0]
+        composer = _find_composer_in_window(window)
+        if composer is not None:
+            _cache = (window.handle, window, composer)
+            return window, composer
     return None
 
 
 def _sidebar_conversation_buttons(window):
-    """Yields (title, button) for each sidebar conversation entry.
-    Identified structurally -- immediately followed by "채팅 고정" then
-    "채팅 보관" buttons -- rather than by screen position (the window can
-    be anywhere) or by name alone (the main panel header repeats the
-    active conversation's title as its own, separate button)."""
+    """Yields (title, button) for each sidebar conversation entry, pinned
+    or not. Identified structurally -- immediately followed by a "채팅 고정"
+    button -- rather than by screen position (the window can be anywhere)
+    or by name alone (the main panel header repeats the active
+    conversation's title as its own, separate button). Only "채팅 고정" is
+    required, not also "채팅 보관" after it: already-pinned rows and
+    workspace-linked tasks (see _project_groups) don't get an archive
+    button, so requiring both used to silently skip them."""
     try:
         buttons = window.descendants(control_type="Button")
     except Exception:
         return
-    for index in range(len(buttons) - 2):
+    for index in range(len(buttons) - 1):
         try:
-            if (buttons[index + 1].element_info.name == "채팅 고정"
-                    and buttons[index + 2].element_info.name == "채팅 보관"):
+            if buttons[index + 1].element_info.name == "채팅 고정":
                 yield buttons[index].element_info.name, buttons[index]
         except Exception:
             continue
@@ -104,6 +143,49 @@ def _sidebar_conversation_buttons(window):
 
 def list_conversations(window) -> list[str]:
     return [title for title, _ in _sidebar_conversation_buttons(window)]
+
+
+_LOAD_MORE = "더 보기"
+
+
+def _project_groups(window):
+    """Yields (project_name, [conversation titles]) for each project or
+    CLI-connected workspace section in the sidebar, in sidebar order.
+    Identified structurally: Codex Desktop wraps each one in a Group whose
+    name is the project/workspace name, containing a List named
+    "<name>에 있는 예약된 작업" that holds its conversations -- the same
+    pattern for a cloud "프로젝트" and a "코드 kali-vm"-style workspace, so
+    no need to special-case which section of the sidebar it's under."""
+    try:
+        groups = window.descendants(control_type="Group")
+    except Exception:
+        return
+    for group in groups:
+        try:
+            name = group.element_info.name
+            if not name:
+                continue
+            target = f"{name}에 있는 예약된 작업"
+            lists = group.descendants(control_type="List")
+            matching = next((lst for lst in lists if lst.element_info.name == target), None)
+            if matching is None:
+                continue
+            titles = [item.element_info.name for item in matching.descendants(control_type="ListItem")
+                     if item.element_info.name and item.element_info.name != _LOAD_MORE]
+        except Exception:
+            continue
+        if titles:
+            yield name, titles
+
+
+def list_conversations_by_project(window) -> list[tuple[str, list[str]]]:
+    """Groups the sidebar's conversations the way Codex Desktop's own UI
+    does: one bucket per project/workspace (in sidebar order), plus a ""
+    bucket for pinned/recent conversations that aren't inside any project."""
+    grouped = list(_project_groups(window))
+    grouped_titles = {title for _, titles in grouped for title in titles}
+    ungrouped = [title for title in list_conversations(window) if title not in grouped_titles]
+    return grouped + ([("", ungrouped)] if ungrouped else [])
 
 
 def select_conversation(window, title: str) -> bool:
@@ -155,7 +237,7 @@ def wait_for_focus(window, composer, timeout: float = 1.0) -> bool:
     while time.monotonic() < deadline:
         if verify_focus(window, composer):
             return True
-        time.sleep(0.1)
+        time.sleep(0.05)
     return False
 
 
@@ -176,7 +258,7 @@ def wait_for_attachment_count(window, expected_count: int, timeout: float = 3.0)
     while time.monotonic() < deadline:
         if count_attachments(window) >= expected_count:
             return True
-        time.sleep(0.2)
+        time.sleep(0.05)
     return False
 
 
@@ -240,9 +322,18 @@ def paste_capture_and_ask(image_paths: Sequence[Path], prompt: str,
     try:
         if conversation_title and select_conversation(window, conversation_title):
             time.sleep(0.3)  # let the composer/content repaint after switching
-            refreshed = find_codex_window_and_composer()
-            if refreshed:
-                window, composer = refreshed
+            # Re-locate the composer within the same window instead of
+            # re-scanning the whole desktop -- the window itself didn't
+            # change, only its content did.
+            global _cache
+            refreshed_composer = _find_composer_in_window(window)
+            if refreshed_composer is not None:
+                composer = refreshed_composer
+                _cache = (window.handle, window, composer)
+            else:
+                refreshed = find_codex_window_and_composer(use_cache=False)
+                if refreshed:
+                    window, composer = refreshed
         paste_images(window, composer, image_paths)
         paste_prompt(window, composer, prompt)
         submit(window, composer)

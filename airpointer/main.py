@@ -10,6 +10,7 @@ from PIL import Image, ImageTk
 
 from .camera import CameraLoop
 from .capture_controller import CaptureController
+from .click_tracker import ClickTracker
 from .codex_delivery import AgentThread, CodexAppServerDelivery, DesktopPasteDelivery
 from .companion_bridge import CompanionState
 from .command_gesture import CommandEvent, CommandView
@@ -17,8 +18,10 @@ from .conversation_picker import ConversationPicker
 from .overlay import Overlay
 from .region_selection import RegionSelector, SelectionView
 from .screen_buffer import ScreenReplayBuffer, cleanup_paths
+from .hotkeys import HotkeyListener
 from .settings import Settings
 from .win32_focus import force_foreground
+from .window_tracker import WindowTracker
 
 # Fallback used only for a delivery backend with requires_thread_selection
 # = False (none currently) -- there's no real thread id to store in that
@@ -45,20 +48,31 @@ class App:
         self._pose = "none"
         self.companion_state = companion_state
         self._last_mode = ""
+        self._active_mode: str | None = None
         self.codex = DesktopPasteDelivery()
+        # Hides Codex Desktop's first-query UI Automation cold-start cost
+        # (20-30s, measured) behind app startup instead of the user's first
+        # real send -- see DesktopPasteDelivery.warmup().
+        threading.Thread(target=self.codex.warmup, name="airpointer-codex-warmup", daemon=True).start()
         initial_target = self.settings.agent_thread_id if self.codex.requires_thread_selection else DESKTOP_PASTE_TARGET
         self._agent_thread_id = initial_target or self._fallback_target()
         self._agent_labels: dict[str, str] = {}
         self._refreshing_agents = False
         self._prompt_window: tk.Toplevel | None = None
+        self._prompt_kind: str = "replay"
         self._prompt_paths: tuple[Path, ...] = ()
         self._prompt_agent_ids: dict[str, str] = {}
         self.screen_buffer = ScreenReplayBuffer(
             lambda: self.settings.replay_minutes * 60,
             lambda: self.settings.capture_fps,
         )
+        self.window_tracker = WindowTracker()
+        self.click_tracker = ClickTracker()
         self.capture = CaptureController(
-            self.screen_buffer, self.codex, lambda: self.settings.replay_seconds)
+            self.screen_buffer, self.codex, lambda: self.settings.replay_seconds,
+            self._activity_summary)
+        self.hotkey_listener = HotkeyListener(self._on_hotkey_action, self._resolve_hotkey_bindings)
+        self._last_hotkey_hint = ""
         self._region_selector = RegionSelector()
         self._region_selecting = threading.Event()
         self.camera = CameraLoop(
@@ -82,6 +96,7 @@ class App:
         self.root.protocol("WM_DELETE_WINDOW", self._close)
         self.root.report_callback_exception = self._on_callback_exception
         self.root.after(16, self._redraw)
+        self.root.after(1000, self._refresh_hotkey_hint)
         if start_hidden:
             self.root.withdraw()
 
@@ -178,6 +193,24 @@ class App:
         self._combo_setting(frame, "Capture rate", (5, 10, 15), self.settings.capture_fps,
                             lambda value: setattr(self.settings, "capture_fps", int(value)), "FPS")
 
+        ttk.Label(frame, text="START MODE", foreground="#44e5ff",
+                  font=("Consolas", 10, "bold")).pack(anchor="w", pady=(14, 4))
+        mode_var = tk.StringVar(value=self.settings.launch_mode)
+        mode_row = ttk.Frame(frame)
+        mode_row.pack(fill="x")
+        ttk.Radiobutton(mode_row, text="Gesture (camera)", variable=mode_var, value="gesture",
+                        command=lambda: self._set_launch_mode(mode_var.get())).pack(side="left")
+        ttk.Radiobutton(mode_row, text="Hotkey (no camera)", variable=mode_var, value="hotkey",
+                        command=lambda: self._set_launch_mode(mode_var.get())).pack(side="left", padx=(12, 0))
+        # Editing the combos themselves happens from the browser's companion
+        # config (see companion_bridge.CompanionState.configure) -- this is
+        # just a read-only reminder of whatever's currently bound, local or
+        # browser-sent, so the desktop UI stays truthful without duplicating
+        # the editor.
+        self._hotkey_hint = ttk.Label(frame, text=self._hotkey_hint_text(), foreground="#527f91",
+                                      font=("Consolas", 8), wraplength=320)
+        self._hotkey_hint.pack(anchor="w", pady=(2, 0))
+
         ttk.Label(frame, text="PALM → FIST    CURRENT SCREEN", foreground="#74f7c5",
                   font=("Consolas", 9)).pack(anchor="w", pady=(18, 3))
         ttk.Label(frame, text="HOLD PALM      RECENT REPLAY", foreground="#74f7c5",
@@ -207,27 +240,58 @@ class App:
         combo.bind("<<ComboboxSelected>>", lambda _event: command(variable.get().split()[0]))
 
     def _toggle(self) -> None:
-        if self.camera.running:
+        if self._active_mode:
             self._stop_tracking()
         else:
-            self._start_tracking()
+            self._start_tracking(self.settings.launch_mode)
 
-    def _start_tracking(self) -> None:
+    def _start_tracking(self, mode: str = "gesture") -> None:
+        """`mode` is "gesture" (camera + hand tracking, the original path)
+        or "hotkey" (no camera at all -- RegisterHotKey via HotkeyListener
+        instead). Mutually exclusive, chosen once at launch: this is meant
+        as a genuine alternative for when the camera pipeline is too heavy,
+        not a second trigger path layered on top of the camera."""
+        self._active_mode = mode
         if self.companion_state:
-            self.companion_state.set_running(True)
+            self.companion_state.set_running(True, mode)
         if self.settings.replay_enabled:
             self.screen_buffer.start()
-        self.camera.start()
+        self.window_tracker.start()
+        self.click_tracker.start()
+        if mode == "hotkey":
+            self.hotkey_listener.start()
+            self.status.config(text="HOTKEY MODE // SHORTCUTS ACTIVE")
+        else:
+            self.camera.start()
+            self.status.config(text="TRACKING // PALM OR FIST TO CAPTURE")
         self.button.config(text="Stop")
-        self.status.config(text="TRACKING // PALM OR FIST TO CAPTURE")
 
     def _stop_tracking(self) -> None:
         self.camera.stop()
+        self.hotkey_listener.stop()
         self.screen_buffer.stop(clear=True)
+        self.window_tracker.stop(clear=True)
+        self.click_tracker.stop(clear=True)
+        self._active_mode = None
         self.button.config(text="Start")
         self.status.config(text="SYSTEM STANDBY")
         if self.companion_state:
             self.companion_state.set_running(False)
+
+    def _activity_summary(self) -> str:
+        """Combines the window-switch and click logs into the one string
+        CaptureController hands to codex.send() as `window_history` -- kept
+        as a single callable/parameter (no new wire format) since both are
+        "what the user was doing right before this capture", just two
+        different signals of it."""
+        parts = []
+        windows = self.window_tracker.recent_summary()
+        if windows:
+            parts.append(f"창 전환: {windows}")
+        clicks = self.click_tracker.recent_summary()
+        if clicks:
+            parts.append(f"클릭: {clicks}")
+        return "\n".join(parts)
 
     @staticmethod
     def _activate_window(window) -> None:
@@ -251,7 +315,10 @@ class App:
             self.companion_state.authorize(token)
         if command == "start":
             self.root.withdraw()
-            self._start_tracking()
+            self._start_tracking("gesture")
+        elif command == "start_hotkey":
+            self.root.withdraw()
+            self._start_tracking("hotkey")
         elif command == "stop":
             self._stop_tracking()
             self.root.withdraw()
@@ -279,6 +346,8 @@ class App:
             mode = f"AREA CAPTURE // {self._selection.phase.upper()}"
         elif self.camera.running:
             mode = f"TRACKING // {self._pose.upper()}"
+        elif self._active_mode == "hotkey":
+            mode = "HOTKEY MODE // SHORTCUTS ACTIVE"
         else:
             mode = "SYSTEM STANDBY"
         if mode != self._last_mode:
@@ -309,10 +378,13 @@ class App:
         self.root.after(16, self._redraw)
 
     def _close(self) -> None:
-        self._cancel_replay_prompt()
+        self._cancel_capture_prompt()
         self._cancel_region_select()
         self.camera.close()
         self.capture.close()
+        self.window_tracker.stop(clear=True)
+        self.click_tracker.stop(clear=True)
+        self.hotkey_listener.stop()
         self.settings.agent_thread_id = self._agent_thread_id
         self.settings.save()
         self.root.destroy()
@@ -320,7 +392,7 @@ class App:
     def _handle_command(self, event: CommandEvent, _region: None = None) -> None:
         if event == "replay":
             try:
-                self.root.after(0, self._begin_replay_prompt)
+                self.root.after(0, self._begin_capture_prompt, "replay")
             except tk.TclError:
                 pass
             return
@@ -330,8 +402,10 @@ class App:
             except tk.TclError:
                 pass
             return
-        browser_target = self.companion_state.agent_thread_id() if self.companion_state else ""
-        self.capture.trigger("screenshot", browser_target or self._agent_thread_id)
+        try:
+            self.root.after(0, self._begin_capture_prompt, "screenshot")
+        except tk.TclError:
+            pass
 
     def _begin_region_select(self) -> None:
         if self._region_selecting.is_set():
@@ -372,27 +446,39 @@ class App:
         self._selection = SelectionView()
         self.overlay.set_interactive(False)
 
-    def _begin_replay_prompt(self) -> None:
+    # Every capture kind that can show this prompt (screenshot included --
+    # see _handle_command / _dispatch_hotkey_action) funnels through here so
+    # there's exactly one prompt window implementation, not one per kind.
+    _PROMPT_HEADER = {"screenshot": "SCREEN CAPTURED", "replay": "REPLAY CAPTURED", "region": "REGION CAPTURED"}
+    _PROMPT_FREEZE_FAILURE = {
+        "screenshot": "화면을 캡처하지 못했습니다.",
+        "replay": "최근 화면 버퍼가 아직 준비되지 않았습니다.",
+        "region": "영역을 캡처하지 못했습니다.",
+    }
+
+    def _begin_capture_prompt(self, kind: str) -> None:
         if self._prompt_window is not None or self._prompt_paths:
             return
 
         def freeze() -> None:
             try:
-                paths = self.screen_buffer.export_recent(int(self.settings.replay_seconds))
+                paths = (self.screen_buffer.export_recent(int(self.settings.replay_seconds))
+                         if kind == "replay" else self.screen_buffer.capture_still())
                 error = ""
             except Exception as caught:
                 paths, error = (), str(caught)
             try:
-                self.root.after(0, self._show_replay_prompt, paths, error)
+                self.root.after(0, self._show_capture_prompt, kind, paths, error)
             except tk.TclError:
                 cleanup_paths(paths)
 
-        threading.Thread(target=freeze, name="airpointer-freeze-replay", daemon=True).start()
+        threading.Thread(target=freeze, name="airpointer-freeze-capture", daemon=True).start()
 
-    def _show_replay_prompt(self, paths: tuple[Path, ...], error: str) -> None:
+    def _show_capture_prompt(self, kind: str, paths: tuple[Path, ...], error: str) -> None:
         if error or not paths:
-            self._show_native_notice("화면 고정 실패", error or "최근 화면 버퍼가 아직 준비되지 않았습니다.")
+            self._show_native_notice("화면 고정 실패", error or self._PROMPT_FREEZE_FAILURE.get(kind, "화면 캡처에 실패했습니다."))
             return
+        self._prompt_kind = kind
         self._prompt_paths = paths
         window = tk.Toplevel(self.root)
         self._prompt_window = window
@@ -407,10 +493,10 @@ class App:
         panel.pack(fill="both", expand=True, padx=2, pady=2)
         header_row = tk.Frame(panel, bg="#11110f")
         header_row.pack(fill="x")
-        self._prompt_header_var = tk.StringVar(value="REPLAY CAPTURED")
+        self._prompt_header_var = tk.StringVar(value=self._PROMPT_HEADER.get(kind, "CAPTURED"))
         tk.Label(header_row, textvariable=self._prompt_header_var, bg="#11110f", fg="#ff8a50",
                  font=("Consolas", 10, "bold")).pack(side="left", anchor="w")
-        tk.Button(header_row, text="✕", command=self._cancel_replay_prompt, bg="#11110f",
+        tk.Button(header_row, text="✕", command=self._cancel_capture_prompt, bg="#11110f",
                  fg="#ff8a50", activebackground="#2a1c14", activeforeground="#ff8a50",
                  relief="flat", bd=0, font=("Consolas", 11, "bold"),
                  cursor="hand2").pack(side="right")
@@ -432,7 +518,7 @@ class App:
         self._prompt_text.pack(fill="both", expand=True)
         self._prompt_text.bind("<Return>", self._on_prompt_return)
         window.bind("<Escape>", self._on_prompt_escape)
-        window.protocol("WM_DELETE_WINDOW", self._cancel_replay_prompt)
+        window.protocol("WM_DELETE_WINDOW", self._cancel_capture_prompt)
         self._activate_window(window)
         self._prompt_text.focus_set()
         if self.codex.requires_thread_selection:
@@ -441,11 +527,11 @@ class App:
     def _on_prompt_return(self, event) -> str | None:
         if event.state & 0x0001:
             return None
-        self._submit_replay_prompt()
+        self._submit_capture_prompt()
         return "break"
 
     def _on_prompt_escape(self, _event) -> str:
-        self._cancel_replay_prompt()
+        self._cancel_capture_prompt()
         return "break"
 
     def _load_prompt_agents(self) -> None:
@@ -465,45 +551,47 @@ class App:
         if self._prompt_window is None:
             return
         if error:
-            self._prompt_header_var.set("REPLAY CAPTURED · CODEX ERROR")
+            self._prompt_header_var.set(f"{self._prompt_base_label()} · CODEX ERROR")
             self._show_native_notice("Codex 작업을 불러오지 못했습니다", error)
             return
-        self._prompt_agent_ids = {self._agent_label(thread): thread.id for thread in threads}
+        self._prompt_agent_ids = self._populate_picker(self._prompt_agent_picker, threads)
         labels = list(self._prompt_agent_ids)
-        self._prompt_agent_picker.set_options(labels)
         if self.codex.requires_explicit_target and labels:
             selected = next((label for label, thread_id in self._prompt_agent_ids.items()
                              if thread_id == self._agent_thread_id), labels[0])
             self._prompt_agent_picker.set_value(selected)
 
-    def _on_prompt_agent_picked(self, _label: str) -> None:
-        if self._prompt_header_var.get() == "REPLAY CAPTURED · SELECT CONVERSATION":
-            self._prompt_header_var.set("REPLAY CAPTURED")
+    def _prompt_base_label(self) -> str:
+        return self._PROMPT_HEADER.get(self._prompt_kind, "CAPTURED")
 
-    def _submit_replay_prompt(self) -> None:
+    def _on_prompt_agent_picked(self, _label: str) -> None:
+        if self._prompt_header_var.get() == f"{self._prompt_base_label()} · SELECT CONVERSATION":
+            self._prompt_header_var.set(self._prompt_base_label())
+
+    def _submit_capture_prompt(self) -> None:
         if self._prompt_window is None:
             return
         prompt = self._prompt_text.get("1.0", "end").strip()
         if self.codex.requires_thread_selection:
             thread_id = self._prompt_agent_ids.get(self._prompt_agent_picker.get(), "") or self._fallback_target()
             if not thread_id:
-                self._prompt_header_var.set("REPLAY CAPTURED · SELECT CONVERSATION")
+                self._prompt_header_var.set(f"{self._prompt_base_label()} · SELECT CONVERSATION")
                 return
         else:
             thread_id = DESKTOP_PASTE_TARGET
         if not prompt:
-            self._prompt_header_var.set("REPLAY CAPTURED · ENTER PROMPT")
+            self._prompt_header_var.set(f"{self._prompt_base_label()} · ENTER PROMPT")
             return
         paths = self._prompt_paths
-        if not self.capture.send_prepared("replay", thread_id, paths, prompt):
-            self._prompt_header_var.set("REPLAY CAPTURED · BUSY")
+        if not self.capture.send_prepared(self._prompt_kind, thread_id, paths, prompt):
+            self._prompt_header_var.set(f"{self._prompt_base_label()} · BUSY")
             return
         self._prompt_paths = ()
         self._agent_thread_id = thread_id
         self.settings.agent_thread_id = thread_id
         self._destroy_prompt_window()
 
-    def _cancel_replay_prompt(self) -> None:
+    def _cancel_capture_prompt(self) -> None:
         paths, self._prompt_paths = self._prompt_paths, ()
         cleanup_paths(paths)
         self._destroy_prompt_window()
@@ -542,6 +630,52 @@ class App:
             self.screen_buffer.start()
         elif not enabled:
             self.screen_buffer.stop(clear=True)
+
+    def _set_launch_mode(self, mode: str) -> None:
+        self.settings.launch_mode = mode
+
+    def _resolve_hotkey_bindings(self) -> dict[str, str]:
+        """Local Settings is the base; whatever the browser has configured
+        for this session (see companion_bridge.CompanionState.configure)
+        wins per-action on top of it, same override relationship the
+        browser's agent-thread selection already has over the local one."""
+        browser = self.companion_state.hotkeys() if self.companion_state else {}
+        return {**self.settings.hotkeys, **browser}
+
+    def _hotkey_hint_text(self) -> str:
+        labels = {"screenshot": "캡처", "replay": "리플레이", "region": "영역"}
+        bindings = self._resolve_hotkey_bindings()
+        if not bindings:
+            return "단축키 없음 · 브라우저에서 설정하세요"
+        return " · ".join(f"{combo.upper()} {labels.get(action, action)}"
+                          for action, combo in bindings.items())
+
+    def _refresh_hotkey_hint(self) -> None:
+        text = self._hotkey_hint_text()
+        if text != self._last_hotkey_hint:
+            self._hotkey_hint.config(text=text)
+            self._last_hotkey_hint = text
+        self.root.after(1000, self._refresh_hotkey_hint)
+
+    def _on_hotkey_action(self, action: str) -> None:
+        # Called from HotkeyListener's own thread -- must not touch Tk
+        # directly (same reasoning as CommandServer's handler in protocol.py,
+        # which is why airpointer_launcher.py always marshals through
+        # root.after rather than calling into the App synchronously).
+        try:
+            self.root.after(0, self._dispatch_hotkey_action, action)
+        except tk.TclError:
+            pass
+
+    def _dispatch_hotkey_action(self, action: str) -> None:
+        # Same handlers the matching hand gesture already calls (see
+        # _handle_command and _region_release) -- only the trigger differs.
+        if action == "replay":
+            self._begin_capture_prompt("replay")
+        elif action == "region":
+            self._begin_region_select()
+        elif action == "screenshot":
+            self._begin_capture_prompt("screenshot")
 
     def _refresh_agents_once(self, replay_selected: bool) -> None:
         if replay_selected and self.codex.requires_thread_selection and not self._agent_labels:
@@ -583,14 +717,35 @@ class App:
         # a real conversation title, so it passes through as that default.
         return "" if self.codex.requires_explicit_target else DESKTOP_PASTE_TARGET
 
+    def _populate_picker(self, picker: ConversationPicker, threads: list[AgentThread]) -> dict[str, str]:
+        """Feeds `threads` to `picker`, grouped by project (Codex Desktop's
+        own sidebar layout) when the delivery backend supports it, or as a
+        plain flat list otherwise (e.g. CodexAppServerDelivery, which has no
+        project concept). `threads` is already ordered project-block by
+        project-block by DesktopPasteDelivery.list_threads(), so a
+        run-length grouping on `.project` reconstructs the sidebar's
+        grouping without needing a second, parallel API."""
+        labels = {self._agent_label(thread): thread.id for thread in threads}
+        if getattr(self.codex, "supports_project_groups", False):
+            groups: list[tuple[str, list[str]]] = []
+            for thread in threads:
+                label = self._agent_label(thread)
+                if groups and groups[-1][0] == thread.project:
+                    groups[-1][1].append(label)
+                else:
+                    groups.append((thread.project, [label]))
+            picker.set_grouped(groups)
+        else:
+            picker.set_options(list(labels))
+        return labels
+
     def _apply_agents(self, threads: list[AgentThread], error: str) -> None:
         self._refreshing_agents = False
         if error:
             self.delivery_status.config(text=f"CODEX ERROR • {error}")
             return
-        self._agent_labels = {self._agent_label(thread): thread.id for thread in threads}
+        self._agent_labels = self._populate_picker(self.agent_picker, threads)
         labels = list(self._agent_labels)
-        self.agent_picker.set_options(labels)
         if not labels:
             self.delivery_status.config(text="NO CODEX TASKS FOUND")
             return

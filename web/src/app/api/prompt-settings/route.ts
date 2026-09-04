@@ -30,9 +30,9 @@ export async function DELETE() {
 
 function isTemplate(value: unknown): value is PromptTemplate {
   if (!isObject(value)) return false;
-  return isField(value.wrapperIntro) && isField(value.wrapperOutro)
-    && isKindMap(value.contextByKind) && isKindMap(value.defaultRequestByKind)
-    && isField(value.capsuleIntro) && isField(value.capsuleInstruction);
+  return isField(value.wrapperOutro) && isKindMap(value.defaultRequestByKind)
+    && isField(value.capsuleIntro) && isField(value.capsuleInstruction)
+    && isField(value.windowHistoryLabel);
 }
 
 function isKindMap(value: unknown): value is Record<"screenshot" | "region" | "replay", string> {

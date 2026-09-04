@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
+
+from .hotkeys import DEFAULT_BINDINGS, Bindings
 
 
 @dataclass(slots=True)
@@ -14,6 +16,8 @@ class Settings:
     replay_seconds: int = 15
     capture_fps: int = 10
     agent_thread_id: str = ""
+    launch_mode: str = "gesture"  # "gesture" (camera) or "hotkey" (no camera)
+    hotkeys: Bindings = field(default_factory=lambda: dict(DEFAULT_BINDINGS))
 
     @classmethod
     def load(cls, path: Path | None = None) -> Settings:

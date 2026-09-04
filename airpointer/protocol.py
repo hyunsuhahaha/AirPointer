@@ -10,7 +10,7 @@ from urllib.parse import parse_qsl, urlparse
 SCHEME = "airpointer"
 CONTROL_HOST = "127.0.0.1"
 CONTROL_PORT = 47821
-VALID_COMMANDS = frozenset({"start", "stop", "show", "quit"})
+VALID_COMMANDS = frozenset({"start", "start_hotkey", "stop", "show", "quit"})
 
 
 def token_from_arguments(arguments: Sequence[str]) -> str:
