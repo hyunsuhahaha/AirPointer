@@ -14,11 +14,11 @@ class Overlay:
         self.window.attributes("-transparentcolor", "#010101")
         # Cover the Windows virtual desktop rather than only Tk's primary monitor.
         # This is the same coordinate space used by native screen-capture tools.
+        # DPI awareness itself is set in airpointer_launcher.main(), before
+        # tk.Tk() creates the first window -- Windows locks in a process's DPI
+        # awareness mode at that point, so setting it here (after the App's
+        # root window already exists) is too late to do anything.
         user32 = ctypes.windll.user32
-        try:
-            user32.SetProcessDPIAware()
-        except (AttributeError, OSError):
-            pass
         self.origin_x = user32.GetSystemMetrics(76)  # SM_XVIRTUALSCREEN
         self.origin_y = user32.GetSystemMetrics(77)  # SM_YVIRTUALSCREEN
         width = user32.GetSystemMetrics(78)          # SM_CXVIRTUALSCREEN
@@ -27,6 +27,13 @@ class Overlay:
             self.origin_x = self.origin_y = 0
             width, height = self.window.winfo_screenwidth(), self.window.winfo_screenheight()
         self.width, self.height = width, height
+        # The primary monitor's top-left is always at absolute (0, 0) in
+        # Windows' coordinate system, regardless of monitor arrangement.
+        # HUD text should anchor to *that* corner, not the combined virtual
+        # desktop's -- otherwise "top-right" lands on whichever monitor
+        # happens to be physically rightmost/bottommost in the arrangement.
+        self.primary_right = -self.origin_x + user32.GetSystemMetrics(0)  # SM_CXSCREEN
+        self.primary_top = -self.origin_y
         x_offset = f"+{self.origin_x}" if self.origin_x >= 0 else str(self.origin_x)
         y_offset = f"+{self.origin_y}" if self.origin_y >= 0 else str(self.origin_y)
         self.window.geometry(f"{width}x{height}{x_offset}{y_offset}")
@@ -90,13 +97,14 @@ class Overlay:
                                 fill=color, font=("Consolas", 10, "bold"), anchor="w")
 
     def draw_command(self, command, delivery, buffer) -> None:
+        right, top = self.primary_right, self.primary_top
         if buffer.running:
             seconds = int(buffer.seconds)
-            self.canvas.create_text(self.width - 24, 22,
+            self.canvas.create_text(right - 24, top + 22,
                                     text=f"● BUFFER {seconds // 60:02d}:{seconds % 60:02d}",
                                     fill="#74f7c5", font=("Consolas", 9, "bold"), anchor="e")
         if command.phase in ("arming", "armed") and command.route == "replay":
-            x, y, radius = self.width - 68, 82, 38
+            x, y, radius = right - 68, top + 82, 38
             progress = command.progress
             self.canvas.create_oval(x - radius, y - radius, x + radius, y + radius,
                                     outline="#d7e4ea", width=5)
@@ -109,5 +117,5 @@ class Overlay:
                                     font=("Consolas", 7, "bold"))
         if delivery.mode not in ("READY",):
             color = "#ff6767" if "FAILED" in delivery.mode or "ERROR" in delivery.mode else "#44e5ff"
-            self.canvas.create_text(self.width - 24, 44, text=delivery.mode, fill=color,
+            self.canvas.create_text(right - 24, top + 44, text=delivery.mode, fill=color,
                                     font=("Consolas", 9, "bold"), anchor="e")

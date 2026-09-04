@@ -4,6 +4,32 @@ import sys
 import traceback
 
 
+def _make_dpi_aware() -> None:
+    """Must run before the first window is created (tk.Tk() in App.__init__)
+    -- Windows locks in a process's DPI-awareness mode at that point, so
+    setting it any later is a silent no-op. Without this, GetSystemMetrics'
+    virtual-desktop coordinates (used to size/position the fullscreen overlay
+    and its HUD) come back scaled inconsistently on mixed-DPI multi-monitor
+    setups, landing the HUD on the wrong monitor."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+    user32 = ctypes.windll.user32
+    for context in (-4, -3):  # PER_MONITOR_AWARE_V2, then PER_MONITOR_AWARE
+        try:
+            if user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(context)):
+                return
+        except (AttributeError, OSError):
+            pass
+    try:
+        user32.SetProcessDPIAware()  # Windows < 10 1703 fallback
+    except (AttributeError, OSError):
+        pass
+
+
+_make_dpi_aware()
+
+
 def main() -> int:
     from airpointer.main import App
     from airpointer.companion_bridge import CompanionHttpServer, CompanionState
