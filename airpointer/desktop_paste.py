@@ -1,14 +1,14 @@
-"""Delivers captures to Codex Desktop via real OS clipboard/keyboard input
-instead of any Codex protocol (RPC, IPC, or otherwise). AirPointer never
-talks to Codex directly here -- it does exactly what a person at the
-keyboard would do, so there is no writer lock to steal and nothing to
-corrupt."""
+"""Delivers captures to a chat desktop app (Codex Desktop or Claude
+Desktop) via real OS clipboard/keyboard input instead of any app-specific
+protocol (RPC, IPC, or otherwise). AirPointer never talks to the app
+directly here -- it does exactly what a person at the keyboard would do,
+so there is no writer lock to steal and nothing to corrupt."""
 from __future__ import annotations
 
 import struct
 import time
 from pathlib import Path
-from typing import Sequence
+from typing import NamedTuple, Sequence
 
 import win32api
 import win32clipboard
@@ -20,7 +20,21 @@ from pywinauto.keyboard import send_keys
 
 from .win32_focus import force_foreground
 
-TARGET_PROCESSES = {"ChatGPT.exe", "Orca.exe"}
+
+class AppTarget(NamedTuple):
+    """One desktop app DesktopPasteDelivery can drive: `processes` is how
+    its top-level window is located (see find_codex_window_and_composer),
+    `label` is used only in status/error text shown to the user."""
+    label: str
+    processes: frozenset[str]
+
+
+# Codex Desktop ships under two different process names depending on
+# build/branding (ChatGPT.exe historically, Orca.exe in some builds) --
+# both are checked so either is found regardless of which one is running.
+CODEX = AppTarget("Codex Desktop", frozenset({"ChatGPT.exe", "Orca.exe"}))
+CLAUDE = AppTarget("Claude Desktop", frozenset({"claude.exe"}))
+
 ATTACHMENT_NAME = "User attachment"
 
 
@@ -63,7 +77,12 @@ def set_clipboard_text(text: str) -> None:
         win32clipboard.CloseClipboard()
 
 
-_cache: tuple[int, object, object] | None = None  # (hwnd, window, composer)
+
+# Keyed by AppTarget so switching the delivery target mid-session (e.g. the
+# user flips the "Send to" setting from Codex to Claude without restarting
+# AirPointer) can't return a stale window cached for the *other* target --
+# each target's cache entry is independent and checked on its own.
+_cache: dict[AppTarget, tuple[int, object, object]] = {}  # target -> (hwnd, window, composer)
 
 
 def _composer_alive(composer) -> bool:
@@ -88,34 +107,34 @@ def _find_composer_in_window(window):
     return edits[0] if edits else None
 
 
-def find_codex_window_and_composer(use_cache: bool = True):
-    """Returns (window, composer) for the first Codex Desktop window that
-    actually has a locatable composer -- never just the first window whose
-    process name matches, per the "never guess" review note.
+def find_codex_window_and_composer(app: AppTarget, use_cache: bool = True):
+    """Returns (window, composer) for the first `app` window that actually
+    has a locatable composer -- never just the first window whose process
+    name matches, per the "never guess" review note.
 
     Electron/Chromium apps build their UI Automation tree lazily, so the
-    first-ever query against a given Codex Desktop window can take upward
-    of 20-30s (measured); a full `Desktop(backend="uia").windows()` scan
-    even once warm still costs a few hundred ms. Both are avoided on a
-    cache hit -- see `warmup()` in codex_delivery.py for hiding the first
-    cost before the user ever sends anything, and `_composer_alive` for
-    why a cache hit is safe to trust without re-scanning."""
-    global _cache
-    if use_cache and _cache is not None:
-        hwnd, cached_window, cached_composer = _cache
+    first-ever query against a given window can take upward of 20-30s
+    (measured, both for Codex Desktop and Claude Desktop); a full
+    `Desktop(backend="uia").windows()` scan even once warm still costs a
+    few hundred ms. Both are avoided on a cache hit -- see `warmup()` in
+    codex_delivery.py for hiding the first cost before the user ever sends
+    anything, and `_composer_alive` for why a cache hit is safe to trust
+    without re-scanning."""
+    if use_cache and app in _cache:
+        hwnd, cached_window, cached_composer = _cache[app]
         if win32gui.IsWindow(hwnd) and _composer_alive(cached_composer):
             return cached_window, cached_composer
-        _cache = None
+        del _cache[app]
     desktop = Desktop(backend="uia")
     for window in desktop.windows():
         try:
-            if _process_name(window.process_id()) not in TARGET_PROCESSES:
+            if _process_name(window.process_id()) not in app.processes:
                 continue
         except Exception:
             continue
         composer = _find_composer_in_window(window)
         if composer is not None:
-            _cache = (window.handle, window, composer)
+            _cache[app] = (window.handle, window, composer)
             return window, composer
     return None
 
@@ -143,6 +162,53 @@ def _sidebar_conversation_buttons(window):
 
 def list_conversations(window) -> list[str]:
     return [title for title, _ in _sidebar_conversation_buttons(window)]
+
+
+_CLAUDE_OPTIONS_SUFFIX = "에 대한 더 많은 옵션"
+_CLAUDE_NEW_SESSION_SUFFIX = " 새 세션"
+_CLAUDE_MISC_BUCKET = "기타"
+
+
+def _claude_sidebar_rows(window):
+    """Yields (project, title, button) for each sidebar session row in
+    Claude Desktop, in sidebar order. Claude Desktop has no named
+    Group-per-project the way Codex Desktop does (see _project_groups) --
+    every Group/List here comes back unnamed -- so this instead walks the
+    flat, ordered button list with a little state, same "identify by an
+    adjacent structural marker" idea as _sidebar_conversation_buttons:
+    - A project header is `name` immediately followed by a
+      "{name} 새 세션" button.
+    - A session row is `<status prefix> title` immediately followed by a
+      "{title}에 대한 더 많은 옵션" button -- the title is recovered by
+      stripping that fixed suffix off the second button's own name, which
+      sidesteps needing to enumerate every localized status word ("유휴",
+      "실행 중", "오류", "읽지 않은 응답", ...; new ones can appear without
+      breaking this).
+    - "기타" marks the start of the ungrouped/pinned bucket, same role as
+      Codex's "" project.
+    The main panel's own header (which repeats the active conversation's
+    title, see _sidebar_conversation_buttons's docstring) is naturally
+    excluded: it's a lone rename button, never followed by a matching
+    "...에 대한 더 많은 옵션" sibling."""
+    try:
+        buttons = window.descendants(control_type="Button")
+    except Exception:
+        return
+    project = ""
+    for index in range(len(buttons) - 1):
+        try:
+            name = buttons[index].element_info.name
+            next_name = buttons[index + 1].element_info.name
+        except Exception:
+            continue
+        if name == _CLAUDE_MISC_BUCKET:
+            project = ""
+        elif next_name == f"{name}{_CLAUDE_NEW_SESSION_SUFFIX}":
+            project = name
+        elif next_name.endswith(_CLAUDE_OPTIONS_SUFFIX):
+            title = next_name[: -len(_CLAUDE_OPTIONS_SUFFIX)]
+            if name == title or name.endswith(f" {title}"):
+                yield project, title, buttons[index]
 
 
 _LOAD_MORE = "더 보기"
@@ -178,22 +244,32 @@ def _project_groups(window):
             yield name, titles
 
 
-def list_conversations_by_project(window) -> list[tuple[str, list[str]]]:
-    """Groups the sidebar's conversations the way Codex Desktop's own UI
+def list_conversations_by_project(window, app: AppTarget) -> list[tuple[str, list[str]]]:
+    """Groups the sidebar's conversations the way the target app's own UI
     does: one bucket per project/workspace (in sidebar order), plus a ""
     bucket for pinned/recent conversations that aren't inside any project."""
+    if app is CLAUDE:
+        grouped: list[tuple[str, list[str]]] = []
+        for project, title, _button in _claude_sidebar_rows(window):
+            if grouped and grouped[-1][0] == project:
+                grouped[-1][1].append(title)
+            else:
+                grouped.append((project, [title]))
+        return grouped
     grouped = list(_project_groups(window))
     grouped_titles = {title for _, titles in grouped for title in titles}
     ungrouped = [title for title in list_conversations(window) if title not in grouped_titles]
     return grouped + ([("", ungrouped)] if ungrouped else [])
 
 
-def select_conversation(window, title: str) -> bool:
-    """Clicks the sidebar entry matching `title` exactly, switching Codex
-    Desktop's active conversation. Returns False and does nothing else if
-    no exact match is found -- the caller falls back to whatever's
+def select_conversation(window, app: AppTarget, title: str) -> bool:
+    """Clicks the sidebar entry matching `title` exactly, switching the
+    target app's active conversation. Returns False and does nothing else
+    if no exact match is found -- the caller falls back to whatever's
     already open rather than erroring out."""
-    for candidate_title, button in _sidebar_conversation_buttons(window):
+    rows = (((row_title, button) for _project, row_title, button in _claude_sidebar_rows(window))
+            if app is CLAUDE else _sidebar_conversation_buttons(window))
+    for candidate_title, button in rows:
         if candidate_title == title:
             button.click_input()
             return True
@@ -298,10 +374,10 @@ def submit(window, composer) -> None:
     send_keys("{ENTER}")
 
 
-def paste_capture_and_ask(image_paths: Sequence[Path], prompt: str,
+def paste_capture_and_ask(app: AppTarget, image_paths: Sequence[Path], prompt: str,
                            conversation_title: str | None = None) -> None:
-    """Full pipeline: find the window, focus it, optionally switch to a
-    named conversation, paste the image(s) (one multi-file paste
+    """Full pipeline: find the `app` window, focus it, optionally switch to
+    a named conversation, paste the image(s) (one multi-file paste
     regardless of count), paste the prompt, submit, restore whatever
     window was focused before.
 
@@ -309,29 +385,28 @@ def paste_capture_and_ask(image_paths: Sequence[Path], prompt: str,
     clicked before pasting -- if no exact match is found, this silently
     falls back to sending to whatever conversation is already open,
     exactly like conversation_title=None, rather than raising. Note: the
-    conversation Codex Desktop had open before the switch is *not*
-    restored afterward (unlike the foreground window) -- only "which app
-    has focus" is undone here, not "which conversation was selected"."""
+    conversation the app had open before the switch is *not* restored
+    afterward (unlike the foreground window) -- only "which app has focus"
+    is undone here, not "which conversation was selected"."""
     if not image_paths:
         raise DesktopPasteError("전송할 이미지가 없습니다.")
     previous_hwnd = win32gui.GetForegroundWindow()
-    found = find_codex_window_and_composer()
+    found = find_codex_window_and_composer(app)
     if not found:
-        raise DesktopPasteError("Codex Desktop 창을 찾지 못했습니다.")
+        raise DesktopPasteError(f"{app.label} 창을 찾지 못했습니다.")
     window, composer = found
     try:
-        if conversation_title and select_conversation(window, conversation_title):
+        if conversation_title and select_conversation(window, app, conversation_title):
             time.sleep(0.3)  # let the composer/content repaint after switching
             # Re-locate the composer within the same window instead of
             # re-scanning the whole desktop -- the window itself didn't
             # change, only its content did.
-            global _cache
             refreshed_composer = _find_composer_in_window(window)
             if refreshed_composer is not None:
                 composer = refreshed_composer
-                _cache = (window.handle, window, composer)
+                _cache[app] = (window.handle, window, composer)
             else:
-                refreshed = find_codex_window_and_composer(use_cache=False)
+                refreshed = find_codex_window_and_composer(app, use_cache=False)
                 if refreshed:
                     window, composer = refreshed
         paste_images(window, composer, image_paths)

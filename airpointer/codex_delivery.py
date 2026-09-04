@@ -27,6 +27,15 @@ DEFAULT_PROMPTS = {
 }
 
 
+def resolve_delivery_target(name: str):
+    """Maps Settings.delivery_target ("codex"/"claude") to the matching
+    desktop_paste.AppTarget for DesktopPasteDelivery. Lazily imports
+    desktop_paste (pywin32/pywinauto-dependent) so importing this module
+    doesn't pull those in for callers that only use CodexAppServerDelivery."""
+    from . import desktop_paste
+    return {"codex": desktop_paste.CODEX, "claude": desktop_paste.CLAUDE}.get(name, desktop_paste.CODEX)
+
+
 class CodexAppServerDelivery:
     """Sends capture requests through the local AirPointer web app's
     `/api/agent` route instead of spawning a Codex App Server subprocess
@@ -97,28 +106,35 @@ class CodexAppServerDelivery:
 
 
 class DesktopPasteDelivery:
-    """Delivers captures via clipboard + OS keyboard automation into Codex
-    Desktop (see desktop_paste.py), instead of any Codex protocol -- no
-    writer lock to steal, nothing to corrupt. `thread_id`, when given, is
-    matched against the sidebar's conversation titles and clicked to
-    switch Codex Desktop to that conversation before sending; when empty
-    or not found, it just sends to whatever conversation is already open."""
+    """Delivers captures via clipboard + OS keyboard automation into a chat
+    desktop app -- Codex Desktop or Claude Desktop, per `target` (see
+    desktop_paste.py) -- instead of any app-specific protocol; no writer
+    lock to steal, nothing to corrupt. `thread_id`, when given, is matched
+    against the sidebar's conversation titles and clicked to switch the app
+    to that conversation before sending; when empty or not found, it just
+    sends to whatever conversation is already open."""
 
     requires_thread_selection = True
     requires_explicit_target = False
-    # Lets the UI show conversations grouped like Codex Desktop's own
+    # Lets the UI show conversations grouped like the target app's own
     # sidebar (see ConversationPicker.set_grouped) -- CodexAppServerDelivery
-    # has no such concept, so its threads all carry project = "".
+    # has no such concept, so its threads all carry project = "". Both Codex
+    # Desktop and Claude Desktop sidebars are reverse-engineered now (see
+    # desktop_paste.py's _project_groups and _claude_sidebar_rows).
     supports_project_groups = True
+
+    def __init__(self, target=None) -> None:
+        from . import desktop_paste
+        self.target = target or desktop_paste.CODEX
 
     def list_threads(self, cwd: str | None = None) -> list[AgentThread]:
         from . import desktop_paste
-        found = desktop_paste.find_codex_window_and_composer()
+        found = desktop_paste.find_codex_window_and_composer(self.target)
         if not found:
             return []
         window, _composer = found
         return [AgentThread(title, title, "unknown", project)
-                for project, titles in desktop_paste.list_conversations_by_project(window)
+                for project, titles in desktop_paste.list_conversations_by_project(window, self.target)
                 for title in titles]
 
     def send(self, thread_id: str, prompt: str, images: tuple[Path, ...],
@@ -138,24 +154,25 @@ class DesktopPasteDelivery:
             # _activity_summary) -- kept the parameter name to avoid
             # touching every call site for a label change.
             text = f"최근 활동:\n{window_history}\n\n{text}"
-        desktop_paste.paste_capture_and_ask(images, text, thread_id or None)
+        desktop_paste.paste_capture_and_ask(self.target, images, text, thread_id or None)
 
     def close(self) -> None:
         pass
 
     def warmup(self) -> None:
-        """Best-effort, read-only pre-warm of Codex Desktop's UI Automation
-        tree. Electron/Chromium builds its accessibility tree lazily on the
-        first query against a window, which can take upward of 20-30s
-        (measured); calling this once at startup, before any real send,
-        hides that cost instead of the user eating it on their first
-        capture. Touches no clipboard, keyboard, or focus -- safe to call
-        speculatively even if Codex Desktop isn't running yet (just finds
-        nothing and returns) or the caller races a real send (worst case,
-        both just do the same read-only lookup)."""
+        """Best-effort, read-only pre-warm of the target app's UI
+        Automation tree. Electron/Chromium builds its accessibility tree
+        lazily on the first query against a window, which can take upward
+        of 20-30s (measured for both Codex Desktop and Claude Desktop);
+        calling this once at startup, before any real send, hides that
+        cost instead of the user eating it on their first capture. Touches
+        no clipboard, keyboard, or focus -- safe to call speculatively even
+        if the target app isn't running yet (just finds nothing and
+        returns) or the caller races a real send (worst case, both just do
+        the same read-only lookup)."""
         try:
             from . import desktop_paste
-            desktop_paste.find_codex_window_and_composer()
+            desktop_paste.find_codex_window_and_composer(self.target)
         except Exception:
             pass
 

@@ -15,6 +15,12 @@ type Status = "idle" | "recording" | "preparing" | "analyzing" | "done" | "error
 type Mode = "current" | "replay";
 type AgentState = "loading" | "idle" | "preparing" | "drafting" | "sending" | "queued" | "done" | "error";
 type AgentThread = { id: string; title: string; status: string; cwd: string; updatedAt: number };
+type DeliveryTarget = "codex" | "claude";
+// Shape AirPointer's companion server returns for Claude Desktop -- see
+// App._list_companion_threads in main.py. No cwd/updatedAt (Claude Desktop's
+// sidebar doesn't surface those the way Codex's App Server does), but has
+// `project` for the same grouped-picker UX as Codex Agent below.
+type ClaudeThread = { id: string; title: string; status: string; project: string };
 type PendingAgentCapture =
   | { mode: "current"; threadId: string; seconds: number; frames: string[]; region?: boolean }
   | { mode: "replay"; threadId: string; seconds: number; capsule: ReplayCapsule };
@@ -76,6 +82,15 @@ export function ReplayWorkspace() {
   const [hotkeyBindings, setHotkeyBindings] = useState<HotkeyBindings>({ screenshot: "ctrl+alt+s", replay: "ctrl+alt+d", region: "ctrl+alt+r" });
   const [agentThreads, setAgentThreads] = useState<AgentThread[]>([]);
   const [agentThreadId, setAgentThreadId] = useState("");
+  const [deliveryTarget, setDeliveryTarget] = useState<DeliveryTarget>("codex");
+  // Claude Desktop's own picker, loaded through AirPointer's companion
+  // server (needs companionToken, i.e. "AirPointer 켜기" already on) rather
+  // than a Node-side bridge -- see /api/companion/threads/route.ts and
+  // airpointer/desktop_paste.py's sidebar reverse-engineering. "" means
+  // "whatever conversation is already open", same as leaving it unset.
+  const [claudeThreads, setClaudeThreads] = useState<ClaudeThread[]>([]);
+  const [claudeThreadId, setClaudeThreadId] = useState("");
+  const [claudeThreadsLoading, setClaudeThreadsLoading] = useState(false);
   const [agentState, setAgentState] = useState<AgentState>("loading");
   const [agentMessage, setAgentMessage] = useState("Codex 작업을 불러오는 중입니다.");
   const [pendingCapture, setPendingCapture] = useState<PendingAgentCapture | null>(null);
@@ -298,6 +313,44 @@ export function ReplayWorkspace() {
     throw new Error("Codex 작업이 계속 실행 중이라 전송하지 못했습니다.");
   }, []);
 
+  // Claude Desktop has no App-Tools pipe or SDK like Codex does (see
+  // codex-desktop-bridge.ts / codex-app-server.ts), so this instead reaches
+  // it through AirPointer's own delivery -- the same UI automation the
+  // native app already uses for its own captures (see
+  // airpointer/desktop_paste.py, App._deliver_companion_capture). Requires
+  // AirPointer to be running and paired (companionToken set, i.e. the
+  // "AirPointer 켜기" switch above is on) -- there's no App-Tools-pipe-style
+  // fallback for this path.
+  const postToCompanion = useCallback(async (frames: string[], kind: "screenshot" | "region" | "replay", prompt: string) => {
+    if (!companionToken) throw new Error("Claude Code로 보내려면 먼저 AirPointer를 켜주세요.");
+    const response = await fetch(`/api/companion/send?token=${encodeURIComponent(companionToken)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target: "claude", threadId: claudeThreadId, prompt, kind, frames }),
+    });
+    const data = await response.json() as { ok?: boolean; error?: string };
+    if (!response.ok || !data.ok) throw new Error(data.error || "Claude Desktop 전송에 실패했습니다.");
+    return data;
+  }, [claudeThreadId, companionToken]);
+
+  const loadClaudeThreads = useCallback(async () => {
+    if (!companionToken) { setClaudeThreads([]); setClaudeThreadId(""); return; }
+    setClaudeThreadsLoading(true);
+    try {
+      const response = await fetch(`/api/companion/threads?token=${encodeURIComponent(companionToken)}&target=claude`, { cache: "no-store" });
+      const data = await response.json() as { threads?: ClaudeThread[]; error?: string };
+      if (!response.ok) throw new Error(data.error || "Claude Desktop 세션을 불러오지 못했습니다.");
+      const nextThreads = data.threads || [];
+      setClaudeThreads(nextThreads);
+      setClaudeThreadId((current) => (nextThreads.some((thread) => thread.id === current) ? current : ""));
+    } catch (reason) {
+      setClaudeThreads([]);
+      setAgentMessage(reason instanceof Error ? reason.message : "Claude Desktop 세션을 불러오지 못했습니다.");
+    } finally {
+      setClaudeThreadsLoading(false);
+    }
+  }, [companionToken]);
+
   const postCapsuleToAgent = useCallback(async (form: FormData) => {
     for (let attempt = 0; attempt < 31; attempt += 1) {
       const response = await fetch("/api/agent", { method: "POST", body: form });
@@ -311,7 +364,8 @@ export function ReplayWorkspace() {
   }, []);
 
   const prepareAgentCapture = useCallback(async (mode: Mode) => {
-    if (!agentThreadId) { setAgentState("error"); setAgentMessage("먼저 전송할 Codex 작업을 선택해 주세요."); return; }
+    if (deliveryTarget === "codex" && !agentThreadId) { setAgentState("error"); setAgentMessage("먼저 전송할 Codex 작업을 선택해 주세요."); return; }
+    if (deliveryTarget === "claude" && !companionToken) { setAgentState("error"); setAgentMessage("Claude Code로 보내려면 먼저 AirPointer를 켜주세요."); return; }
     if (!stream || !screenVideo.current) { setAgentState("error"); setAgentMessage("먼저 화면 공유를 시작해 주세요."); return; }
     setAgentState("preparing");
     try {
@@ -331,7 +385,7 @@ export function ReplayWorkspace() {
     } catch (reason) {
       setAgentState("error"); setAgentMessage(reason instanceof Error ? reason.message : "화면 맥락을 준비하지 못했습니다.");
     }
-  }, [agentThreadId, captureFrames, sendSeconds, stream]);
+  }, [agentThreadId, captureFrames, companionToken, deliveryTarget, sendSeconds, stream]);
 
   const cancelPendingCapture = useCallback(() => {
     if (agentState === "sending" || agentState === "queued") return;
@@ -343,10 +397,19 @@ export function ReplayWorkspace() {
     const prompt = agentPrompt.trim();
     if (!pendingCapture || !prompt || agentState === "sending" || agentState === "queued") return;
     setAgentState("sending");
-    setAgentMessage("질문과 고정한 화면 맥락을 Codex Agent에 전송하고 있습니다.");
+    setAgentMessage(deliveryTarget === "claude"
+      ? "질문과 고정한 화면 맥락을 Claude Code에 전송하고 있습니다."
+      : "질문과 고정한 화면 맥락을 Codex Agent에 전송하고 있습니다.");
     try {
-      let data: { turnId?: string };
-      if (pendingCapture.mode === "replay") {
+      let data: { turnId?: string; ok?: boolean };
+      if (deliveryTarget === "claude") {
+        // No Replay Capsule (video segments + on-demand frame query) for
+        // Claude yet -- just the overview frames already shown in the
+        // timeline, same as what a "current screen" send uses.
+        const frames = pendingCapture.mode === "replay" ? pendingCapture.capsule.overviewFrames : pendingCapture.frames;
+        const kind = pendingCapture.mode === "replay" ? "replay" : pendingCapture.region ? "region" : "screenshot";
+        data = await postToCompanion(frames, kind, prompt);
+      } else if (pendingCapture.mode === "replay") {
         const { capsule } = pendingCapture;
         const form = new FormData();
         form.set("metadata", JSON.stringify({ threadId: pendingCapture.threadId, mode: pendingCapture.mode, seconds: pendingCapture.seconds, userPrompt: prompt, startedAt: capsule.startedAt, triggeredAt: capsule.triggeredAt, segments: capsule.segments.map(({ startedAt, durationMs, blob }) => ({ startedAt, durationMs, mimeType: blob.type })) }));
@@ -358,11 +421,15 @@ export function ReplayWorkspace() {
       }
       const label = pendingCapture.mode === "replay" ? `최근 ${pendingCapture.seconds}초 Replay Capsule` : pendingCapture.region ? "선택 영역" : "현재 화면";
       setPendingCapture(null); setAgentPrompt(""); setAgentState("done");
-      setAgentMessage(`${label}과 질문을 Codex 작업에 보냈습니다. (${data.turnId})`);
+      setAgentMessage(deliveryTarget === "claude"
+        ? `${label}과 질문을 Claude Code에 보냈습니다.`
+        : `${label}과 질문을 Codex 작업에 보냈습니다. (${data.turnId})`);
     } catch (reason) {
-      setAgentState("error"); setAgentMessage(reason instanceof Error ? reason.message : "Codex Agent 전송에 실패했습니다.");
+      setAgentState("error");
+      setAgentMessage(reason instanceof Error ? reason.message
+        : deliveryTarget === "claude" ? "Claude Desktop 전송에 실패했습니다." : "Codex Agent 전송에 실패했습니다.");
     }
-  }, [agentPrompt, agentState, pendingCapture, postCapsuleToAgent, postToAgent]);
+  }, [agentPrompt, agentState, deliveryTarget, pendingCapture, postCapsuleToAgent, postToAgent, postToCompanion]);
 
   const changeGestureEnabled = useCallback((enabled: boolean) => {
     // External protocols must be opened while the trusted click is still active.
@@ -422,6 +489,11 @@ export function ReplayWorkspace() {
     const timer = window.setTimeout(() => void loadAgentThreads(), 0);
     return () => window.clearTimeout(timer);
   }, [loadAgentThreads]);
+  useEffect(() => {
+    if (deliveryTarget !== "claude") return;
+    const timer = window.setTimeout(() => void loadClaudeThreads(), 0);
+    return () => window.clearTimeout(timer);
+  }, [deliveryTarget, loadClaudeThreads]);
   useEffect(() => {
     if (!pendingCapture) return;
     const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") cancelPendingCapture(); };
@@ -529,9 +601,18 @@ export function ReplayWorkspace() {
           <div className={styles.rule} />
           <label className={styles.field}><span>로컬 버퍼</span><select value={retention} onChange={(event) => setRetention(Number(event.target.value))} disabled={Boolean(stream)}><option value={1}>최근 1분</option><option value={3}>최근 3분</option><option value={5}>최근 5분</option></select></label>
           <label className={styles.field}><span>전송 구간</span><select value={sendSeconds} onChange={(event) => setSendSeconds(Number(event.target.value))}><option value={5}>최근 5초</option><option value={15}>최근 15초</option><option value={30}>최근 30초</option><option value={60}>최근 1분</option></select></label>
-          <label className={styles.field}><span>Codex Agent</span><span className={styles.agentPicker}><select aria-label="전송할 Codex 작업" value={agentThreadId} onChange={(event) => { setAgentThreadId(event.target.value); window.localStorage.setItem("airpointer-agent-thread", event.target.value); setAgentState("idle"); setAgentMessage(event.target.value ? "제스처 전송 준비가 끝났습니다." : "전송할 Codex 작업을 선택해 주세요."); }} disabled={agentState === "loading"}><option value="">작업 선택</option>{agentThreads.map((thread) => <option value={thread.id} key={thread.id}>{thread.status === "active" ? "● " : ""}{thread.title}</option>)}</select><button type="button" onClick={() => void loadAgentThreads()} aria-label="Codex 작업 새로고침"><ArrowClockwise size={15} /></button></span></label>
-          <button className={styles.action} onClick={() => void prepareAgentCapture("replay")} disabled={!stream || !agentThreadId || agentState === "preparing" || agentState === "sending" || agentState === "queued"}><PaperPlaneTilt size={20} weight="bold" /> 최근 {sendSeconds}초 Agent에 묻기</button>
-          <button className={styles.secondary} onClick={() => void prepareAgentCapture("current")} disabled={!stream || !agentThreadId || agentState === "preparing" || agentState === "sending" || agentState === "queued"}><Camera size={18} /> 지금 화면 Agent에 묻기</button>
+          <p className={styles.settingsGroupLabel}>보낼 곳</p>
+          <div className={styles.gestureActions} aria-label="보낼 곳 선택">
+            <LaunchModeOption label="Codex" detail="Codex 작업 선택 후 전송" active={deliveryTarget === "codex"} disabled={false} onSelect={() => setDeliveryTarget("codex")} />
+            <LaunchModeOption label="Claude Code" detail={companionToken ? "Claude Desktop 세션 선택 후 전송" : "AirPointer 연결 필요"} active={deliveryTarget === "claude"} disabled={false} onSelect={() => setDeliveryTarget("claude")} />
+          </div>
+          {deliveryTarget === "codex"
+            ? <label className={styles.field}><span>Codex Agent</span><span className={styles.agentPicker}><select aria-label="전송할 Codex 작업" value={agentThreadId} onChange={(event) => { setAgentThreadId(event.target.value); window.localStorage.setItem("airpointer-agent-thread", event.target.value); setAgentState("idle"); setAgentMessage(event.target.value ? "제스처 전송 준비가 끝났습니다." : "전송할 Codex 작업을 선택해 주세요."); }} disabled={agentState === "loading"}><option value="">작업 선택</option>{agentThreads.map((thread) => <option value={thread.id} key={thread.id}>{thread.status === "active" ? "● " : ""}{thread.title}</option>)}</select><button type="button" onClick={() => void loadAgentThreads()} aria-label="Codex 작업 새로고침"><ArrowClockwise size={15} /></button></span></label>
+            : companionToken
+              ? <label className={styles.field}><span>Claude Session</span><span className={styles.agentPicker}><select aria-label="전송할 Claude 세션" value={claudeThreadId} onChange={(event) => setClaudeThreadId(event.target.value)} disabled={claudeThreadsLoading}><option value="">현재 열려 있는 대화</option>{groupClaudeThreads(claudeThreads).map(([project, threads]) => <optgroup label={project || "기타"} key={project || "__misc__"}>{threads.map((thread) => <option value={thread.id} key={thread.id}>{thread.title}</option>)}</optgroup>)}</select><button type="button" onClick={() => void loadClaudeThreads()} aria-label="Claude 세션 새로고침"><ArrowClockwise size={15} /></button></span></label>
+              : <small className={styles.gestureError}>Claude Desktop으로 보내려면 위에서 AirPointer를 먼저 켜주세요.</small>}
+          <button className={styles.action} onClick={() => void prepareAgentCapture("replay")} disabled={!stream || (deliveryTarget === "codex" ? !agentThreadId : !companionToken) || agentState === "preparing" || agentState === "sending" || agentState === "queued"}><PaperPlaneTilt size={20} weight="bold" /> 최근 {sendSeconds}초 Agent에 묻기</button>
+          <button className={styles.secondary} onClick={() => void prepareAgentCapture("current")} disabled={!stream || (deliveryTarget === "codex" ? !agentThreadId : !companionToken) || agentState === "preparing" || agentState === "sending" || agentState === "queued"}><Camera size={18} /> 지금 화면 Agent에 묻기</button>
           <div className={styles.status} data-tone={agentState === "error" ? "error" : agentState === "done" ? "done" : "normal"}>{agentState === "loading" || agentState === "preparing" || agentState === "sending" || agentState === "queued" ? <CircleNotch className={styles.spin} size={16} /> : agentState === "error" ? <WarningCircle size={16} /> : agentState === "done" ? <Check size={16} /> : <span className={styles.statusDot} />}<div><strong>{agentStateLabel}</strong><span>{agentMessage}</span></div></div>
           <div className={styles.apiDivider}><span>별도 기능</span><b>OPENAI IMAGE ANALYSIS</b></div>
           <button className={styles.secondary} onClick={() => void analyzeWithOpenAI("replay")} disabled={!stream || status === "analyzing"}><ArrowCounterClockwise size={18} /> 최근 {sendSeconds}초 OpenAI 분석</button>
@@ -611,6 +692,20 @@ export function ReplayWorkspace() {
 function formatDuration(ms: number) {
   const seconds = Math.floor(ms / 1_000);
   return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+// AirPointer's companion server already returns Claude threads in
+// project-block order (see App._list_companion_threads / desktop_paste.py's
+// _claude_sidebar_rows), so a simple run-length grouping here reconstructs
+// the sidebar's own grouping -- same idea as main.py's _populate_picker.
+function groupClaudeThreads(threads: ClaudeThread[]): [string, ClaudeThread[]][] {
+  const groups: [string, ClaudeThread[]][] = [];
+  for (const thread of threads) {
+    const last = groups[groups.length - 1];
+    if (last && last[0] === thread.project) last[1].push(thread);
+    else groups.push([thread.project, [thread]]);
+  }
+  return groups;
 }
 
 function GestureActionToggle({ label, detail, checked, disabled, onChange }: { label: string; detail: string; checked: boolean; disabled: boolean; onChange: (checked: boolean) => void }) {

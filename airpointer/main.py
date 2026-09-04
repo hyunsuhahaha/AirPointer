@@ -11,7 +11,9 @@ from PIL import Image, ImageTk
 from .camera import CameraLoop
 from .capture_controller import CaptureController
 from .click_tracker import ClickTracker
-from .codex_delivery import AgentThread, CodexAppServerDelivery, DesktopPasteDelivery
+from .codex_delivery import (
+    AgentThread, CodexAppServerDelivery, DesktopPasteDelivery, resolve_delivery_target,
+)
 from .companion_bridge import CompanionState
 from .command_gesture import CommandEvent, CommandView
 from .conversation_picker import ConversationPicker
@@ -49,7 +51,7 @@ class App:
         self.companion_state = companion_state
         self._last_mode = ""
         self._active_mode: str | None = None
-        self.codex = DesktopPasteDelivery()
+        self.codex = DesktopPasteDelivery(resolve_delivery_target(self.settings.delivery_target))
         # Hides Codex Desktop's first-query UI Automation cold-start cost
         # (20-30s, measured) behind app startup instead of the user's first
         # real send -- see DesktopPasteDelivery.warmup().
@@ -61,6 +63,15 @@ class App:
         self._prompt_window: tk.Toplevel | None = None
         self._prompt_kind: str = "replay"
         self._prompt_paths: tuple[Path, ...] = ()
+        # (pointer_x, pointer_y, window_x, window_y) at drag start, or None
+        # when not dragging -- see _begin_prompt_drag/_do_prompt_drag. Needed
+        # because overrideredirect(True) (below) drops the OS title bar, so
+        # there's nothing left to drag the window by without this.
+        self._prompt_drag_origin: tuple[int, int, int, int] | None = None
+        # (zone, pointer_x, pointer_y, window_x, window_y, width, height) at
+        # resize start, or None -- see _begin_prompt_resize/_do_prompt_resize.
+        # Same overrideredirect(True) reasoning: no OS resize grips either.
+        self._prompt_resize_origin: tuple[str, int, int, int, int, int, int] | None = None
         self._prompt_agent_ids: dict[str, str] = {}
         self.screen_buffer = ScreenReplayBuffer(
             lambda: self.settings.replay_minutes * 60,
@@ -71,6 +82,9 @@ class App:
         self.capture = CaptureController(
             self.screen_buffer, self.codex, lambda: self.settings.replay_seconds,
             self._activity_summary)
+        if self.companion_state:
+            self.companion_state.set_delivery_handler(self._deliver_companion_capture)
+            self.companion_state.set_threads_handler(self._list_companion_threads)
         self.hotkey_listener = HotkeyListener(self._on_hotkey_action, self._resolve_hotkey_bindings)
         self._last_hotkey_hint = ""
         self._region_selector = RegionSelector()
@@ -193,6 +207,16 @@ class App:
         self._combo_setting(frame, "Capture rate", (5, 10, 15), self.settings.capture_fps,
                             lambda value: setattr(self.settings, "capture_fps", int(value)), "FPS")
 
+        ttk.Label(frame, text="SEND TO", foreground="#44e5ff",
+                  font=("Consolas", 10, "bold")).pack(anchor="w", pady=(14, 4))
+        target_var = tk.StringVar(value=self.settings.delivery_target)
+        target_row = ttk.Frame(frame)
+        target_row.pack(fill="x")
+        ttk.Radiobutton(target_row, text="Codex", variable=target_var, value="codex",
+                        command=lambda: self._set_delivery_target(target_var.get())).pack(side="left")
+        ttk.Radiobutton(target_row, text="Claude Code", variable=target_var, value="claude",
+                        command=lambda: self._set_delivery_target(target_var.get())).pack(side="left", padx=(12, 0))
+
         ttk.Label(frame, text="START MODE", foreground="#44e5ff",
                   font=("Consolas", 10, "bold")).pack(anchor="w", pady=(14, 4))
         mode_var = tk.StringVar(value=self.settings.launch_mode)
@@ -218,7 +242,7 @@ class App:
         self.buffer_status = ttk.Label(frame, text="BUFFER STOPPED", foreground="#527f91",
                                        font=("Consolas", 9))
         self.buffer_status.pack(anchor="w", pady=(18, 3))
-        self.delivery_status = ttk.Label(frame, text="CODEX READY", foreground="#527f91",
+        self.delivery_status = ttk.Label(frame, text=f"{self._delivery_tag()} READY", foreground="#527f91",
                                          font=("Consolas", 9), wraplength=320)
         self.delivery_status.pack(anchor="w", pady=(0, 10))
         buttons = ttk.Frame(frame)
@@ -292,6 +316,45 @@ class App:
         if clicks:
             parts.append(f"클릭: {clicks}")
         return "\n".join(parts)
+
+    def _deliver_companion_capture(self, target: str, thread_id: str, prompt: str,
+                                    kind: str, frames: list[str]) -> dict:
+        """Wired to CompanionState.set_delivery_handler -- runs the browser's
+        own screen-share capture (not a gesture/hotkey trigger) through
+        DesktopPasteDelivery, same as AirPointer's own captures, instead of
+        the web app reimplementing Codex/Claude UI automation in Node. Called
+        on CompanionHttpServer's request-handling thread, not the Tk main
+        thread -- touches no Tk state, only self.codex (read-only here) and
+        the filesystem, so that's safe."""
+        import base64
+        import tempfile
+        import uuid
+
+        capture_dir = Path(tempfile.gettempdir()) / "airpointer-companion" / uuid.uuid4().hex
+        capture_dir.mkdir(parents=True, exist_ok=True)
+        paths: list[Path] = []
+        try:
+            for index, data_url in enumerate(frames):
+                header, _, encoded = data_url.partition(",")
+                extension = "png" if "png" in header else "jpg"
+                path = capture_dir / f"frame-{index + 1:02d}.{extension}"
+                path.write_bytes(base64.b64decode(encoded))
+                paths.append(path)
+            delivery = DesktopPasteDelivery(resolve_delivery_target(target))
+            delivery.send(thread_id, prompt, tuple(paths), kind)
+            return {"ok": True}
+        finally:
+            cleanup_paths(tuple(paths))
+
+    @staticmethod
+    def _list_companion_threads(target: str) -> list[dict]:
+        """Wired to CompanionState.set_threads_handler -- lets the browser's
+        own agent picker (replay-workspace.tsx) show conversations grouped
+        by project for either target, same data _build_replay_ui's picker
+        already gets locally via self.codex.list_threads()."""
+        delivery = DesktopPasteDelivery(resolve_delivery_target(target))
+        return [{"id": thread.id, "title": thread.title, "status": thread.status, "project": thread.project}
+                for thread in delivery.list_threads()]
 
     @staticmethod
     def _activate_window(window) -> None:
@@ -455,6 +518,17 @@ class App:
         "replay": "최근 화면 버퍼가 아직 준비되지 않았습니다.",
         "region": "영역을 캡처하지 못했습니다.",
     }
+    _PROMPT_MIN_WIDTH = 340
+    _PROMPT_MIN_HEIGHT = 200
+    _PROMPT_RESIZE_BORDER = 6
+    # Tk's Windows-specific cursor names for each edge/corner zone (see
+    # _prompt_resize_zone) -- "" (the fallback) restores the default arrow.
+    _RESIZE_CURSORS = {
+        "n": "size_ns", "s": "size_ns",
+        "e": "size_we", "w": "size_we",
+        "ne": "size_ne_sw", "sw": "size_ne_sw",
+        "nw": "size_nw_se", "se": "size_nw_se",
+    }
 
     def _begin_capture_prompt(self, kind: str) -> None:
         if self._prompt_window is not None or self._prompt_paths:
@@ -490,16 +564,41 @@ class App:
         window.geometry(f"{width}x{height}+{x}+128")
 
         panel = tk.Frame(window, bg="#11110f", padx=18, pady=16)
-        panel.pack(fill="both", expand=True, padx=2, pady=2)
+        panel.pack(fill="both", expand=True,
+                   padx=self._PROMPT_RESIZE_BORDER, pady=self._PROMPT_RESIZE_BORDER)
         header_row = tk.Frame(panel, bg="#11110f")
         header_row.pack(fill="x")
         self._prompt_header_var = tk.StringVar(value=self._PROMPT_HEADER.get(kind, "CAPTURED"))
-        tk.Label(header_row, textvariable=self._prompt_header_var, bg="#11110f", fg="#ff8a50",
-                 font=("Consolas", 10, "bold")).pack(side="left", anchor="w")
+        header_label = tk.Label(header_row, textvariable=self._prompt_header_var, bg="#11110f", fg="#ff8a50",
+                                font=("Consolas", 10, "bold"))
+        header_label.pack(side="left", anchor="w")
         tk.Button(header_row, text="✕", command=self._cancel_capture_prompt, bg="#11110f",
                  fg="#ff8a50", activebackground="#2a1c14", activeforeground="#ff8a50",
                  relief="flat", bd=0, font=("Consolas", 11, "bold"),
                  cursor="hand2").pack(side="right")
+        # overrideredirect(True) (below) removes the OS title bar, so there's
+        # neither a built-in way to drag this window nor resize grips --
+        # the panel margin and header row/label act as the drag handle
+        # (everything except the close button and the actual input widgets,
+        # which need their own clicks to keep working normally), and the
+        # window's own orange background, only visible as the thin ring
+        # `_PROMPT_RESIZE_BORDER` pixels wide around the panel, is the
+        # resize handle -- same split a normal OS window chrome has between
+        # its title bar and its edges.
+        for draggable in (panel, header_row, header_label):
+            draggable.bind("<ButtonPress-1>", self._begin_prompt_drag)
+            draggable.bind("<B1-Motion>", self._do_prompt_drag)
+            draggable.bind("<ButtonRelease-1>", self._end_prompt_drag)
+        # Only the header itself hints "draggable" visually -- the wider
+        # panel margin is also draggable (see the loop above) but doubles as
+        # padding around the text box/picker, so a move cursor there would
+        # be misleading right up to those widgets' edges.
+        header_row.config(cursor="fleur")
+        header_label.config(cursor="fleur")
+        window.bind("<Motion>", self._on_prompt_border_motion)
+        window.bind("<ButtonPress-1>", self._begin_prompt_resize)
+        window.bind("<B1-Motion>", self._do_prompt_resize)
+        window.bind("<ButtonRelease-1>", self._end_prompt_resize)
         if self.codex.requires_thread_selection:
             placeholder = ("Codex 작업 검색..." if self.codex.requires_explicit_target
                           else "현재 열려 있는 대화 (검색하려면 입력)")
@@ -523,6 +622,81 @@ class App:
         self._prompt_text.focus_set()
         if self.codex.requires_thread_selection:
             self._load_prompt_agents()
+
+    def _begin_prompt_drag(self, event) -> None:
+        window = self._prompt_window
+        if window is None:
+            return
+        self._prompt_drag_origin = (event.x_root, event.y_root, window.winfo_x(), window.winfo_y())
+
+    def _do_prompt_drag(self, event) -> None:
+        window = self._prompt_window
+        if window is None or self._prompt_drag_origin is None:
+            return
+        start_x, start_y, win_x, win_y = self._prompt_drag_origin
+        window.geometry(f"+{win_x + event.x_root - start_x}+{win_y + event.y_root - start_y}")
+
+    def _end_prompt_drag(self, _event=None) -> None:
+        self._prompt_drag_origin = None
+
+    def _prompt_resize_zone(self, window, x: int, y: int) -> str:
+        """Which edge(s) `(x, y)` (window-relative, as Tk event coordinates
+        already are) sits within `_PROMPT_RESIZE_BORDER` of -- "" outside
+        that border, one of n/s/e/w on a flat edge, or a two-letter corner
+        (nw/ne/sw/se) combining two. `window.winfo_width/height` reflect the
+        window's current geometry, not this event's, but the resize border
+        moves with the window so that's exactly what's wanted."""
+        border = self._PROMPT_RESIZE_BORDER
+        near_left, near_right = x <= border, x >= window.winfo_width() - border
+        near_top, near_bottom = y <= border, y >= window.winfo_height() - border
+        vertical = "n" if near_top else "s" if near_bottom else ""
+        horizontal = "w" if near_left else "e" if near_right else ""
+        return vertical + horizontal
+
+    def _on_prompt_border_motion(self, event) -> None:
+        # Only updates the hint cursor -- an active resize (origin set)
+        # keeps whatever cursor it started with instead of flickering as
+        # the pointer briefly crosses zone boundaries mid-drag.
+        if self._prompt_resize_origin is not None:
+            return
+        window = self._prompt_window
+        if window is None:
+            return
+        zone = self._prompt_resize_zone(window, event.x, event.y)
+        window.config(cursor=self._RESIZE_CURSORS.get(zone, ""))
+
+    def _begin_prompt_resize(self, event) -> None:
+        window = self._prompt_window
+        if window is None:
+            return
+        zone = self._prompt_resize_zone(window, event.x, event.y)
+        if not zone:
+            return
+        self._prompt_resize_origin = (zone, event.x_root, event.y_root, window.winfo_x(),
+                                      window.winfo_y(), window.winfo_width(), window.winfo_height())
+
+    def _do_prompt_resize(self, event) -> None:
+        window = self._prompt_window
+        origin = self._prompt_resize_origin
+        if window is None or origin is None:
+            return
+        zone, start_x, start_y, win_x, win_y, win_w, win_h = origin
+        dx, dy = event.x_root - start_x, event.y_root - start_y
+        x, y, width, height = win_x, win_y, win_w, win_h
+        if "e" in zone:
+            width = max(self._PROMPT_MIN_WIDTH, win_w + dx)
+        elif "w" in zone:
+            width = max(self._PROMPT_MIN_WIDTH, win_w - dx)
+            x = win_x + (win_w - width)  # right edge stays put, left edge follows the pointer
+        if "s" in zone:
+            height = max(self._PROMPT_MIN_HEIGHT, win_h + dy)
+        elif "n" in zone:
+            height = max(self._PROMPT_MIN_HEIGHT, win_h - dy)
+            y = win_y + (win_h - height)  # bottom edge stays put, top edge follows the pointer
+        window.geometry(f"{width}x{height}+{x}+{y}")
+
+    def _end_prompt_resize(self, _event=None) -> None:
+        self._prompt_resize_origin = None
 
     def _on_prompt_return(self, event) -> str | None:
         if event.state & 0x0001:
@@ -551,8 +725,8 @@ class App:
         if self._prompt_window is None:
             return
         if error:
-            self._prompt_header_var.set(f"{self._prompt_base_label()} · CODEX ERROR")
-            self._show_native_notice("Codex 작업을 불러오지 못했습니다", error)
+            self._prompt_header_var.set(f"{self._prompt_base_label()} · {self._delivery_tag()} ERROR")
+            self._show_native_notice(f"{self.codex.target.label} 작업을 불러오지 못했습니다", error)
             return
         self._prompt_agent_ids = self._populate_picker(self._prompt_agent_picker, threads)
         labels = list(self._prompt_agent_ids)
@@ -634,6 +808,24 @@ class App:
     def _set_launch_mode(self, mode: str) -> None:
         self.settings.launch_mode = mode
 
+    def _set_delivery_target(self, target_name: str) -> None:
+        """Swaps the live delivery backend so the change takes effect on
+        the very next capture, not just after a restart -- CaptureController
+        reads self.codex fresh on every send (see capture_controller.py),
+        so reassigning both here and on the running controller is enough;
+        no lock needed, this only ever runs on the Tk main thread."""
+        self.settings.delivery_target = target_name
+        self.codex = DesktopPasteDelivery(resolve_delivery_target(target_name))
+        self.capture.codex = self.codex
+        threading.Thread(target=self.codex.warmup, name="airpointer-codex-warmup", daemon=True).start()
+        self._agent_labels = {}
+        self.agent_picker.set_options([])
+        self._agent_thread_id = self.settings.agent_thread_id = self._fallback_target()
+        self.delivery_status.config(text=f"{self._delivery_tag()} READY")
+
+    def _delivery_tag(self) -> str:
+        return self.codex.target.label.split()[0].upper()
+
     def _resolve_hotkey_bindings(self) -> dict[str, str]:
         """Local Settings is the base; whatever the browser has configured
         for this session (see companion_bridge.CompanionState.configure)
@@ -685,7 +877,7 @@ class App:
         if self._refreshing_agents:
             return
         self._refreshing_agents = True
-        self.delivery_status.config(text="LOADING CODEX TASKS")
+        self.delivery_status.config(text=f"LOADING {self._delivery_tag()} TASKS")
 
         def load() -> None:
             try:
@@ -742,19 +934,19 @@ class App:
     def _apply_agents(self, threads: list[AgentThread], error: str) -> None:
         self._refreshing_agents = False
         if error:
-            self.delivery_status.config(text=f"CODEX ERROR • {error}")
+            self.delivery_status.config(text=f"{self._delivery_tag()} ERROR • {error}")
             return
         self._agent_labels = self._populate_picker(self.agent_picker, threads)
         labels = list(self._agent_labels)
         if not labels:
-            self.delivery_status.config(text="NO CODEX TASKS FOUND")
+            self.delivery_status.config(text=f"NO {self._delivery_tag()} TASKS FOUND")
             return
         if self.codex.requires_explicit_target:
             selected = next((label for label, thread_id in self._agent_labels.items()
                              if thread_id == self._agent_thread_id), labels[0])
             self.agent_picker.set_value(selected)
             self._agent_thread_id = self._agent_labels[selected]
-        self.delivery_status.config(text=f"CODEX CONNECTED • {len(labels)} TASKS")
+        self.delivery_status.config(text=f"{self._delivery_tag()} CONNECTED • {len(labels)} TASKS")
 
     def _select_agent(self, label: str) -> None:
         self._agent_thread_id = self._agent_labels.get(label, "") or self._fallback_target()

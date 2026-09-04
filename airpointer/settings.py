@@ -17,6 +17,7 @@ class Settings:
     capture_fps: int = 10
     agent_thread_id: str = ""
     launch_mode: str = "gesture"  # "gesture" (camera) or "hotkey" (no camera)
+    delivery_target: str = "codex"  # "codex" (Codex Desktop) or "claude" (Claude Desktop)
     hotkeys: Bindings = field(default_factory=lambda: dict(DEFAULT_BINDINGS))
 
     @classmethod
