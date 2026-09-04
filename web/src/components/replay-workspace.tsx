@@ -3,10 +3,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowClockwise, ArrowCounterClockwise, Camera, Check, CircleNotch, Desktop, HandPalm, LockKey, PaperPlaneTilt, Play, Stop, WarningCircle, X } from "@phosphor-icons/react";
+import { ArrowClockwise, ArrowCounterClockwise, Camera, Check, CircleNotch, Desktop, Gear, HandPalm, LockKey, PaperPlaneTilt, Play, Stop, WarningCircle, X } from "@phosphor-icons/react";
 import { useCompanionGesture } from "@/hooks/use-companion-gesture";
 import { BrowserReplayBuffer, frameFromVideo } from "@/lib/replay-buffer";
 import type { ReplayCapsule } from "@/lib/replay-buffer";
+import type { PromptTemplate } from "@/lib/prompt-template";
 import styles from "./replay-workspace.module.css";
 
 type Status = "idle" | "recording" | "preparing" | "analyzing" | "done" | "error";
@@ -69,6 +70,12 @@ export function ReplayWorkspace() {
   const [pendingCapture, setPendingCapture] = useState<PendingAgentCapture | null>(null);
   const [agentPrompt, setAgentPrompt] = useState("");
   const [companionMessage, setCompanionMessage] = useState("");
+  const [companionLaunchIssue, setCompanionLaunchIssue] = useState<"missing" | "error" | "">("");
+  const [bootProgress, setBootProgress] = useState(0);
+  const [promptSettingsOpen, setPromptSettingsOpen] = useState(false);
+  const [promptTemplate, setPromptTemplate] = useState<PromptTemplate | null>(null);
+  const [promptSettingsState, setPromptSettingsState] = useState<"idle" | "loading" | "saving" | "error">("idle");
+  const [promptSettingsMessage, setPromptSettingsMessage] = useState("");
 
   const getStageBox = useCallback((): StageBox => {
     if (stageBox) return stageBox;
@@ -220,7 +227,55 @@ export function ReplayWorkspace() {
     }
   }, []);
 
-  const postToAgent = useCallback(async (payload: { threadId: string; mode: Mode; seconds: number; frames: string[]; userPrompt: string }) => {
+  const openPromptSettings = useCallback(async () => {
+    setPromptSettingsOpen(true);
+    setPromptSettingsState("loading");
+    setPromptSettingsMessage("");
+    try {
+      const response = await fetch("/api/prompt-settings", { cache: "no-store" });
+      const data = await response.json() as { template?: PromptTemplate; error?: string };
+      if (!response.ok || !data.template) throw new Error(data.error || "설정을 불러오지 못했습니다.");
+      setPromptTemplate(data.template);
+      setPromptSettingsState("idle");
+    } catch (reason) {
+      setPromptSettingsState("error");
+      setPromptSettingsMessage(reason instanceof Error ? reason.message : "설정을 불러오지 못했습니다.");
+    }
+  }, []);
+
+  const savePromptSettings = useCallback(async () => {
+    if (!promptTemplate) return;
+    setPromptSettingsState("saving");
+    setPromptSettingsMessage("");
+    try {
+      const response = await fetch("/api/prompt-settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(promptTemplate) });
+      const data = await response.json() as { saved?: boolean; error?: string };
+      if (!response.ok || !data.saved) throw new Error(data.error || "설정을 저장하지 못했습니다.");
+      setPromptSettingsState("idle");
+      setPromptSettingsMessage("저장했습니다. 다음 전송부터 적용됩니다.");
+    } catch (reason) {
+      setPromptSettingsState("error");
+      setPromptSettingsMessage(reason instanceof Error ? reason.message : "설정을 저장하지 못했습니다.");
+    }
+  }, [promptTemplate]);
+
+  const resetPromptSettings = useCallback(async () => {
+    setPromptSettingsState("saving");
+    setPromptSettingsMessage("");
+    try {
+      const response = await fetch("/api/prompt-settings", { method: "DELETE" });
+      const data = await response.json() as { template?: PromptTemplate; error?: string };
+      if (!response.ok || !data.template) throw new Error(data.error || "초기화하지 못했습니다.");
+      setPromptTemplate(data.template);
+      setPromptSettingsState("idle");
+      setPromptSettingsMessage("기본값으로 되돌렸습니다.");
+    } catch (reason) {
+      setPromptSettingsState("error");
+      setPromptSettingsMessage(reason instanceof Error ? reason.message : "초기화하지 못했습니다.");
+    }
+  }, []);
+
+  const postToAgent = useCallback(async (payload: { threadId: string; mode: Mode; kind: "screenshot" | "region"; seconds: number; frames: string[]; userPrompt: string }) => {
     for (let attempt = 0; attempt < 31; attempt += 1) {
       const response = await fetch("/api/agent", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       const data = await response.json() as { delivered?: boolean; queued?: boolean; turnId?: string; error?: string };
@@ -288,7 +343,7 @@ export function ReplayWorkspace() {
         capsule.segments.forEach((segment, index) => form.append("segment", segment.blob, `segment-${String(index + 1).padStart(3, "0")}.webm`));
         data = await postCapsuleToAgent(form);
       } else {
-        data = await postToAgent({ threadId: pendingCapture.threadId, mode: pendingCapture.mode, seconds: pendingCapture.seconds, frames: pendingCapture.frames, userPrompt: prompt });
+        data = await postToAgent({ threadId: pendingCapture.threadId, mode: pendingCapture.mode, kind: pendingCapture.region ? "region" : "screenshot", seconds: pendingCapture.seconds, frames: pendingCapture.frames, userPrompt: prompt });
       }
       const label = pendingCapture.mode === "replay" ? `최근 ${pendingCapture.seconds}초 Replay Capsule` : pendingCapture.region ? "선택 영역" : "현재 화면";
       setPendingCapture(null); setAgentPrompt(""); setAgentState("done");
@@ -302,7 +357,9 @@ export function ReplayWorkspace() {
     // External protocols must be opened while the trusted click is still active.
     // Calling this later from the asynchronous camera-ready callback is blocked by Chrome.
     const token = enabled ? window.crypto.randomUUID() : companionToken;
-    launchAirPointer(enabled ? "start" : "quit", token);
+    setCompanionLaunchIssue("");
+    const outcome = launchAirPointer(enabled ? "start" : "quit", token);
+    if (enabled && outcome) void outcome.then((issue) => setCompanionLaunchIssue(issue || ""));
     setCompanionToken(enabled ? token : "");
     setGestureEnabled(enabled);
     setCompanionMessage(enabled ? "AirPointer를 시작하고 있습니다." : "");
@@ -312,7 +369,31 @@ export function ReplayWorkspace() {
     setGestureActions((current) => ({ ...current, [action]: enabled }));
   }, []);
 
-  const { pose, progress: gestureProgress, preview: companionPreview, selection: gestureSelection, error: gestureError, ready: companionReady } = useCompanionGesture({ enabled: gestureEnabled, token: companionToken, agentThreadId, gestures: gestureActions });
+  const { pose, progress: gestureProgress, preview: companionPreview, selection: gestureSelection, error: gestureError, ready: companionReady, connected: companionConnected } = useCompanionGesture({ enabled: gestureEnabled, token: companionToken, agentThreadId, gestures: gestureActions });
+
+  // Reset the boot-progress estimate the moment the switch turns off, during
+  // render rather than as a setState call inside the effect below.
+  const [trackedGestureEnabled, setTrackedGestureEnabled] = useState(gestureEnabled);
+  if (gestureEnabled !== trackedGestureEnabled) {
+    setTrackedGestureEnabled(gestureEnabled);
+    if (!gestureEnabled) setBootProgress(0);
+  }
+
+  useEffect(() => {
+    // No real progress signal exists for the exe-launch portion (PyInstaller
+    // onefile extraction happens before the companion's HTTP server can even
+    // answer), so that part is an elapsed-time estimate -- eases toward 96%
+    // and never claims 100% on its own. Camera warm-up after that point does
+    // have a real signal (companionReady, which folds in state.cameraReady),
+    // so 100% is reserved for that actually being true, not just guessed.
+    if (!gestureEnabled || companionReady) return;
+    const startedAt = Date.now();
+    const timer = window.setInterval(() => {
+      const elapsed = Date.now() - startedAt;
+      setBootProgress(Math.round(96 * (1 - Math.exp(-elapsed / 3200))));
+    }, 100);
+    return () => window.clearInterval(timer);
+  }, [gestureEnabled, companionReady]);
 
   useEffect(() => {
     if (!stream) return;
@@ -335,6 +416,18 @@ export function ReplayWorkspace() {
   const bufferPercent = Math.min(100, (elapsed / (retention * 60_000)) * 100);
   const timeLabel = formatDuration(elapsed);
   const stateLabel = useMemo(() => ({ idle: "대기", recording: "로컬 기록 중", preparing: "프레임 준비", analyzing: "AI 분석 중", done: "분석 완료", error: "확인 필요" })[status], [status]);
+  // companionLaunchIssue comes straight from the local spawn attempt (we know
+  // for certain whether AirPointer.exe was even found), so it's authoritative
+  // over the generic 30s connection-timeout message from useCompanionGesture.
+  // Off localhost we have no such signal -- the OS protocol call gives no
+  // feedback -- so a timeout there is genuinely ambiguous and still worth
+  // suggesting a download for.
+  const companionStatus = useMemo(() => {
+    if (companionLaunchIssue === "missing") return { text: "AirPointer.exe를 찾을 수 없습니다.", showDownload: true };
+    if (companionLaunchIssue === "error") return { text: "AirPointer 실행에 실패했습니다. 잠시 후 다시 시도해 주세요.", showDownload: false };
+    if (gestureError) return { text: gestureError, showDownload: !isLocalCompanion() };
+    return null;
+  }, [companionLaunchIssue, gestureError]);
   const agentStateLabel = useMemo(() => ({ loading: "연결 중", idle: "AGENT 대기", preparing: "맥락 고정 중", drafting: "프롬프트 대기", sending: "AGENT 전송 중", queued: "AGENT 전송 대기", done: "AGENT 전송 완료", error: "AGENT 확인 필요" })[agentState], [agentState]);
 
   return (
@@ -381,15 +474,15 @@ export function ReplayWorkspace() {
         </div>
 
         <aside className={styles.commandDock}>
-          <p className={styles.eyebrow}>REPLAY TO AGENT</p>
-          <div className={`${styles.cameraPanel} ${styles.commandCamera}`}>{companionPreview && <img src={companionPreview} alt="AirPointer 카메라 미리보기" />}<div className={styles.cameraHud}><span><HandPalm size={16} /> {pose === "palm" ? "손바닥 인식" : pose === "fist" ? "주먹 인식" : pose === "point" ? "검지 인식" : pose === "none" ? "손 찾는 중" : "동작 대기"}</span><span>CAM 01 · EXE</span></div>{gestureEnabled && gestureProgress.phase !== "idle" && gestureSelection.phase === "idle" && <div className={styles.gestureTimer} data-active role="progressbar" aria-label="제스처 유지 시간" aria-valuemin={0} aria-valuemax={1} aria-valuenow={gestureProgress.value}><div className={styles.gestureTimerRing} style={{ background: `conic-gradient(var(--accent) ${gestureProgress.value * 360}deg, rgba(255,255,255,.14) 0deg)` }}><span><b>{Math.round(gestureProgress.value * 100)}</b></span></div><p>손바닥 2초</p></div>}</div>
+          <div className={styles.eyebrowRow}><p className={styles.eyebrow}>REPLAY TO AGENT</p><button type="button" className={styles.settingsButton} onClick={() => void openPromptSettings()} aria-label="프롬프트 설정"><Gear size={15} /></button></div>
+          <div className={`${styles.cameraPanel} ${styles.commandCamera}`} data-connected={gestureEnabled && companionReady}>{companionPreview && <img src={companionPreview} alt="AirPointer 카메라 미리보기" />}{gestureEnabled && !companionReady && <div className={styles.cameraLoading} role="status">{companionStatus ? <><WarningCircle size={26} /><p>{companionStatus.text}</p>{companionStatus.showDownload && <a href={AIRPOINTER_DOWNLOAD_URL}>AirPointer 다운로드</a>}</> : <><CircleNotch className={styles.spin} size={26} /><p>{companionConnected ? "카메라 준비 중" : "AirPointer 연결 중"}… {bootProgress}%</p><div className={styles.cameraLoadingBar} aria-hidden="true"><span style={{ width: `${bootProgress}%` }} /></div></>}</div>}<div className={styles.cameraHud}><span><HandPalm size={16} /> {!gestureEnabled ? "동작 대기" : !companionConnected ? "AirPointer 연결 대기 중" : !companionReady ? "카메라 준비 중" : pose === "palm" ? "손바닥 인식" : pose === "fist" ? "주먹 인식" : pose === "point" ? "검지 인식" : pose === "none" ? "손 찾는 중" : "동작 대기"}</span><span>{gestureEnabled && companionReady ? "CAM 01 · EXE" : "EXE 연결 안 됨"}</span></div>{gestureEnabled && gestureProgress.phase !== "idle" && gestureSelection.phase === "idle" && <div className={styles.gestureTimer} data-active role="progressbar" aria-label="제스처 유지 시간" aria-valuemin={0} aria-valuemax={1} aria-valuenow={gestureProgress.value}><div className={styles.gestureTimerRing} style={{ background: `conic-gradient(var(--accent) ${gestureProgress.value * 360}deg, rgba(255,255,255,.14) 0deg)` }}><span><b>{Math.round(gestureProgress.value * 100)}</b></span></div><p>손바닥 2초</p></div>}</div>
           <div className={styles.gestureControls}><label className={styles.switch}><input type="checkbox" checked={gestureEnabled} onChange={(event) => changeGestureEnabled(event.target.checked)} /><span /><b>{gestureEnabled ? "제스처 + AirPointer 켜짐" : "제스처 + AirPointer 켜기"}</b></label><a className={styles.downloadLink} href={AIRPOINTER_DOWNLOAD_URL}>AirPointer 처음이신가요? 다운로드</a></div>
           <div className={styles.gestureActions} aria-label="제스처별 설정">
             <GestureActionToggle label="손바닥 2초" detail="15초 REPLAY" checked={gestureActions.replay} disabled={!gestureEnabled} onChange={(value) => setGestureAction("replay", value)} />
             <GestureActionToggle label="손바닥 → 주먹" detail="현재 화면" checked={gestureActions.screenshot} disabled={!gestureEnabled} onChange={(value) => setGestureAction("screenshot", value)} />
             <GestureActionToggle label="주먹 → 손바닥" detail="영역 선택" checked={gestureActions.region} disabled={!gestureEnabled} onChange={(value) => setGestureAction("region", value)} />
           </div>
-          {(gestureError || (!companionReady && companionMessage)) && <small className={styles.gestureError}>{gestureError || companionMessage}{gestureError && <> <a href={AIRPOINTER_DOWNLOAD_URL}>AirPointer 다운로드</a></>}</small>}
+          {(companionStatus || (!companionReady && companionMessage)) && <small className={styles.gestureError}>{companionStatus ? companionStatus.text : companionMessage}{companionStatus?.showDownload && <> <a href={AIRPOINTER_DOWNLOAD_URL}>AirPointer 다운로드</a></>}</small>}
           <div className={styles.rule} />
           <label className={styles.field}><span>로컬 버퍼</span><select value={retention} onChange={(event) => setRetention(Number(event.target.value))} disabled={Boolean(stream)}><option value={1}>최근 1분</option><option value={3}>최근 3분</option><option value={5}>최근 5분</option></select></label>
           <label className={styles.field}><span>전송 구간</span><select value={sendSeconds} onChange={(event) => setSendSeconds(Number(event.target.value))}><option value={5}>최근 5초</option><option value={15}>최근 15초</option><option value={30}>최근 30초</option><option value={60}>최근 1분</option></select></label>
@@ -436,12 +529,35 @@ export function ReplayWorkspace() {
 
       <AnimatePresence>
         {pendingCapture && <motion.div className={styles.promptBackdrop} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-          <motion.section className={styles.promptDialog} role="dialog" aria-modal="true" aria-labelledby="agent-prompt-title" initial={{ opacity: 0, y: 24, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 16, scale: .98 }}>
-            <div className={styles.promptHeader}><div><p>CAPTURE LOCKED · NOT SENT</p><h2 id="agent-prompt-title">Agent에게 무엇을 물어볼까요?</h2></div><button type="button" onClick={cancelPendingCapture} disabled={agentState === "sending" || agentState === "queued"} aria-label="질문 창 닫기"><X size={20} /></button></div>
-            <div className={styles.captureSummary}><span>{pendingCapture.mode === "replay" ? `최근 ${pendingCapture.seconds}초 맥락` : pendingCapture.region ? "선택 영역" : "현재 화면"}</span><b>{pendingCapture.mode === "replay" ? `${pendingCapture.capsule.overviewFrames.length}개 개요 + 원본 구간` : "1개 화면"}</b></div>
+          <motion.section className={styles.promptDialog} role="dialog" aria-modal="true" aria-label="Agent에게 질문" initial={{ opacity: 0, y: 24, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 16, scale: .98 }}>
+            <div className={styles.promptHeader}><button type="button" onClick={cancelPendingCapture} disabled={agentState === "sending" || agentState === "queued"} aria-label="질문 창 닫기"><X size={20} /></button></div>
+            <p className={styles.captureSummary}>{pendingCapture.mode === "replay" ? `최근 ${pendingCapture.seconds}초 맥락 · ${pendingCapture.capsule.overviewFrames.length}개 개요 + 원본 구간` : pendingCapture.region ? "선택 영역" : "현재 화면"}</p>
             <div className={styles.promptChoices} aria-label="추천 질문">{PROMPT_PRESETS.map((preset) => <button type="button" key={preset} onClick={() => setAgentPrompt(preset)} aria-pressed={agentPrompt === preset}>{preset}</button>)}</div>
             <label className={styles.promptInput}><span>직접 질문</span><textarea autoFocus value={agentPrompt} maxLength={2000} placeholder="예: 0.5초 전에 잠깐 뜬 오류가 뭐였고 어떻게 해결해?" onChange={(event) => setAgentPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void submitPendingCapture(); } }} /></label>
             <div className={styles.promptFooter}><p><b>{agentPrompt.length}</b> / 2000 · Enter 전송 · Shift+Enter 줄바꿈</p><div><button type="button" className={styles.promptCancel} onClick={cancelPendingCapture} disabled={agentState === "sending" || agentState === "queued"}>취소</button><button type="button" className={styles.promptSend} onClick={() => void submitPendingCapture()} disabled={!agentPrompt.trim() || agentState === "sending" || agentState === "queued"}>{agentState === "sending" || agentState === "queued" ? <CircleNotch className={styles.spin} size={17} /> : <PaperPlaneTilt size={17} weight="bold" />} 질문과 함께 전송</button></div></div>
+          </motion.section>
+        </motion.div>}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {promptSettingsOpen && <motion.div className={styles.promptBackdrop} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+          <motion.section className={styles.promptDialog} role="dialog" aria-modal="true" aria-labelledby="prompt-settings-title" initial={{ opacity: 0, y: 24, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 16, scale: .98 }}>
+            <div className={styles.promptHeader}><div><p>PROMPT TEMPLATE</p><h2 id="prompt-settings-title">Codex에게 보낼 프롬프트 설정</h2></div><button type="button" onClick={() => setPromptSettingsOpen(false)} aria-label="설정 창 닫기"><X size={20} /></button></div>
+            <p className={styles.settingsHint}>매번 직접 입력하는 질문(요청) 내용은 여기서 바꿀 수 없습니다. 그 질문을 감싸는 문구만 편집합니다.</p>
+            {promptSettingsState === "loading" && <div className={styles.settingsLoading}><CircleNotch className={styles.spin} size={20} /> 불러오는 중…</div>}
+            {promptTemplate && promptSettingsState !== "loading" && <div className={styles.settingsForm}>
+              <label className={styles.settingsField}><span>도입 문구</span><input type="text" value={promptTemplate.wrapperIntro} onChange={(event) => setPromptTemplate({ ...promptTemplate, wrapperIntro: event.target.value })} /></label>
+              <label className={styles.settingsField}><span>마무리 문구</span><input type="text" value={promptTemplate.wrapperOutro} onChange={(event) => setPromptTemplate({ ...promptTemplate, wrapperOutro: event.target.value })} /></label>
+              <p className={styles.settingsGroupLabel}>상황별 맥락 설명</p>
+              {(["screenshot", "region", "replay"] as const).map((kind) => <label className={styles.settingsField} key={`context-${kind}`}><span>{{ screenshot: "현재 화면", region: "선택 영역", replay: "최근 화면 기록" }[kind]}</span><input type="text" value={promptTemplate.contextByKind[kind]} onChange={(event) => setPromptTemplate({ ...promptTemplate, contextByKind: { ...promptTemplate.contextByKind, [kind]: event.target.value } })} /></label>)}
+              <p className={styles.settingsGroupLabel}>질문을 안 남겼을 때 기본 질문</p>
+              {(["screenshot", "region", "replay"] as const).map((kind) => <label className={styles.settingsField} key={`default-${kind}`}><span>{{ screenshot: "현재 화면", region: "선택 영역", replay: "최근 화면 기록" }[kind]}</span><input type="text" value={promptTemplate.defaultRequestByKind[kind]} onChange={(event) => setPromptTemplate({ ...promptTemplate, defaultRequestByKind: { ...promptTemplate.defaultRequestByKind, [kind]: event.target.value } })} /></label>)}
+              <p className={styles.settingsGroupLabel}>Replay Capsule 전용 (손바닥 2초 홀드로 보낼 때)</p>
+              <label className={styles.settingsField}><span>도입 문구 · <code>{"{seconds}"}</code> 사용 가능</span><input type="text" value={promptTemplate.capsuleIntro} onChange={(event) => setPromptTemplate({ ...promptTemplate, capsuleIntro: event.target.value })} /></label>
+              <label className={styles.settingsField}><span>조회 안내 문구</span><textarea value={promptTemplate.capsuleInstruction} onChange={(event) => setPromptTemplate({ ...promptTemplate, capsuleInstruction: event.target.value })} /></label>
+            </div>}
+            {promptSettingsMessage && <p className={styles.settingsMessage} data-tone={promptSettingsState === "error" ? "error" : "normal"}>{promptSettingsMessage}</p>}
+            <div className={styles.promptFooter}><p>편집 즉시 저장되지 않습니다.</p><div><button type="button" className={styles.promptCancel} onClick={() => void resetPromptSettings()} disabled={promptSettingsState === "loading" || promptSettingsState === "saving"}>기본값으로 초기화</button><button type="button" className={styles.promptSend} onClick={() => void savePromptSettings()} disabled={!promptTemplate || promptSettingsState === "loading" || promptSettingsState === "saving"}>{promptSettingsState === "saving" ? <CircleNotch className={styles.spin} size={17} /> : <Check size={17} weight="bold" />} 저장</button></div></div>
           </motion.section>
         </motion.div>}
       </AnimatePresence>
@@ -460,18 +576,31 @@ function GestureActionToggle({ label, detail, checked, disabled, onChange }: { l
   return <label className={styles.gestureAction} data-active={checked && !disabled}><span><b>{label}</b><small>{detail}</small></span><input type="checkbox" checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} /><i>{checked ? "ON" : "OFF"}</i></label>;
 }
 
-function launchAirPointer(command: "start" | "quit", token: string) {
-  if (["localhost", "127.0.0.1", "::1"].includes(window.location.hostname)) {
-    void fetch("/api/companion", {
+const isLocalCompanion = () => typeof window !== "undefined" && ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+
+// Local dev spawns AirPointer.exe directly and can tell us exactly why that
+// failed (missing file vs. some other spawn error); returns undefined when
+// there's nothing more specific to say (production, or the "quit" command).
+function launchAirPointer(command: "start" | "quit", token: string): Promise<"missing" | "error" | undefined> | undefined {
+  if (isLocalCompanion()) {
+    const request = fetch("/api/companion", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ command, token }),
     });
-    return;
+    if (command !== "start") { void request; return undefined; }
+    return request
+      .then(async (response) => {
+        if (response.ok) return undefined;
+        const body = await response.json().catch(() => ({}) as { error?: string });
+        return /ENOENT|no such file/i.test(body.error || "") ? "missing" : "error";
+      })
+      .catch(() => "error" as const);
   }
   // This is an external OS protocol, not an internal Next.js route.
   // eslint-disable-next-line @next/next/no-location-assign-relative-destination
   window.location.href = `${AIRPOINTER_PROTOCOL}${command}?token=${encodeURIComponent(token)}`;
+  return undefined;
 }
 
 function dataUrlToBlob(value: string) {

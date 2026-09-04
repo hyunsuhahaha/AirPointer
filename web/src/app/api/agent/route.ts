@@ -3,8 +3,9 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NextResponse } from "next/server";
-import { CodexBusyError, getCodexAppServer } from "@/lib/codex-app-server";
+import { CodexAppServer, CodexBusyError } from "@/lib/codex-app-server";
 import { hasCodexDesktopBridge, listDesktopThreads, sendDesktopMessage } from "@/lib/codex-desktop-bridge";
+import { loadPromptTemplate } from "@/lib/prompt-template";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,9 +15,12 @@ const MAX_TOTAL_CHARS = 7_500_000;
 const MAX_CAPSULE_BYTES = 48 * 1024 * 1024;
 const MAX_PROMPT_CHARS = 2_000;
 
+type CaptureKind = "screenshot" | "region" | "replay";
+
 type PreparedCapture = {
   threadId: string;
   mode: "current" | "replay";
+  kind: CaptureKind;
   seconds: number;
   userPrompt: string;
   imagePaths: string[];
@@ -24,12 +28,22 @@ type PreparedCapture = {
 };
 
 export async function GET() {
+  const desktop = hasCodexDesktopBridge();
+  if (desktop) {
+    try {
+      return NextResponse.json({ available: true, transport: "desktop", threads: await listDesktopThreads() });
+    } catch (error) {
+      return NextResponse.json({ available: false, threads: [], error: messageOf(error) }, { status: 503 });
+    }
+  }
+  const client = new CodexAppServer();
   try {
-    const desktop = hasCodexDesktopBridge();
-    const threads = desktop ? await listDesktopThreads() : await getCodexAppServer().listThreads();
-    return NextResponse.json({ available: true, transport: desktop ? "desktop" : "app-server", threads });
+    const threads = await client.listThreads();
+    return NextResponse.json({ available: true, transport: "app-server", threads });
   } catch (error) {
     return NextResponse.json({ available: false, threads: [], error: messageOf(error) }, { status: 503 });
+  } finally {
+    client.close();
   }
 }
 
@@ -40,14 +54,14 @@ export async function POST(request: Request) {
     const prepared = request.headers.get("content-type")?.includes("multipart/form-data")
       ? await prepareCapsule(request, captureDir)
       : await prepareImageCapture(request, captureDir);
-    const prompt = makePrompt(prepared);
+    const prompt = await makePrompt(prepared);
     let result: { turnId?: string };
     if (hasCodexDesktopBridge()) {
       const pathList = prepared.imagePaths.map((path, index) => `${index + 1}. ${path}`).join("\n");
       await sendDesktopMessage(prepared.threadId, `${prompt}\n\n아래 로컬 이미지 파일을 순서대로 view_image로 여세요.\n${pathList}`);
       result = {};
     } else {
-      result = await getCodexAppServer().send(prepared.threadId, prompt, prepared.imagePaths);
+      result = await new CodexAppServer().send(prepared.threadId, prompt, prepared.imagePaths);
     }
     scheduleCleanup(captureDir, prepared.capsule ? 60 : 15);
     return NextResponse.json({ delivered: true, turnId: result.turnId || "queued-by-codex-app", frameCount: prepared.imagePaths.length, capsule: prepared.capsule ? { segmentCount: prepared.capsule.segmentCount, expiresInMinutes: 60 } : undefined });
@@ -69,7 +83,7 @@ async function prepareImageCapture(request: Request, captureDir: string): Promis
     await writeFile(path, parsed.data);
     return path;
   }));
-  return { threadId: body.threadId, mode: body.mode, seconds: body.seconds, userPrompt: body.userPrompt.trim(), imagePaths };
+  return { threadId: body.threadId, mode: body.mode, kind: body.kind || "screenshot", seconds: body.seconds, userPrompt: body.userPrompt.trim(), imagePaths };
 }
 
 async function prepareCapsule(request: Request, captureDir: string): Promise<PreparedCapture> {
@@ -107,23 +121,37 @@ async function prepareCapsule(request: Request, captureDir: string): Promise<Pre
   const manifestPath = join(captureDir, "replay-manifest.json");
   const helperPath = join(process.cwd(), "scripts", "replay-frame.mjs");
   await writeFile(manifestPath, JSON.stringify({ version: 1, createdAt: Date.now(), startedAt: metadata.startedAt, triggeredAt: metadata.triggeredAt, seconds: metadata.seconds, overviewPaths: imagePaths, segments, frameQuery: { helperPath, commandExample: `node "${helperPath}" "${manifestPath}" -0.5`, description: "마지막 숫자는 제스처 기준 상대 초입니다. 음수는 이전 화면이며 여러 값을 한 번에 전달할 수 있습니다." } }, null, 2), "utf8");
-  return { threadId: metadata.threadId, mode: "replay", seconds: metadata.seconds, userPrompt: metadata.userPrompt.trim(), imagePaths, capsule: { manifestPath, segmentCount: segments.length, triggeredAt: metadata.triggeredAt } };
+  return { threadId: metadata.threadId, mode: "replay", kind: "replay", seconds: metadata.seconds, userPrompt: metadata.userPrompt.trim(), imagePaths, capsule: { manifestPath, segmentCount: segments.length, triggeredAt: metadata.triggeredAt } };
 }
 
-function makePrompt(capture: PreparedCapture) {
-  if (!capture.capsule) return `AirPointer가 사용자가 확정한 현재 화면과 질문을 보냈습니다.
+// Single source of truth for prompt wording: both the browser (JSON or
+// multipart, below) and the AirPointer.exe companion (JSON, via its own
+// /api/agent POST) funnel through here. The native app used to compose its
+// own Korean context sentence and send that as userPrompt, which this
+// function then wrapped in its own template -- producing a nested, doubled
+// prompt whenever a capture came from AirPointer instead of the browser.
+// AirPointer now sends the raw question (or nothing) plus `kind`, same as
+// the browser, so there is exactly one place that decides what Codex sees.
+// Everything here except the user's own typed question is editable from the
+// browser's prompt-settings dialog (see /api/prompt-settings).
+async function makePrompt(capture: PreparedCapture) {
+  const template = await loadPromptTemplate();
+  const userPrompt = capture.userPrompt || template.defaultRequestByKind[capture.kind];
+  if (!capture.capsule) return `${template.wrapperIntro}
+
+맥락: ${template.contextByKind[capture.kind]}
 
 사용자의 요청:
-${capture.userPrompt}
+${userPrompt}
 
-첨부 화면을 확인하고 위 요청에 답하세요.`;
+${template.wrapperOutro}`;
   const helperPath = join(process.cwd(), "scripts", "replay-frame.mjs");
-  return `AirPointer가 사용자가 확정한 질문과, 제스처 시점을 기준으로 최근 ${capture.seconds}초 작업 맥락을 Replay Capsule로 보냈습니다.
+  return `${template.capsuleIntro.replace("{seconds}", String(capture.seconds))}
 
 사용자의 요청:
-${capture.userPrompt}
+${userPrompt}
 
-먼저 첨부된 개요 타임시트를 시간순으로 확인하세요. 개요만 보고 장면이 없다고 결론 내리지 마세요. 필요한 순간이 없거나 더 자세히 봐야 하면 아래 원본 조회 명령으로 정확한 시점의 전체 해상도 프레임을 복원한 뒤 출력된 framePath를 view_image로 여세요.
+${template.capsuleInstruction}
 
 Replay Capsule manifest: ${capture.capsule.manifestPath}
 원본 구간 수: ${capture.capsule.segmentCount}
@@ -133,13 +161,19 @@ Replay Capsule manifest: ${capture.capsule.manifestPath}
 마지막 숫자는 제스처 완료 시점 기준 상대 초입니다. 예를 들어 -0.5는 0.5초 전입니다. 위 요청에 필요한 장면이 개요에 없다면 인접 시점을 추가 조회한 뒤 답하세요. 캡슐은 60분 후 자동 삭제됩니다.`;
 }
 
-type AgentPayload = { threadId: string; mode: "current" | "replay"; seconds: number; frames: string[]; userPrompt: string };
+type AgentPayload = { threadId: string; mode: "current" | "replay"; kind?: CaptureKind; seconds: number; frames: string[]; userPrompt: string };
 type CapsuleMetadata = { threadId: string; mode: "replay"; seconds: number; userPrompt: string; startedAt: number; triggeredAt: number; segments: Array<{ startedAt: number; durationMs: number; mimeType: string }> };
 
 function isPayload(value: unknown): value is AgentPayload {
   if (!value || typeof value !== "object") return false;
   const body = value as Record<string, unknown>;
-  return typeof body.threadId === "string" && body.threadId.length > 0 && isPrompt(body.userPrompt) && (body.mode === "current" || body.mode === "replay") && typeof body.seconds === "number" && Number.isFinite(body.seconds) && Array.isArray(body.frames) && body.frames.length > 0 && body.frames.every((frame) => typeof frame === "string" && /^data:image\/(jpeg|png);base64,/.test(frame));
+  // Unlike the capsule path, userPrompt may be empty here: AirPointer's
+  // gesture-triggered instant captures (no prompt dialog) send one, and
+  // makePrompt() fills in a kind-appropriate default when it's blank.
+  return typeof body.threadId === "string" && body.threadId.length > 0 && isOptionalPrompt(body.userPrompt)
+    && (body.mode === "current" || body.mode === "replay")
+    && (body.kind === undefined || ["screenshot", "region", "replay"].includes(body.kind as string))
+    && typeof body.seconds === "number" && Number.isFinite(body.seconds) && Array.isArray(body.frames) && body.frames.length > 0 && body.frames.every((frame) => typeof frame === "string" && /^data:image\/(jpeg|png);base64,/.test(frame));
 }
 
 function isCapsuleMetadata(value: unknown): value is CapsuleMetadata {
@@ -154,6 +188,10 @@ function isCapsuleMetadata(value: unknown): value is CapsuleMetadata {
 
 function isPrompt(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.length <= MAX_PROMPT_CHARS;
+}
+
+function isOptionalPrompt(value: unknown): value is string {
+  return typeof value === "string" && value.length <= MAX_PROMPT_CHARS;
 }
 
 function parseDataUrl(value: string) {

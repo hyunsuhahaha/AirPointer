@@ -61,13 +61,35 @@ export class CodexAppServer {
     if (!threadId) throw new Error("전송할 Codex 작업을 선택해 주세요.");
     if (!imagePaths.length) throw new Error("전송할 화면이 없습니다.");
 
-    const read = await this.request("thread/read", { threadId, includeTurns: false });
-    const thread = isObject(read.thread) ? read.thread : {};
-    const status = isObject(thread.status) && typeof thread.status.type === "string" ? thread.status.type : "unknown";
-    if (status === "active") throw new CodexBusyError();
+    try {
+      const read = await this.request("thread/read", { threadId, includeTurns: false });
+      const thread = isObject(read.thread) ? read.thread : {};
+      const status = isObject(thread.status) && typeof thread.status.type === "string" ? thread.status.type : "unknown";
+      if (status === "active") throw new CodexBusyError();
 
-    await this.request("thread/resume", { threadId, excludeTurns: true });
-    return this.startTurn(threadId, prompt, imagePaths);
+      try {
+        await this.request("thread/resume", { threadId, excludeTurns: true });
+      } catch (error) {
+        // thread/read can also report a thread as idle a moment before another
+        // writer actually attaches to it -- thread/resume is where that race
+        // surfaces.
+        if (error instanceof Error && /active writer/i.test(error.message)) throw new CodexBusyError();
+        throw error;
+      }
+      const turn = await this.startTurn(threadId, prompt, imagePaths);
+      // This process is what's actually running the turn -- closing it any
+      // sooner would abort the turn mid-flight. Closing it once the turn
+      // finishes is what releases the writer lock back to Codex Desktop/CLI.
+      this.scheduleClose(turn.turnId);
+      return turn;
+    } catch (error) {
+      this.close();
+      throw error;
+    }
+  }
+
+  private scheduleClose(turnId: string) {
+    this.waitForTurn("", turnId).catch(() => undefined).finally(() => this.close());
   }
 
   async sendToLoadedThread(threadId: string, prompt: string, imagePaths: string[]): Promise<{ turnId: string }> {
@@ -142,6 +164,11 @@ export class CodexAppServer {
     const child = spawn(process.env.CODEX_EXECUTABLE || "codex", ["app-server", "--stdio"], {
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"],
+      // On Windows, npm-installed CLIs resolve to a .cmd shim; spawning that
+      // directly without a shell throws ENOENT (bare "codex", PATH lookup
+      // skips .cmd) or EINVAL (full path to the .cmd itself) depending on
+      // how it's referenced. Only cmd.exe can execute a .cmd file.
+      shell: process.platform === "win32",
     });
     this.process = child;
     createInterface({ input: child.stdout }).on("line", (line) => this.handleLine(line));
@@ -154,6 +181,8 @@ export class CodexAppServer {
     try {
       await this.requestStarted("initialize", {
         clientInfo: { name: "airpointer_web", title: "AirPointer Web", version: "0.4.0" },
+        // thread/resume.excludeTurns (used by send()) is gated behind this.
+        capabilities: { experimentalApi: true },
       });
       this.write({ method: "initialized", params: {} });
     } catch (error) {
@@ -239,13 +268,6 @@ export class CodexAppServer {
     }
     this.turnWaiters.clear();
   }
-}
-
-let singleton: CodexAppServer | null = null;
-
-export function getCodexAppServer() {
-  singleton ??= new CodexAppServer();
-  return singleton;
 }
 
 function isObject(value: unknown): value is JsonObject {

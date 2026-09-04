@@ -25,6 +25,23 @@ export function useCompanionGesture({ enabled, token, agentThreadId, gestures }:
   const [preview, setPreview] = useState("");
   const [error, setError] = useState("");
   const [readyToken, setReadyToken] = useState("");
+  // Distinct from `ready` (companion running AND camera warmed up): this only
+  // tracks whether the companion's status server has ever answered at all,
+  // so the UI can tell "AirPointer isn't running" apart from "it's running
+  // but hasn't spotted a hand yet" -- both would otherwise look identical
+  // (pose stuck at its "none" default).
+  const [connected, setConnected] = useState(false);
+  // Reset `connected` the moment a new poll session starts (enabled flips on,
+  // or the token changes) so a stale "connected" from a previous session
+  // never leaks into the first render of a new one. Done during render --
+  // React's supported way to adjust state when an input changes -- rather
+  // than as a setState call inside the effect below.
+  const sessionKey = enabled ? token : "";
+  const [trackedSessionKey, setTrackedSessionKey] = useState(sessionKey);
+  if (sessionKey !== trackedSessionKey) {
+    setTrackedSessionKey(sessionKey);
+    setConnected(false);
+  }
 
   useEffect(() => {
     if (!enabled || !token) {
@@ -32,7 +49,7 @@ export function useCompanionGesture({ enabled, token, agentThreadId, gestures }:
     }
     let cancelled = false;
     let timer = 0;
-    let failures = 0;
+    let firstFailureAt = 0;
     let syncedAgentThreadId: string | null = null;
     const localProxy = ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
     const statusUrl = localProxy ? `/api/companion?token=${encodeURIComponent(token)}` : `http://127.0.0.1:47822/status?token=${encodeURIComponent(token)}`;
@@ -53,13 +70,20 @@ export function useCompanionGesture({ enabled, token, agentThreadId, gestures }:
           syncedAgentThreadId = agentThreadId;
         }
         if (cancelled) return;
-        failures = 0; setError(""); setReadyToken(state.running && state.cameraReady ? token : ""); setPose(state.pose); setPreview(state.preview);
+        firstFailureAt = 0; setError(""); setConnected(true); setReadyToken(state.running && state.cameraReady ? token : ""); setPose(state.pose); setPreview(state.preview);
         const palmActive = state.route === "replay" && (state.phase === "arming" || state.phase === "armed");
         setProgress(palmActive ? { phase: "holding", value: state.progress, command: null } : IDLE_PROGRESS);
       } catch {
         setReadyToken("");
-        failures += 1;
-        if (failures >= 300 && !cancelled) setError("AirPointer를 시작하지 못했습니다. EXE 파일과 카메라 상태를 확인해 주세요.");
+        if (!firstFailureAt) firstFailureAt = Date.now();
+        // A freshly built/downloaded AirPointer.exe is a PyInstaller onefile
+        // bundle: Windows extracts it to a temp dir AND, being an unrecognized
+        // binary, Defender/SmartScreen scans it before it's allowed to run at
+        // all -- both can genuinely take minutes on a cold start, well past
+        // any reasonable "did the process even launch" check. Erroring out
+        // early here was a false positive: the exe was still coming up and
+        // would connect fine seconds later, self-clearing this same error.
+        if (Date.now() - firstFailureAt >= 180_000 && !cancelled) setError("AirPointer를 시작하지 못했습니다. EXE 파일과 카메라 상태를 확인해 주세요.");
       } finally {
         if (!cancelled) timer = window.setTimeout(poll, 100);
       }
@@ -75,5 +99,6 @@ export function useCompanionGesture({ enabled, token, agentThreadId, gestures }:
     selection: IDLE_SELECTION,
     error: enabled ? error : "",
     ready: enabled && readyToken === token,
+    connected: enabled && connected,
   };
 }
