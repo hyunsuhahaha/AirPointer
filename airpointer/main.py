@@ -10,13 +10,19 @@ from PIL import Image, ImageTk
 
 from .camera import CameraLoop
 from .capture_controller import CaptureController
-from .codex_delivery import AgentThread, CodexAppServer
+from .codex_delivery import AgentThread, CodexAppServerDelivery, DesktopPasteDelivery
 from .companion_bridge import CompanionState
 from .command_gesture import CommandEvent, CommandView
 from .overlay import Overlay
 from .region_selection import RegionSelector, SelectionView
 from .screen_buffer import ScreenReplayBuffer, cleanup_paths
 from .settings import Settings
+
+# DesktopPasteDelivery doesn't target a specific thread by id -- it always
+# sends to whatever Codex Desktop currently has focused -- so there's no
+# real thread id to store/select. This placeholder just satisfies
+# CaptureController's "a target must be chosen" check.
+DESKTOP_PASTE_TARGET = "desktop"
 
 
 class App:
@@ -37,13 +43,14 @@ class App:
         self._pose = "none"
         self.companion_state = companion_state
         self._last_mode = ""
-        self._agent_thread_id = self.settings.agent_thread_id
+        self.codex = DesktopPasteDelivery()
+        self._agent_thread_id = (self.settings.agent_thread_id
+                                  if self.codex.requires_thread_selection else DESKTOP_PASTE_TARGET)
         self._agent_labels: dict[str, str] = {}
         self._refreshing_agents = False
         self._prompt_window: tk.Toplevel | None = None
         self._prompt_paths: tuple[Path, ...] = ()
         self._prompt_agent_ids: dict[str, str] = {}
-        self.codex = CodexAppServer()
         self.screen_buffer = ScreenReplayBuffer(
             lambda: self.settings.replay_minutes * 60,
             lambda: self.settings.capture_fps,
@@ -63,7 +70,13 @@ class App:
         self.overlay.canvas.bind("<ButtonPress-3>", self._cancel_region_select)
         self._build_ui()
         self.root.update_idletasks()
-        self.root.geometry(f"390x{self.root.winfo_reqheight()}")
+        # Explicit position, not just size: an unpositioned Toplevel's default
+        # placement is up to Windows/Tk and isn't guaranteed to land on the
+        # primary monitor. This window is normally hidden (start_hidden), but
+        # _on_callback_exception can deiconify it on an unrelated error, so
+        # pin it to primary's top-left rather than risk it surfacing wherever
+        # the OS felt like putting it.
+        self.root.geometry(f"390x{self.root.winfo_reqheight()}+40+40")
         self.root.protocol("WM_DELETE_WINDOW", self._close)
         self.root.report_callback_exception = self._on_callback_exception
         self.root.after(16, self._redraw)
@@ -75,8 +88,17 @@ class App:
         # Tk behaviour of printing to stderr is invisible. Surface failures
         # (camera/MediaPipe init, gesture handling, delivery, ...) as a
         # visible notice and bring the window back so the user can see it.
+        import os
         import traceback
-        detail = "".join(traceback.format_exception(_exc_type, exc_value, exc_tb))[-1500:]
+        full_detail = "".join(traceback.format_exception(_exc_type, exc_value, exc_tb))
+        try:
+            log_path = Path(os.environ.get("LOCALAPPDATA", ".")) / "AirPointer" / "ui-error.log"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write(f"--- {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n{full_detail}\n")
+        except OSError:
+            pass
+        detail = full_detail[-1500:]
         try:
             self.root.deiconify()
             self.root.lift()
@@ -133,11 +155,15 @@ class App:
     def _build_replay_ui(self, frame) -> None:
         ttk.Label(frame, text="AGENT TARGET", foreground="#44e5ff",
                   font=("Consolas", 10, "bold")).pack(anchor="w", pady=(0, 6))
-        self.agent_var = tk.StringVar(value="Select a Codex task")
-        self.agent_combo = ttk.Combobox(frame, textvariable=self.agent_var, state="readonly", width=36)
-        self.agent_combo.pack(fill="x")
-        self.agent_combo.bind("<<ComboboxSelected>>", self._select_agent)
-        ttk.Button(frame, text="Refresh Tasks", command=self._refresh_agents).pack(fill="x", pady=(6, 14))
+        if self.codex.requires_thread_selection:
+            self.agent_var = tk.StringVar(value="Select a Codex task")
+            self.agent_combo = ttk.Combobox(frame, textvariable=self.agent_var, state="readonly", width=36)
+            self.agent_combo.pack(fill="x")
+            self.agent_combo.bind("<<ComboboxSelected>>", self._select_agent)
+            ttk.Button(frame, text="Refresh Tasks", command=self._refresh_agents).pack(fill="x", pady=(6, 14))
+        else:
+            ttk.Label(frame, text="● 현재 열려 있는 Codex 대화", foreground="#74f7c5",
+                      font=("Consolas", 10)).pack(anchor="w", pady=(0, 14))
 
         replay_var = tk.BooleanVar(value=self.settings.replay_enabled)
         ttk.Checkbutton(frame, text="Screen Replay Buffer", variable=replay_var,
@@ -267,7 +293,7 @@ class App:
     def _close(self) -> None:
         self._cancel_replay_prompt()
         self._cancel_region_select()
-        self.camera.stop()
+        self.camera.close()
         self.capture.close()
         self.settings.agent_thread_id = self._agent_thread_id
         self.settings.save()
@@ -371,9 +397,14 @@ class App:
                  relief="flat", bd=0, font=("Consolas", 11, "bold"),
                  cursor="hand2").pack(side="right")
         self._prompt_agent_var = tk.StringVar(value="Codex 작업 불러오는 중…")
-        self._prompt_agent_combo = ttk.Combobox(panel, textvariable=self._prompt_agent_var,
-                                                state="readonly", width=58)
-        self._prompt_agent_combo.pack(fill="x", pady=(14, 10))
+        if self.codex.requires_thread_selection:
+            self._prompt_agent_combo = ttk.Combobox(panel, textvariable=self._prompt_agent_var,
+                                                    state="readonly", width=58)
+            self._prompt_agent_combo.pack(fill="x", pady=(14, 10))
+        else:
+            self._prompt_agent_var.set("● 현재 열려 있는 Codex 대화")
+            tk.Label(panel, textvariable=self._prompt_agent_var, bg="#11110f", fg="#74f7c5",
+                     font=("Consolas", 10)).pack(anchor="w", pady=(14, 10))
 
         self._prompt_text = tk.Text(panel, height=8, wrap="word", bg="#090908", fg="#f5f1e8",
                                     insertbackground="#ff6b22", selectbackground="#7a3418",
@@ -386,7 +417,8 @@ class App:
         window.lift()
         window.focus_force()
         self._prompt_text.focus_set()
-        self._load_prompt_agents()
+        if self.codex.requires_thread_selection:
+            self._load_prompt_agents()
 
     def _on_prompt_return(self, event) -> str | None:
         if event.state & 0x0001:
@@ -430,10 +462,13 @@ class App:
         if self._prompt_window is None:
             return
         prompt = self._prompt_text.get("1.0", "end").strip()
-        thread_id = self._prompt_agent_ids.get(self._prompt_agent_var.get(), "")
-        if not thread_id:
-            self._prompt_header_var.set("REPLAY CAPTURED · SELECT CONVERSATION")
-            return
+        if self.codex.requires_thread_selection:
+            thread_id = self._prompt_agent_ids.get(self._prompt_agent_var.get(), "")
+            if not thread_id:
+                self._prompt_header_var.set("REPLAY CAPTURED · SELECT CONVERSATION")
+                return
+        else:
+            thread_id = DESKTOP_PASTE_TARGET
         if not prompt:
             self._prompt_header_var.set("REPLAY CAPTURED · ENTER PROMPT")
             return
@@ -487,7 +522,7 @@ class App:
             self.screen_buffer.stop(clear=True)
 
     def _refresh_agents_once(self, replay_selected: bool) -> None:
-        if replay_selected and not self._agent_labels:
+        if replay_selected and self.codex.requires_thread_selection and not self._agent_labels:
             self._refresh_agents()
 
     def _refresh_agents(self) -> None:

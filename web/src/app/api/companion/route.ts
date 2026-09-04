@@ -1,4 +1,5 @@
 import { access } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { createConnection } from "node:net";
@@ -59,14 +60,43 @@ export async function POST(request: Request) {
   }
 
   if (payload.command === "quit") {
-    const stopped = await stopRunningCompanion(payload.token);
+    const stopped = await sendControlCommand("quit", payload.token);
     return NextResponse.json({ stopped });
   }
 
-  const executable = resolve(process.cwd(), "..", "portable", "AirPointer.exe");
+  // The Python side is also supposed to defer to an already-running instance
+  // instead of opening a second window, but that has proven unreliable in
+  // practice (multiple overlapping AirPointer windows/overlays). Check here
+  // first, authoritatively, so this route never spawns a second process
+  // while one is already listening -- only fall through to spawning a fresh
+  // one when nothing answers the control port at all.
+  if (await sendControlCommand("start", payload.token)) {
+    return NextResponse.json({ launched: true }, { status: 202 });
+  }
+
+  const repoRoot = resolve(process.cwd(), "..");
+  const protocolArg = `airpointer://${payload.command}?token=${encodeURIComponent(payload.token)}`;
   try {
+    // Dev convenience: prefer running the live Python source over the
+    // portable build when it's present in the repo, so "AirPointer 켜기"
+    // always reflects whatever's actually in airpointer/ right now instead
+    // of whatever was last packaged into portable/AirPointer.exe (which
+    // silently goes stale the moment the source changes).
+    const sourceLauncher = resolve(repoRoot, "airpointer_launcher.py");
+    if (existsSync(sourceLauncher)) {
+      const child = spawn(process.env.PYTHON_EXECUTABLE || "python", [sourceLauncher, protocolArg], {
+        cwd: repoRoot,
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      child.unref();
+      return NextResponse.json({ launched: true }, { status: 202 });
+    }
+
+    const executable = resolve(repoRoot, "portable", "AirPointer.exe");
     await access(executable);
-    const child = spawn(executable, [`airpointer://${payload.command}?token=${encodeURIComponent(payload.token)}`], {
+    const child = spawn(executable, [protocolArg], {
       detached: true,
       stdio: "ignore",
       windowsHide: true,
@@ -78,18 +108,18 @@ export async function POST(request: Request) {
   }
 }
 
-function stopRunningCompanion(token: string): Promise<boolean> {
-  return new Promise((resolveStop) => {
+function sendControlCommand(command: "start" | "quit", token: string): Promise<boolean> {
+  return new Promise((resolveCommand) => {
     const socket = createConnection({ host: "127.0.0.1", port: 47821 });
     let settled = false;
     const finish = (value: boolean) => {
       if (settled) return;
       settled = true;
       socket.destroy();
-      resolveStop(value);
+      resolveCommand(value);
     };
     socket.setTimeout(1_500, () => finish(false));
-    socket.once("connect", () => socket.write(`quit ${token}\n`));
+    socket.once("connect", () => socket.write(`${command} ${token}\n`));
     socket.once("data", (data) => finish(data.toString("ascii").trim() === "OK"));
     socket.once("error", () => finish(false));
   });

@@ -19,13 +19,22 @@ class CodexBusyError(RuntimeError):
     pass
 
 
-class CodexAppServer:
+DEFAULT_PROMPTS = {
+    "screenshot": "화면에서 발생한 문제를 분석해 주세요.",
+    "region": "이 영역을 중심으로 문제를 분석해 주세요.",
+    "replay": "화면 변화를 분석해 원인과 해결 방법을 알려 주세요.",
+}
+
+
+class CodexAppServerDelivery:
     """Sends capture requests through the local AirPointer web app's
     `/api/agent` route instead of spawning a Codex App Server subprocess
     directly. AirPointer.exe is an unsigned, frequently-rebuilt binary, so
     Windows Smart App Control tends to block it from launching child
     processes; the web app (already running for the browser companion,
     port 3000 by default) already has a working path to Codex."""
+
+    requires_thread_selection = True
 
     def __init__(self, base_url: str = "http://127.0.0.1:3000", request_timeout: float = 45.0) -> None:
         self.base_url = base_url.rstrip("/")
@@ -40,12 +49,14 @@ class CodexAppServer:
                                        str(item.get("status", "unknown"))))
         return threads
 
-    def send(self, thread_id: str, prompt: str, images: tuple[Path, ...]) -> None:
+    def send(self, thread_id: str, prompt: str, images: tuple[Path, ...],
+              kind: str = "screenshot") -> None:
         if not thread_id:
             raise RuntimeError("Select an Agent target first")
         body = {
             "threadId": thread_id,
             "mode": "current",
+            "kind": kind,
             "seconds": 0,
             "frames": [_to_data_url(path) for path in images],
             "userPrompt": prompt,
@@ -73,6 +84,31 @@ class CodexAppServer:
             raise RuntimeError(
                 f"AirPointer 웹 서버({self.base_url})에 연결할 수 없습니다. "
                 f"`npm run dev`가 실행 중인지 확인하세요. ({error.reason})") from error
+
+
+class DesktopPasteDelivery:
+    """Delivers captures via clipboard + OS keyboard automation into
+    whatever Codex conversation is already open on screen (see
+    desktop_paste.py), instead of any Codex protocol -- no writer lock to
+    steal, nothing to corrupt. `thread_id` is accepted only for interface
+    compatibility with CodexAppServerDelivery; there's no thread to target,
+    it's whatever Codex Desktop currently has focused."""
+
+    requires_thread_selection = False
+
+    def list_threads(self, cwd: str | None = None) -> list[AgentThread]:
+        return []
+
+    def send(self, thread_id: str, prompt: str, images: tuple[Path, ...],
+              kind: str = "screenshot") -> None:
+        if not images:
+            raise RuntimeError("전송할 화면이 없습니다.")
+        from . import desktop_paste
+        default_prompt = DEFAULT_PROMPTS.get(kind, DEFAULT_PROMPTS["screenshot"])
+        desktop_paste.paste_capture_and_ask(images, prompt.strip() or default_prompt)
+
+    def close(self) -> None:
+        pass
 
 
 def _read_json(error: urllib.error.HTTPError) -> dict:

@@ -34,6 +34,9 @@ class CameraLoop:
         self.is_selecting = is_selecting or (lambda: False)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._tracker: HandTracker | None = None
+        self._tracker_lock = threading.Lock()
+        self._preload_tracker()
 
     @property
     def running(self) -> bool:
@@ -47,10 +50,43 @@ class CameraLoop:
         self._thread.start()
 
     def stop(self) -> None:
+        """Stops tracking but keeps the loaded HandTracker warm -- only the
+        camera device is released. Reloading mediapipe's model on every
+        start/stop toggle was the dominant cost in "camera 준비 중" taking
+        so long; the model itself doesn't need reloading, just the camera."""
         self._stop.set()
         self.on_frame(None, CommandView(), "none")
         if self._thread and self._thread is not threading.current_thread():
             self._thread.join(timeout=1.0)
+
+    def close(self) -> None:
+        """Full shutdown, releasing the HandTracker too -- call this once
+        when AirPointer itself is exiting, not on an ordinary stop()."""
+        self.stop()
+        with self._tracker_lock:
+            tracker, self._tracker = self._tracker, None
+        if tracker is not None:
+            tracker.close()
+
+    def _preload_tracker(self) -> None:
+        """Loads mediapipe's model in the background the moment AirPointer
+        starts (while the app is just sitting hidden/idle), so the first
+        "start tracking" doesn't have to pay that cost -- by the time the
+        user actually starts tracking, it's very likely already warm."""
+        def load() -> None:
+            tracker = HandTracker()
+            with self._tracker_lock:
+                if self._tracker is None:
+                    self._tracker = tracker
+                    return
+            tracker.close()  # lost the race against _get_tracker(); don't leak it
+        threading.Thread(target=load, name="airpointer-tracker-preload", daemon=True).start()
+
+    def _get_tracker(self) -> HandTracker:
+        with self._tracker_lock:
+            if self._tracker is None:
+                self._tracker = HandTracker()
+            return self._tracker
 
     def _run(self) -> None:
         try:
@@ -71,7 +107,7 @@ class CameraLoop:
         capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 360)
         capture.set(cv2.CAP_PROP_FPS, 60)
         capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        tracker = HandTracker()
+        tracker = self._get_tracker()
         commands = CommandGesture()
         try:
             while not self._stop.is_set() and capture.isOpened():
@@ -96,12 +132,19 @@ class CameraLoop:
                 self.on_frame(_make_preview(frame, raw_points, pose, command), command, pose)
         finally:
             self.on_frame(None, CommandView(), "none")
-            tracker.close()
             capture.release()
 
     def _open_camera(self):
-        """Open a Windows camera even when a browser has just requested access."""
-        backends = (cv2.CAP_MSMF, cv2.CAP_DSHOW)
+        """Open a Windows camera even when a browser has just requested access.
+        DSHOW first: opening plus the FOURCC/WIDTH/HEIGHT/FPS property
+        negotiation that follows measured ~2.5s total, vs. ~8-9s for the
+        same sequence under MSMF (each .set() call apparently triggers a
+        full pipeline renegotiation under MSMF on this hardware). MSMF stays
+        as the fallback for whatever DSHOW-can't-open scenario it was
+        originally chosen first for (e.g. a browser tab already holding the
+        camera via getUserMedia -- MSMF's Frame Server can share access in
+        cases DSHOW's exclusive-open can't)."""
+        backends = (cv2.CAP_DSHOW, cv2.CAP_MSMF)
         while not self._stop.is_set():
             for backend in backends:
                 capture = cv2.VideoCapture(self.settings.camera_index, backend)

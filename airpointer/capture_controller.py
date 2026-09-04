@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal
 
-from .codex_delivery import CodexAppServer, CodexBusyError
+from .codex_delivery import CodexAppServerDelivery, CodexBusyError, DesktopPasteDelivery
 from .region_selection import Region
 from .screen_buffer import ScreenReplayBuffer, cleanup_paths
 
@@ -22,7 +22,8 @@ class DeliveryStatus:
 
 
 class CaptureController:
-    def __init__(self, screen_buffer: ScreenReplayBuffer, codex: CodexAppServer,
+    def __init__(self, screen_buffer: ScreenReplayBuffer,
+                 codex: CodexAppServerDelivery | DesktopPasteDelivery,
                  replay_seconds: Callable[[], int]) -> None:
         self.buffer = screen_buffer
         self.codex = codex
@@ -109,18 +110,16 @@ class CaptureController:
 
     def _deliver(self, kind: CaptureKind, thread_id: str, paths: tuple[Path, ...],
                  user_prompt: str | None = None) -> None:
-        context = ("선택한 화면 영역을 캡처했습니다."
-                   if kind == "region" else "현재 화면을 캡처했습니다."
-                   if kind == "screenshot" else
-                   "제스처 완료 시점 기준 최근 화면 기록입니다. 첨부 이미지는 과거에서 현재 순서입니다.")
-        default_request = ("이 영역을 중심으로 문제를 분석해 주세요." if kind == "region" else
-                           "화면에서 발생한 문제를 분석해 주세요." if kind == "screenshot" else
-                           "화면 변화를 분석해 원인과 해결 방법을 알려 주세요.")
-        prompt = f"{context}\n\n사용자의 요청:\n{user_prompt or default_request}"
+        # The actual context sentence and default question live server-side
+        # (web/src/app/api/agent/route.ts's makePrompt/CAPTURE_CONTEXT), keyed
+        # off `kind`, exactly like a browser-originated capture -- so sending
+        # the same request from AirPointer or from the website produces the
+        # same prompt instead of AirPointer double-wrapping its own text
+        # inside the server's template.
         self._set_status("SENDING", f"{len(paths)} image(s)")
         while not self._stop.is_set():
             try:
-                self.codex.send(thread_id, prompt, paths)
+                self.codex.send(thread_id, (user_prompt or "").strip(), paths, kind)
             except CodexBusyError as error:
                 self._set_status("QUEUED", str(error))
                 self._stop.wait(2.0)

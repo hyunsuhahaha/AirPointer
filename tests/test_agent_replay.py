@@ -8,7 +8,7 @@ import numpy as np
 from PIL import Image
 
 from airpointer import codex_delivery
-from airpointer.codex_delivery import CodexAppServer, CodexBusyError
+from airpointer.codex_delivery import CodexAppServerDelivery, CodexBusyError
 from airpointer.command_gesture import CommandGesture
 from airpointer.region_selection import RegionSelector
 from airpointer.screen_buffer import ScreenReplayBuffer, Segment, _evenly_spaced
@@ -160,7 +160,7 @@ def test_settings_round_trip(tmp_path: Path) -> None:
 def test_codex_send_posts_frames_as_data_urls(tmp_path: Path) -> None:
     image = tmp_path / "screen.png"
     image.write_bytes(b"png")
-    server = CodexAppServer()
+    server = CodexAppServerDelivery()
     calls = []
 
     def request(method, path, body=None):
@@ -177,7 +177,7 @@ def test_codex_send_posts_frames_as_data_urls(tmp_path: Path) -> None:
 
 
 def test_codex_busy_response_raises_busy_error(monkeypatch) -> None:
-    server = CodexAppServer()
+    server = CodexAppServerDelivery()
 
     def fake_urlopen(_request, timeout=None):
         body = json.dumps({"queued": True, "error": "Agent is busy; capture is queued"}).encode("utf-8")
@@ -193,7 +193,7 @@ def test_codex_busy_response_raises_busy_error(monkeypatch) -> None:
 
 
 def test_codex_connection_failure_mentions_dev_server(monkeypatch) -> None:
-    server = CodexAppServer()
+    server = CodexAppServerDelivery()
 
     def fake_urlopen(_request, timeout=None):
         raise urllib.error.URLError("Connection refused")
