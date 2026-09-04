@@ -32,7 +32,7 @@ Python 3.11 권장(MediaPipe 호환 범위가 가장 안정적):
 py -3.11 -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
-python -m airpointer.main
+python airpointer_launcher.py
 ```
 
 ## 웹 버전 실행 및 배포
@@ -74,15 +74,21 @@ Vercel에서는 Root Directory를 `web`으로 지정하고 `OPENAI_API_KEY`를 �
 - 1초 MP4 조각으로 구성된 로컬 화면 순환 버퍼(기본 3분, 250MB 상한)
 - 주먹→손바닥으로 영역 선택 모드 진입, 이후 실제 마우스 클릭 드래그로 영역 지정 및 확정(오른쪽 클릭 취소)
 - 손바닥 유지 최근 5/15/30/60초 전송
-- Codex 작업 선택과 로컬 이미지 첨부, 바쁜 작업 자동 대기 및 실패 재시도
+- Codex 대화 검색 선택(기본값은 현재 Codex Desktop에 열려 있는 대화)과 이미지 첨부,
+  전송 실패 시 수동 재시도(`Retry Send`)
 
 ## Agent Replay
 
-네이티브 앱은 자체적으로 Codex App Server를 띄우지 않고, `web/`이 이미 사용 중인 로컬
-Codex 연결(`http://127.0.0.1:3000/api/agent`)을 그대로 사용합니다. 그래서 **`npm run dev`로
-web 앱이 켜져 있어야** `Agent Replay` 탭에서 작업 목록을 불러오고 전송할 수 있습니다
-(AirPointer.exe가 매 빌드마다 서명 없는 새 바이너리가 되면서 Windows 스마트 앱 컨트롤이 자식
-프로세스 실행을 막는 경우가 있어, 그 경로를 아예 쓰지 않도록 했습니다). `Agent Replay` 탭을
-열어 `Refresh Tasks`로 작업을 불러온 뒤 전송 대상을 선택하세요. 화면 버퍼는 AirPointer 추적을
-시작할 때 켜지고 중지 또는 종료 시 삭제됩니다. Agent에는 MP4 원본 대신 시간순 핵심 PNG 프레임
-6장이 전달됩니다. 화면 우측 상단의 `BUFFER` HUD로 기록 여부를 항상 확인할 수 있습니다.
+네이티브 앱은 Codex CLI/App Server나 web 앱의 HTTP 연결을 전혀 쓰지 않습니다. 대신 화면
+캡처를 클립보드에 넣고 Codex Desktop 입력창에 실제 Ctrl+V와 Enter를 보내는 방식으로
+전달합니다(사람이 직접 붙여넣는 것과 동일한 입력) — 그래서 **`npm run dev`가 켜져 있을
+필요가 없고**, Codex 스레드의 writer lock을 가로채거나 다른 앱에서 "열려 있음" 상태가 되는
+문제도 생기지 않습니다.
+
+**대신 Codex Desktop 앱이 실행 중이어야 합니다.** `Agent Replay` 탭에서 `Refresh Tasks`를
+누르면 Codex Desktop 사이드바의 대화 목록을 그대로 읽어와 검색 가능한 목록으로 보여줍니다.
+검색창을 비워두면(기본값) 지금 Codex Desktop에서 열려 있는 대화로 그대로 전송되고, 대화
+이름을 검색해 고르면 전송 직전에 Codex Desktop이 그 대화로 자동 전환된 뒤 전송됩니다. 화면
+버퍼는 AirPointer 추적을 시작할 때 켜지고 중지 또는 종료 시 삭제됩니다. Agent에는 시간순
+핵심 PNG 프레임 최대 6장이 한 번에 첨부됩니다. 화면 우측 상단의 `BUFFER` HUD로 기록 여부를
+항상 확인할 수 있습니다.
