@@ -2,8 +2,9 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowClockwise, ArrowCounterClockwise, Camera, Check, CircleNotch, Desktop, Gear, HandPalm, LockKey, PaperPlaneTilt, Play, Stop, WarningCircle, X } from "@phosphor-icons/react";
+import { ArrowClockwise, ArrowCounterClockwise, Camera, CaretDown, Check, CircleNotch, Desktop, DotsSixVertical, Gear, HandPalm, LockKey, MagnifyingGlass, PaperPlaneTilt, Play, Stop, WarningCircle, X } from "@phosphor-icons/react";
 import { useCompanionGesture } from "@/hooks/use-companion-gesture";
 import type { HotkeyBindings } from "@/hooks/use-companion-gesture";
 import { BrowserReplayBuffer, frameFromVideo } from "@/lib/replay-buffer";
@@ -21,6 +22,15 @@ type DeliveryTarget = "codex" | "claude";
 // sidebar doesn't surface those the way Codex's App Server does), but has
 // `project` for the same grouped-picker UX as Codex Agent below.
 type ClaudeThread = { id: string; title: string; status: string; project: string };
+// Shape SessionPicker actually renders -- both AgentThread (Codex, grouped
+// by cwd's basename below since Codex's API has no project concept of its
+// own) and ClaudeThread (already carries `project`) get mapped into this
+// before reaching the picker, so it only has to know one shape. `active` is
+// optional since only Codex's status is ever meaningful here (Claude's
+// DesktopPasteDelivery threads always report "unknown" -- see
+// project_airpointer_claude_code_target memory -- so it's never worth
+// mapping ClaudeThread.status into this at all).
+type PickerThread = { id: string; title: string; project: string; active?: boolean };
 type PendingAgentCapture =
   | { mode: "current"; threadId: string; seconds: number; frames: string[]; region?: boolean }
   | { mode: "replay"; threadId: string; seconds: number; capsule: ReplayCapsule };
@@ -253,6 +263,23 @@ export function ReplayWorkspace() {
     }
   }, []);
 
+  const handleAgentThreadChange = useCallback((id: string) => {
+    setAgentThreadId(id);
+    window.localStorage.setItem("airpointer-agent-thread", id);
+    setAgentState("idle");
+    setAgentMessage(id ? "제스처 전송 준비가 끝났습니다." : "전송할 Codex 작업을 선택해 주세요.");
+  }, []);
+
+  // Codex's AgentThread has no `project` -- grouped by its `cwd`'s
+  // basename instead (see pathBasename/groupPickerThreads) so SessionPicker
+  // only ever deals with one thread shape regardless of source.
+  const codexPickerThreads = useMemo<PickerThread[]>(
+    () => agentThreads.map((thread) => ({
+      id: thread.id, title: thread.title, project: pathBasename(thread.cwd), active: thread.status === "active",
+    })),
+    [agentThreads],
+  );
+
   const openPromptSettings = useCallback(async () => {
     setPromptSettingsOpen(true);
     setPromptSettingsState("loading");
@@ -451,7 +478,7 @@ export function ReplayWorkspace() {
     setHotkeyBindings((current) => ({ ...current, [action]: combo }));
   }, []);
 
-  const { pose, progress: gestureProgress, preview: companionPreview, selection: gestureSelection, error: gestureError, ready: companionReady, connected: companionConnected, activeMode } = useCompanionGesture({ enabled: gestureEnabled, token: companionToken, agentThreadId, gestures: gestureActions, hotkeys: hotkeyBindings });
+  const { pose, progress: gestureProgress, preview: companionPreview, selection: gestureSelection, error: gestureError, ready: companionReady, connected: companionConnected, activeMode } = useCompanionGesture({ enabled: gestureEnabled, token: companionToken, agentThreadId, gestures: gestureActions, hotkeys: hotkeyBindings, deliveryTarget });
   const hotkeyMode = activeMode ? activeMode === "hotkey" : launchMode === "hotkey";
 
   // Reset the boot-progress estimate the moment the switch turns off, during
@@ -607,9 +634,9 @@ export function ReplayWorkspace() {
             <LaunchModeOption label="Claude Code" detail={companionToken ? "Claude Desktop 세션 선택 후 전송" : "AirPointer 연결 필요"} active={deliveryTarget === "claude"} disabled={false} onSelect={() => setDeliveryTarget("claude")} />
           </div>
           {deliveryTarget === "codex"
-            ? <label className={styles.field}><span>Codex Agent</span><span className={styles.agentPicker}><select aria-label="전송할 Codex 작업" value={agentThreadId} onChange={(event) => { setAgentThreadId(event.target.value); window.localStorage.setItem("airpointer-agent-thread", event.target.value); setAgentState("idle"); setAgentMessage(event.target.value ? "제스처 전송 준비가 끝났습니다." : "전송할 Codex 작업을 선택해 주세요."); }} disabled={agentState === "loading"}><option value="">작업 선택</option>{agentThreads.map((thread) => <option value={thread.id} key={thread.id}>{thread.status === "active" ? "● " : ""}{thread.title}</option>)}</select><button type="button" onClick={() => void loadAgentThreads()} aria-label="Codex 작업 새로고침"><ArrowClockwise size={15} /></button></span></label>
+            ? <label className={styles.field}><span>Codex Agent</span><span className={styles.agentPicker}><SessionPicker threads={codexPickerThreads} value={agentThreadId} onChange={handleAgentThreadChange} loading={agentState === "loading"} blankLabel="작업 선택" ariaLabel="전송할 Codex 작업" /><button type="button" className={styles.agentPickerRefresh} onClick={() => void loadAgentThreads()} aria-label="Codex 작업 새로고침"><ArrowClockwise size={15} /></button></span></label>
             : companionToken
-              ? <label className={styles.field}><span>Claude Session</span><span className={styles.agentPicker}><select aria-label="전송할 Claude 세션" value={claudeThreadId} onChange={(event) => setClaudeThreadId(event.target.value)} disabled={claudeThreadsLoading}><option value="">현재 열려 있는 대화</option>{groupClaudeThreads(claudeThreads).map(([project, threads]) => <optgroup label={project || "기타"} key={project || "__misc__"}>{threads.map((thread) => <option value={thread.id} key={thread.id}>{thread.title}</option>)}</optgroup>)}</select><button type="button" onClick={() => void loadClaudeThreads()} aria-label="Claude 세션 새로고침"><ArrowClockwise size={15} /></button></span></label>
+              ? <label className={styles.field}><span>Claude Session</span><span className={styles.agentPicker}><SessionPicker threads={claudeThreads} value={claudeThreadId} onChange={setClaudeThreadId} loading={claudeThreadsLoading} blankLabel="현재 열려 있는 대화" ariaLabel="전송할 Claude 세션" /><button type="button" className={styles.agentPickerRefresh} onClick={() => void loadClaudeThreads()} aria-label="Claude 세션 새로고침"><ArrowClockwise size={15} /></button></span></label>
               : <small className={styles.gestureError}>Claude Desktop으로 보내려면 위에서 AirPointer를 먼저 켜주세요.</small>}
           <button className={styles.action} onClick={() => void prepareAgentCapture("replay")} disabled={!stream || (deliveryTarget === "codex" ? !agentThreadId : !companionToken) || agentState === "preparing" || agentState === "sending" || agentState === "queued"}><PaperPlaneTilt size={20} weight="bold" /> 최근 {sendSeconds}초 Agent에 묻기</button>
           <button className={styles.secondary} onClick={() => void prepareAgentCapture("current")} disabled={!stream || (deliveryTarget === "codex" ? !agentThreadId : !companionToken) || agentState === "preparing" || agentState === "sending" || agentState === "queued"}><Camera size={18} /> 지금 화면 Agent에 묻기</button>
@@ -694,18 +721,29 @@ function formatDuration(ms: number) {
   return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-// AirPointer's companion server already returns Claude threads in
-// project-block order (see App._list_companion_threads / desktop_paste.py's
-// _claude_sidebar_rows), so a simple run-length grouping here reconstructs
-// the sidebar's own grouping -- same idea as main.py's _populate_picker.
-function groupClaudeThreads(threads: ClaudeThread[]): [string, ClaudeThread[]][] {
-  const groups: [string, ClaudeThread[]][] = [];
+// Buckets by `project` in order of first appearance (not sorted-input
+// run-length grouping): Claude's threads already arrive project-block
+// ordered (see App._list_companion_threads / desktop_paste.py's
+// _claude_sidebar_rows), where this reduces to the same thing, but Codex's
+// don't -- its threads are updatedAt-sorted with cwd-derived projects
+// interleaved, so first-appearance-order bucketing is what actually keeps
+// each project's items together for Codex too.
+function groupPickerThreads(threads: PickerThread[]): [string, PickerThread[]][] {
+  const order: string[] = [];
+  const buckets = new Map<string, PickerThread[]>();
   for (const thread of threads) {
-    const last = groups[groups.length - 1];
-    if (last && last[0] === thread.project) last[1].push(thread);
-    else groups.push([thread.project, [thread]]);
+    if (!buckets.has(thread.project)) { buckets.set(thread.project, []); order.push(thread.project); }
+    buckets.get(thread.project)!.push(thread);
   }
-  return groups;
+  return order.map((project) => [project, buckets.get(project)!]);
+}
+
+// Codex's AgentThread has no project field, only `cwd` (a full filesystem
+// path) -- the trailing folder name is a reasonable proxy for "project",
+// matching how the folders/projects in Claude's own sidebar are named.
+function pathBasename(path: string): string {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || "";
 }
 
 function GestureActionToggle({ label, detail, checked, disabled, onChange }: { label: string; detail: string; checked: boolean; disabled: boolean; onChange: (checked: boolean) => void }) {
@@ -714,6 +752,147 @@ function GestureActionToggle({ label, detail, checked, disabled, onChange }: { l
 
 function LaunchModeOption({ label, detail, active, disabled, onSelect }: { label: string; detail: string; active: boolean; disabled: boolean; onSelect: () => void }) {
   return <label className={styles.gestureAction} data-active={active}><span><b>{label}</b><small>{detail}</small></span><input type="radio" name="airpointer-launch-mode" checked={active} disabled={disabled} onChange={onSelect} /><i>{active ? "●" : "○"}</i></label>;
+}
+
+// A hand-drawn dropdown, not a native <select> -- a real <select>'s open
+// popup is OS/browser-drawn and its background/text colors can't be
+// reliably controlled together (see the back-and-forth this replaced: a
+// plain option/optgroup styling attempt showed readable rows in some spots
+// and blank ones in others, inconsistently, because <option> nested inside
+// an <optgroup> doesn't reliably inherit color the same way a top-level
+// <option> does, and there's no way to add a project-row accent layer to a
+// native popup at all). This renders entirely in our own DOM instead, so
+// every color and the project-row accent border are exactly what's coded
+// here, with no browser-dependent guessing.
+function SessionPicker({ threads, value, onChange, loading, blankLabel, ariaLabel }: {
+  threads: PickerThread[]; value: string; onChange: (id: string) => void; loading: boolean;
+  blankLabel: string; ariaLabel: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  // Always an explicit viewport-fixed coordinate once the panel is open --
+  // set on open (anchored under/over the trigger, whichever fits) and
+  // updated live while dragging the handle. Rendered through a portal
+  // straight into document.body (see the return below): an ancestor with
+  // any `transform` (framer-motion's <motion.*> wrappers apply one even at
+  // rest) turns position:fixed into "fixed relative to that ancestor"
+  // instead of the viewport, which is exactly why the panel used to jump
+  // off-screen the instant a drag started -- the portal sidesteps that
+  // ancestor chain entirely, same as a real popup layer would.
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const selected = threads.find((thread) => thread.id === value);
+  const label = selected ? selected.title : blankLabel;
+
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredThreads = normalizedQuery
+    ? threads.filter((thread) => thread.title.toLowerCase().includes(normalizedQuery))
+    : threads;
+  const groups = useMemo(() => groupPickerThreads(filteredThreads), [filteredThreads]);
+
+  // Closing always clears the search query and position too -- folded into
+  // one helper (rather than a separate reset-on-close effect) so every
+  // close path (trigger toggle, outside click, Escape, picking an item)
+  // goes through one place instead of a setState-in-effect.
+  const close = () => { setOpen(false); setQuery(""); setPos(null); };
+
+  const startDrag = (event: React.PointerEvent) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const origin = pos ?? panelRef.current?.getBoundingClientRect() ?? { left: 0, top: 0 };
+    const onMove = (moveEvent: PointerEvent) => {
+      setPos({ left: origin.left + (moveEvent.clientX - startX), top: origin.top + (moveEvent.clientY - startY) });
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+
+  const toggleOpen = () => {
+    if (open) { close(); return; }
+    if (rootRef.current) {
+      const rect = rootRef.current.getBoundingClientRect();
+      const roomBelow = window.innerHeight - rect.bottom;
+      const openUpward = roomBelow < 540 && rect.top > roomBelow;
+      // 520 here matches customPickerPanel's default height -- an estimate
+      // (the user may have resized it last time, but the panel always
+      // remounts at the default size, see the CSS comment there), same
+      // margin/spacing (4px) the old anchored CSS used.
+      setPos({ left: rect.left, top: openUpward ? rect.top - 520 - 4 : rect.bottom + 4 });
+    }
+    setOpen(true);
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    searchRef.current?.focus();
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (rootRef.current?.contains(target)) return;
+      if (panelRef.current?.contains(target)) return;
+      close();
+    };
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") close(); };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  const pick = (id: string) => { onChange(id); close(); };
+
+  return (
+    <div className={styles.customPicker} ref={rootRef}>
+      <button type="button" className={styles.customPickerTrigger} onClick={toggleOpen}
+              disabled={loading} aria-haspopup="listbox" aria-expanded={open}>
+        <span>{label}</span>
+        <CaretDown size={13} weight="bold" />
+      </button>
+      {open && pos && createPortal(
+        <div ref={panelRef} className={styles.customPickerPanel}
+             style={{ left: pos.left, top: pos.top }}>
+          <div className={styles.customPickerDragHandle} onPointerDown={startDrag} title="드래그해서 옮기기">
+            <DotsSixVertical size={13} weight="bold" />
+          </div>
+          <div className={styles.customPickerSearch}>
+            <MagnifyingGlass size={14} />
+            <input ref={searchRef} type="text" value={query} placeholder="세션 검색..."
+                   onChange={(event) => setQuery(event.target.value)}
+                   onKeyDown={(event) => event.stopPropagation()} />
+          </div>
+          <div role="listbox" aria-label={ariaLabel} className={styles.customPickerList}>
+            {!normalizedQuery && (
+              <div className={styles.customPickerOption} data-active={!value} role="option" aria-selected={!value}
+                   onClick={() => pick("")}>{blankLabel}</div>
+            )}
+            {groups.map(([project, groupThreads]) => (
+              <div key={project || "__misc__"}>
+                {project && <div className={styles.customPickerGroup}>{project}</div>}
+                {groupThreads.map((thread) => (
+                  <div key={thread.id} className={styles.customPickerOption} data-active={thread.id === value}
+                       role="option" aria-selected={thread.id === value} onClick={() => pick(thread.id)}>
+                    {thread.active ? "● " : ""}{thread.title}
+                  </div>
+                ))}
+              </div>
+            ))}
+            {normalizedQuery && groups.length === 0 && (
+              <div className={styles.customPickerEmpty}>일치하는 세션이 없습니다.</div>
+            )}
+          </div>
+        </div>,
+        document.body,
+      )}
+    </div>
+  );
 }
 
 const HOTKEY_MODIFIER_KEYS = new Set(["Control", "Alt", "Shift", "Meta"]);

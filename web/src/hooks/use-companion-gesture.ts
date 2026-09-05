@@ -5,7 +5,14 @@ import type { GesturePose, GestureProgress, RegionSelectionView } from "@/lib/ge
 
 type GestureActions = { replay: boolean; screenshot: boolean; region: boolean };
 export type HotkeyBindings = { replay: string; screenshot: string; region: string };
-type Options = { enabled: boolean; token: string; agentThreadId: string; gestures: GestureActions; hotkeys: HotkeyBindings };
+type Options = {
+  enabled: boolean; token: string; agentThreadId: string; gestures: GestureActions; hotkeys: HotkeyBindings;
+  // Pushed down to AirPointer's own SEND TO setting (see
+  // App._sync_companion_delivery_target in main.py) so a hotkey/gesture
+  // capture and this page's own screen-share capture target the same app.
+  // "" (not yet chosen here) leaves the native side's own setting alone.
+  deliveryTarget?: "codex" | "claude" | "";
+};
 type Snapshot = {
   running: boolean;
   mode: "gesture" | "hotkey" | null;
@@ -21,7 +28,7 @@ type Snapshot = {
 const IDLE_PROGRESS: GestureProgress = { phase: "idle", value: 0, command: null };
 const IDLE_SELECTION: RegionSelectionView = { phase: "idle", rect: null, pointer: null, progress: 0, captured: null };
 
-export function useCompanionGesture({ enabled, token, agentThreadId, gestures, hotkeys }: Options) {
+export function useCompanionGesture({ enabled, token, agentThreadId, gestures, hotkeys, deliveryTarget = "" }: Options) {
   const [pose, setPose] = useState<GesturePose>("none");
   const [progress, setProgress] = useState<GestureProgress>(IDLE_PROGRESS);
   const [preview, setPreview] = useState("");
@@ -54,6 +61,7 @@ export function useCompanionGesture({ enabled, token, agentThreadId, gestures, h
     let timer = 0;
     let firstFailureAt = 0;
     let syncedAgentThreadId: string | null = null;
+    let syncedDeliveryTarget: string | null = null;
     const localProxy = ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
     const statusUrl = localProxy ? `/api/companion?token=${encodeURIComponent(token)}` : `http://127.0.0.1:47822/status?token=${encodeURIComponent(token)}`;
     const configUrl = localProxy ? `/api/companion?token=${encodeURIComponent(token)}` : `http://127.0.0.1:47822/config?token=${encodeURIComponent(token)}`;
@@ -63,14 +71,15 @@ export function useCompanionGesture({ enabled, token, agentThreadId, gestures, h
         const response = await fetch(statusUrl, { cache: "no-store" });
         if (!response.ok) throw new Error("companion unavailable");
         const state = await response.json() as Snapshot;
-        if (syncedAgentThreadId !== agentThreadId) {
+        if (syncedAgentThreadId !== agentThreadId || (deliveryTarget && syncedDeliveryTarget !== deliveryTarget)) {
           const configResponse = await fetch(configUrl, {
             method: localProxy ? "PUT" : "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ agentThreadId, gestures, hotkeys }),
+            body: JSON.stringify({ agentThreadId, gestures, hotkeys, ...(deliveryTarget ? { deliveryTarget } : {}) }),
           });
           if (!configResponse.ok) throw new Error("companion configuration failed");
           syncedAgentThreadId = agentThreadId;
+          if (deliveryTarget) syncedDeliveryTarget = deliveryTarget;
         }
         if (cancelled) return;
         // Hotkey mode never touches the camera, so cameraReady never turns
@@ -97,7 +106,7 @@ export function useCompanionGesture({ enabled, token, agentThreadId, gestures, h
     };
     void poll();
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [agentThreadId, enabled, gestures, hotkeys, token]);
+  }, [agentThreadId, deliveryTarget, enabled, gestures, hotkeys, token]);
 
   return {
     pose: enabled ? pose : "none" as GesturePose,

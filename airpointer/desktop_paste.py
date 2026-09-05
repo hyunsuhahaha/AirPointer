@@ -317,6 +317,25 @@ def wait_for_focus(window, composer, timeout: float = 1.0) -> bool:
     return False
 
 
+def acquire_focus(window, composer, attempts: int = 3) -> bool:
+    """Retries the whole focus_window_and_composer + wait_for_focus sequence
+    rather than accepting a single attempt's outcome: force_foreground's
+    AttachThreadInput + synthetic-Alt trick (see win32_focus.py) is the
+    standard way to satisfy Windows' "recently interactive" requirement for
+    SetForegroundWindow from a background process, but it's still a race
+    against whatever currently owns the foreground (observed failing when
+    triggered by a global hotkey while a browser tab had focus) -- losing
+    that race once isn't the same as it being unwinnable, so this gives it
+    a few more tries with a short pause before actually giving up."""
+    for attempt in range(attempts):
+        focus_window_and_composer(window, composer)
+        if wait_for_focus(window, composer):
+            return True
+        if attempt < attempts - 1:
+            time.sleep(0.2)
+    return False
+
+
 def count_attachments(window) -> int:
     try:
         images = window.descendants(control_type="Image")
@@ -338,21 +357,35 @@ def wait_for_attachment_count(window, expected_count: int, timeout: float = 3.0)
     return False
 
 
-def paste_images(window, composer, image_paths: Sequence[Path], timeout: float = 6.0) -> None:
+def paste_images(window, composer, image_paths: Sequence[Path], app: AppTarget = CODEX,
+                  timeout: float = 6.0) -> None:
     """Focuses the composer, verifies it, and pastes every image in a
     single Ctrl+V via CF_HDROP (a multi-file paste) instead of one paste
     per image -- much faster, and sidesteps Codex Desktop's known
     slowness with back-to-back individual image pastes
     (openai/codex#25997). Sends no keys at all if focus verification
-    fails."""
-    focus_window_and_composer(window, composer)
-    if not wait_for_focus(window, composer):
-        raise DesktopPasteError("포커스를 Codex 입력창에 맞추지 못했습니다.")
+    fails.
+
+    Positive confirmation (polling count_attachments for the "User
+    attachment" UIA label) only works for Codex -- confirmed empirically
+    that Claude Desktop's own attached-image thumbnail isn't exposed as a
+    UIA Image with any comparable name (none of ~46 Image elements in a
+    composer with a real attachment matched anything attachment-like), so
+    polling for it there would just always time out and abort the send
+    right after a paste that actually worked, before paste_prompt/submit()
+    ever ran. A short fixed settle delay stands in for that target instead
+    -- the clipboard paste itself is a generic OS mechanism, not something
+    that depends on the target app being able to confirm it happened."""
+    if not acquire_focus(window, composer):
+        raise DesktopPasteError(f"포커스를 {app.label} 입력창에 맞추지 못했습니다.")
     before = count_attachments(window)
     set_clipboard_files(image_paths)
     send_keys("^v")
-    if not wait_for_attachment_count(window, before + len(image_paths), timeout):
-        raise DesktopPasteError(f"이미지 첨부 {len(image_paths)}장이 시간 내에 나타나지 않았습니다.")
+    if app is CODEX:
+        if not wait_for_attachment_count(window, before + len(image_paths), timeout):
+            raise DesktopPasteError(f"이미지 첨부 {len(image_paths)}장이 시간 내에 나타나지 않았습니다.")
+    else:
+        time.sleep(0.6)
 
 
 def paste_prompt(window, composer, prompt: str) -> None:
@@ -409,7 +442,7 @@ def paste_capture_and_ask(app: AppTarget, image_paths: Sequence[Path], prompt: s
                 refreshed = find_codex_window_and_composer(app, use_cache=False)
                 if refreshed:
                     window, composer = refreshed
-        paste_images(window, composer, image_paths)
+        paste_images(window, composer, image_paths, app)
         paste_prompt(window, composer, prompt)
         submit(window, composer)
     finally:

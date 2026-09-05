@@ -58,7 +58,7 @@
 .primary, .action { border: 0; background: var(--accent); color: #170e09; min-height: 50px; padding: 0 20px; display: inline-flex; justify-content: center; align-items: center; gap: 9px; font-weight: 750; cursor: pointer; border-radius: 8px; }
 .primary { margin-top: 12px; }
 .primary:hover, .action:hover { background: #ff8348; }
-.primary:focus-visible, .action:focus-visible, .secondary:focus-visible, .iconButton:focus-visible, .field select:focus-visible, .agentPicker button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 3px; }
+.primary:focus-visible, .action:focus-visible, .secondary:focus-visible, .iconButton:focus-visible, .field select:focus-visible, .agentPickerRefresh:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 3px; }
 .liveFlag { position: absolute; z-index: 3; left: 16px; top: 15px; padding: 7px 9px; background: rgba(13,13,12,.86); font: 600 10px var(--font-mono); letter-spacing: .1em; }
 .liveFlag span { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--accent); }
 .nowLine { position: absolute; inset-block: 0; z-index: 4; width: 1px; background: var(--accent); pointer-events: none; transition: left .35s ease-out; }
@@ -80,11 +80,66 @@
 .rule { height: 1px; background: var(--line); margin: 22px 0 16px; }
 .field { min-height: 52px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); }
 .field select { color: var(--ink); background: transparent; border: 0; padding: 8px 4px; cursor: pointer; }
-.field option { background: var(--panel); }
-.agentPicker { min-width: 0; max-width: 68%; display: flex; align-items: center; gap: 7px; }
+/* Codex Agent is the only remaining native <select> here (flat, no
+   optgroups) -- explicit color rather than relying on inheritance from
+   .field select, since that turned out not to reliably reach <option>
+   elements in every case. Claude Session was the same native <select> +
+   <optgroup> until this replaced it with ClaudeSessionPicker (a fully
+   custom-drawn dropdown, own styles below) -- a real <select>'s open popup
+   is OS/browser-drawn and its colors can't be pinned down reliably enough
+   for a themed project-row accent. */
+.field option { background: var(--panel); color: var(--ink); }
+
+.customPicker { position: relative; flex: 1; min-width: 0; }
+.customPickerTrigger { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 6px; background: transparent; border: 0; color: var(--ink); font: inherit; font-size: 12px; padding: 8px 4px; cursor: pointer; text-align: left; }
+/* min-width: 0 is required for a flex child to actually shrink below its
+   text's natural width -- without it, overflow/ellipsis above never
+   engages, and a long title just pushes past the trigger button into
+   whatever sits next to it (the refresh button in .agentPicker). */
+.customPickerTrigger span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.customPickerTrigger svg { flex: 0 0 auto; color: var(--muted); }
+.customPickerTrigger:disabled { opacity: .5; cursor: default; }
+/* width/height (not max-height) + resize: both, so the corner handle has a
+   real box to grow/shrink -- this is the *default* size on every fresh
+   open (a closed picker unmounts the panel, so a reopen always starts back
+   here; only dragging the handle below or the resize corner changes it for
+   the rest of that one open). overflow here must stay non-visible for
+   `resize` to render its handle at all. */
+/* Rendered through a portal into document.body (see ClaudeSessionPicker),
+   so `position: fixed` here is always relative to the real viewport --
+   `left`/`top` come in as inline styles (JS-computed, anchored under/over
+   the trigger or dragged) rather than CSS, since a portal has no
+   .customPicker ancestor to anchor against here at all. */
+.customPickerPanel { position: fixed; z-index: 1000; width: 320px; height: 520px; min-width: 220px; min-height: 200px; resize: both; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 12px 28px rgba(0,0,0,.45); overflow: hidden; }
+.customPickerDragHandle { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; padding: 3px 0; color: var(--muted); cursor: move; background: var(--panel-raised); border-bottom: 1px solid var(--line); touch-action: none; }
+.customPickerSearch { flex: 0 0 auto; display: flex; align-items: center; gap: 7px; padding: 8px 10px; border-bottom: 1px solid var(--line); color: var(--muted); }
+.customPickerSearch input { flex: 1; min-width: 0; background: transparent; border: 0; color: var(--ink); font: inherit; font-size: 12px; }
+.customPickerSearch input:focus { outline: none; }
+.customPickerList { flex: 1; min-height: 0; overflow-y: auto; padding: 4px; }
+.customPickerGroup { padding: 6px 10px 4px 12px; margin: 4px 0 2px; font-size: 11px; font-weight: 700; color: var(--ink); background: rgba(255,107,34,.1); border-left: 2px solid var(--accent); border-radius: 3px; }
+.customPickerOption { padding: 7px 10px 7px 16px; font-size: 12px; color: var(--ink); border-radius: 5px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.customPickerOption:hover { background: var(--panel-raised); }
+.customPickerOption[data-active="true"] { background: rgba(255,107,34,.16); color: var(--accent-soft); }
+.customPickerEmpty { padding: 14px 10px; font-size: 12px; color: var(--muted); text-align: center; }
+/* flex: 1 makes .agentPicker actually stretch to fill the row's remaining
+   space (.field is justify-content: space-between, which never stretches
+   its children on its own) -- the native <select> version never needed
+   this because a closed <select> auto-sizes to its longest option's text,
+   incidentally giving .agentPicker a reasonable width; ClaudeSessionPicker's
+   plain <button> trigger has no such intrinsic sizing, so without this its
+   flex:1 child (.customPicker) had nothing to actually expand into and
+   collapsed toward its own min-width. */
+.agentPicker { min-width: 0; max-width: 68%; flex: 1; display: flex; align-items: center; gap: 7px; }
 .agentPicker select { min-width: 0; width: 100%; text-overflow: ellipsis; }
-.agentPicker button { width: 29px; height: 29px; flex: 0 0 auto; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 50%; background: transparent; color: var(--muted); cursor: pointer; }
-.agentPicker button:hover { color: var(--ink); border-color: var(--muted); }
+/* Scoped to a dedicated class, not a bare ".agentPicker button" descendant
+   selector -- that selector used to match every <button> anywhere inside
+   .agentPicker, which was fine back when the refresh icon was the only
+   one, but SessionPicker's own trigger is *also* a <button> now, and it
+   was matching too: silently forced to this 29px icon-button size, its
+   text overflowing the real (tiny) box with no matching hit area --
+   textbook trigger-button-becomes-unclickable-and-overlapping bug. */
+.agentPickerRefresh { width: 29px; height: 29px; flex: 0 0 auto; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 50%; background: transparent; color: var(--muted); cursor: pointer; }
+.agentPickerRefresh:hover { color: var(--ink); border-color: var(--muted); }
 .action { margin-top: 24px; width: 100%; }
 .action:disabled, .secondary:disabled { opacity: .35; cursor: not-allowed; }
 .secondary { margin-top: 8px; min-height: 45px; display: flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid var(--line); background: transparent; border-radius: 8px; font-size: 12px; cursor: pointer; }

@@ -41,6 +41,13 @@ class CompanionState:
         # _resolve_hotkey_bindings), so an un-configured companion never
         # silently disables the feature.
         self._hotkeys: dict[str, str] = {}
+        # "" means "browser hasn't asked for a target" -- App keeps using
+        # whatever the local Settings/native SEND TO radio has, same
+        # not-configured-yet fallback shape as _hotkeys above. Set only via
+        # the browser's own "보낼 곳" picker (see replay-workspace.tsx) so a
+        # hotkey/gesture capture and the browser's own screen-share capture
+        # stop silently targeting two different apps (see App._sync_delivery_target).
+        self._delivery_target = ""
         self._running = False
         self._mode: str | None = None
         self._camera_ready = False
@@ -75,11 +82,14 @@ class CompanionState:
 
     def configure(self, token: str, agent_thread_id: str,
                   gestures: dict[str, bool] | None = None,
-                  hotkeys: dict[str, str] | None = None) -> bool:
+                  hotkeys: dict[str, str] | None = None,
+                  delivery_target: str | None = None) -> bool:
         with self._lock:
             if not token or token not in self._tokens:
                 return False
             self._agent_thread_id = agent_thread_id.strip()[:256]
+            if delivery_target in ("codex", "claude"):
+                self._delivery_target = delivery_target
             if gestures:
                 for key in self._gestures:
                     if key in gestures:
@@ -95,6 +105,10 @@ class CompanionState:
     def agent_thread_id(self) -> str:
         with self._lock:
             return self._agent_thread_id
+
+    def delivery_target(self) -> str:
+        with self._lock:
+            return self._delivery_target
 
     def set_delivery_handler(self, handler: DeliveryHandler) -> None:
         with self._lock:
@@ -263,10 +277,13 @@ class CompanionHttpServer:
                             not isinstance(key, str) or not isinstance(value, str) or len(value) > 64
                             for key, value in raw_hotkeys.items()):
                         raise ValueError("hotkeys must contain strings")
+                    delivery_target = payload.get("deliveryTarget")
+                    if delivery_target is not None and delivery_target not in ("codex", "claude"):
+                        raise ValueError("deliveryTarget must be 'codex' or 'claude'")
                 except (ValueError, json.JSONDecodeError):
                     self.send_error(400)
                     return
-                if not state_ref.configure(token, thread_id, raw_gestures, raw_hotkeys):
+                if not state_ref.configure(token, thread_id, raw_gestures, raw_hotkeys, delivery_target):
                     self.send_error(403)
                     return
                 self.send_response(204)

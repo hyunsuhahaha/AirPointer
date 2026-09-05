@@ -9,6 +9,17 @@ from __future__ import annotations
 import tkinter as tk
 from collections.abc import Callable
 
+# Explicit rather than "Segoe UI" (which has no Hangul glyphs of its own --
+# Windows silently substitutes something for Korean text anyway, so naming
+# it directly is the only way to be sure which font that actually is, and
+# to get its metrics/weights consistently rather than whatever the fallback
+# picks). Ships with every Windows 10/11 install, no font install needed.
+# This still won't fully match the browser picker's look (Noto Sans KR,
+# rendered by Chromium's antialiasing, which Tk/GDI text drawing doesn't
+# reproduce) -- this closes the gap as far as font choice, size, and
+# spacing can, not the rendering engine itself.
+_FONT = "맑은 고딕"
+
 
 class ConversationPicker(tk.Frame):
     def __init__(self, parent, on_select: Callable[[str], None], *,
@@ -32,21 +43,32 @@ class ConversationPicker(tk.Frame):
         self.entry = tk.Entry(self, textvariable=self._query, bg=bg, fg=fg,
                               insertbackground=accent, relief="flat",
                               highlightthickness=1, highlightbackground=muted,
-                              highlightcolor=accent, font=("Segoe UI", 10))
+                              highlightcolor=accent, font=(_FONT, 11))
         self.entry.pack(fill="x", ipady=5)
         self._query.trace_add("write", lambda *_args: self._on_type())
         self.entry.bind("<FocusIn>", self._clear_placeholder)
         self.entry.bind("<FocusOut>", lambda _e: self._apply_placeholder())
 
         self._list_frame = tk.Frame(self, bg=bg)  # packed on demand, see _refresh
-        scrollbar = tk.Scrollbar(self._list_frame, orient="vertical")
+        # width=14 (Scrollbar's default is themeless and, packed alongside a
+        # side="left" expand=True sibling, was measured collapsing to a 1px
+        # sliver -- effectively invisible -- until the picker was widened
+        # enough for pack's layout pass to give it any room at all).
+        # Pinning a real width sidesteps that pack-timing quirk outright.
+        scrollbar = tk.Scrollbar(self._list_frame, orient="vertical", width=14)
         self.listbox = tk.Listbox(self._list_frame, height=max_visible, bg=bg, fg=fg,
                                   selectbackground=accent, selectforeground="#07131c",
                                   relief="flat", highlightthickness=0, activestyle="none",
-                                  font=("Segoe UI", 10), yscrollcommand=scrollbar.set)
+                                  font=(_FONT, 11), yscrollcommand=scrollbar.set)
         scrollbar.config(command=self.listbox.yview)
-        self.listbox.pack(side="left", fill="both", expand=True)
+        # Packed scrollbar-first: Tk's pack carves out each slave's parcel
+        # from the cavity in packing order, so an expand=True slave packed
+        # before a fixed-size one can claim the entire cavity and leave the
+        # latter a sliver (measured: the scrollbar collapsing to 1x1px).
+        # Packing the fixed-size scrollbar first reserves its real width
+        # before the listbox's expand=True has a chance to consume it.
         scrollbar.pack(side="right", fill="y")
+        self.listbox.pack(side="left", fill="both", expand=True)
         self.listbox.bind("<<ListboxSelect>>", self._on_pick)
 
         # Idle grouped view -- shown instead of the plain search box being
@@ -57,18 +79,19 @@ class ConversationPicker(tk.Frame):
         # until you type" behavior.
         self._idle_frame = tk.Frame(self, bg=bg)  # packed on demand, see _refresh
         self._idle_canvas = tk.Canvas(self._idle_frame, bg=bg, highlightthickness=0, height=idle_height)
-        idle_scrollbar = tk.Scrollbar(self._idle_frame, orient="vertical", command=self._idle_canvas.yview)
+        idle_scrollbar = tk.Scrollbar(self._idle_frame, orient="vertical", width=14, command=self._idle_canvas.yview)
         self._idle_canvas.configure(yscrollcommand=idle_scrollbar.set)
-        self._idle_canvas.pack(side="left", fill="both", expand=True)
+        # Same scrollbar-before-expand-sibling packing order as above, same
+        # reason.
         idle_scrollbar.pack(side="right", fill="y")
+        self._idle_canvas.pack(side="left", fill="both", expand=True)
         self._idle_inner = tk.Frame(self._idle_canvas, bg=bg)
         self._idle_window = self._idle_canvas.create_window((0, 0), window=self._idle_inner, anchor="nw")
         self._idle_inner.bind("<Configure>", lambda _e: self._idle_canvas.configure(
             scrollregion=self._idle_canvas.bbox("all")))
         self._idle_canvas.bind("<Configure>", lambda e: self._idle_canvas.itemconfig(
             self._idle_window, width=e.width))
-        self._idle_canvas.bind("<MouseWheel>", lambda e: self._idle_canvas.yview_scroll(
-            -1 if e.delta > 0 else 1, "units"))
+        self._bind_wheel(self._idle_canvas)
 
         self._apply_placeholder()
 
@@ -112,7 +135,13 @@ class ConversationPicker(tk.Frame):
             self._list_frame.pack_forget()
             if self._groups:
                 self._render_idle()
-                self._idle_frame.pack(fill="both", expand=False, pady=(4, 0))
+                # expand=True (not False): lets this grow into whatever
+                # extra vertical space the caller's own layout hands the
+                # picker as a whole -- see main.py's _show_capture_prompt,
+                # which packs the picker (not the question text box) as the
+                # one expanding widget so resizing that window taller grows
+                # the conversation list, not the question box.
+                self._idle_frame.pack(fill="both", expand=True, pady=(4, 0))
             else:
                 self._idle_frame.pack_forget()
             return
@@ -122,7 +151,7 @@ class ConversationPicker(tk.Frame):
         for label in matches:
             self.listbox.insert("end", label)
         if matches:
-            self._list_frame.pack(fill="both", expand=False, pady=(4, 0))
+            self._list_frame.pack(fill="both", expand=True, pady=(4, 0))
         else:
             self._list_frame.pack_forget()
 
@@ -141,17 +170,20 @@ class ConversationPicker(tk.Frame):
             child.destroy()
         for group_index, (project, titles) in enumerate(self._groups):
             if project:
-                tk.Label(self._idle_inner, text=project, bg=self.bg, fg=self.accent, anchor="w",
-                        font=("Segoe UI", 9, "bold")).pack(fill="x", pady=(8 if group_index else 0, 2))
+                header = tk.Label(self._idle_inner, text=project, bg=self.bg, fg=self.accent, anchor="w",
+                                  font=(_FONT, 10, "bold"))
+                header.pack(fill="x", pady=(10 if group_index else 0, 4))
+                self._bind_wheel(header)
             visible = self._expanded.get(group_index, self._default_visible)
             for title in titles[:visible]:
                 self._make_idle_row(title)
             remaining = len(titles) - visible
             if remaining > 0:
                 more = tk.Label(self._idle_inner, text=f"더 보기 ({remaining})", bg=self.bg, fg=self.muted,
-                                anchor="w", font=("Segoe UI", 9), cursor="hand2")
-                more.pack(fill="x", pady=(2, 0))
+                                anchor="w", font=(_FONT, 9), cursor="hand2")
+                more.pack(fill="x", pady=(4, 0))
                 more.bind("<Button-1>", lambda _e, group_index=group_index: self._expand(group_index))
+                self._bind_wheel(more)
 
     def _expand(self, group_index: int) -> None:
         self._expanded[group_index] = self._expanded.get(group_index, self._default_visible) + self._more_step
@@ -159,9 +191,23 @@ class ConversationPicker(tk.Frame):
 
     def _make_idle_row(self, title: str) -> None:
         row = tk.Label(self._idle_inner, text=title, bg=self.bg, fg=self.fg, anchor="w",
-                       font=("Segoe UI", 10), cursor="hand2", wraplength=280, justify="left")
-        row.pack(fill="x", ipady=2)
+                       font=(_FONT, 11), cursor="hand2", wraplength=280, justify="left")
+        row.pack(fill="x", ipady=4)
         row.bind("<Button-1>", lambda _e, title=title: self._pick_idle(title))
+        self._bind_wheel(row)
+
+    def _bind_wheel(self, widget) -> None:
+        # A canvas's own <MouseWheel> binding only fires when the cursor is
+        # over canvas area not covered by a child widget -- every row here
+        # is a Label drawn on top of the canvas via create_window, so without
+        # this, scrolling only worked in the thin gaps between rows (which
+        # is most of what "그려져서 안 보이는" scrolling looked like: wheel
+        # events over the actual project/title text -- most of the visible
+        # area -- went nowhere). Forwarding the same handler to every row
+        # makes wheel scrolling work regardless of exactly what's under the
+        # cursor, matching an ordinary scrollable list.
+        widget.bind("<MouseWheel>", lambda e: self._idle_canvas.yview_scroll(
+            -1 if e.delta > 0 else 1, "units"))
 
     def _pick_idle(self, title: str) -> None:
         self._value = title

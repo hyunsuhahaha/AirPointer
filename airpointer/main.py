@@ -111,6 +111,7 @@ class App:
         self.root.report_callback_exception = self._on_callback_exception
         self.root.after(16, self._redraw)
         self.root.after(1000, self._refresh_hotkey_hint)
+        self.root.after(1000, self._sync_companion_delivery_target)
         if start_hidden:
             self.root.withdraw()
 
@@ -209,13 +210,13 @@ class App:
 
         ttk.Label(frame, text="SEND TO", foreground="#44e5ff",
                   font=("Consolas", 10, "bold")).pack(anchor="w", pady=(14, 4))
-        target_var = tk.StringVar(value=self.settings.delivery_target)
+        self.target_var = tk.StringVar(value=self.settings.delivery_target)
         target_row = ttk.Frame(frame)
         target_row.pack(fill="x")
-        ttk.Radiobutton(target_row, text="Codex", variable=target_var, value="codex",
-                        command=lambda: self._set_delivery_target(target_var.get())).pack(side="left")
-        ttk.Radiobutton(target_row, text="Claude Code", variable=target_var, value="claude",
-                        command=lambda: self._set_delivery_target(target_var.get())).pack(side="left", padx=(12, 0))
+        ttk.Radiobutton(target_row, text="Codex", variable=self.target_var, value="codex",
+                        command=lambda: self._set_delivery_target(self.target_var.get())).pack(side="left")
+        ttk.Radiobutton(target_row, text="Claude Code", variable=self.target_var, value="claude",
+                        command=lambda: self._set_delivery_target(self.target_var.get())).pack(side="left", padx=(12, 0))
 
         ttk.Label(frame, text="START MODE", foreground="#44e5ff",
                   font=("Consolas", 10, "bold")).pack(anchor="w", pady=(14, 4))
@@ -559,7 +560,24 @@ class App:
         window.overrideredirect(True)
         window.attributes("-topmost", True)
         window.configure(bg="#ff6b22")
-        width, height = 500, 280
+        # Tall enough that the agent picker's idle grouped-conversation
+        # dropdown (see ConversationPicker's idle_height below) and the
+        # question text box can BOTH sit at their natural/default size with
+        # no squeeze. This matters beyond just "both visible": Pack only
+        # ever hands surplus space to an expand=True widget (the picker)
+        # once every non-expand sibling (the text box) already has its own
+        # full natural size -- start any shorter than this and dragging the
+        # window taller spends the first chunk of new space "catching the
+        # text box up" to its natural height before the picker grows at
+        # all, which looked like both growing together instead of just the
+        # picker (measured: 380->580 grew the text box by 140px and the
+        # picker by only 60px). At 380, Pack instead had to shrink the text
+        # box *below* natural just to fit -- a sliver, easy to miss with
+        # Codex specifically since it rarely had grouped conversations
+        # loaded yet when this window first opened, but Claude Desktop's
+        # sidebar reverse-engineering surfaces real grouped data
+        # immediately, exposing the same layout bug for every capture.
+        width, height = 500, 520
         x = max(12, window.winfo_screenwidth() - width - 28)
         window.geometry(f"{width}x{height}+{x}+128")
 
@@ -605,8 +623,15 @@ class App:
             self._prompt_agent_picker = ConversationPicker(panel, self._on_prompt_agent_picked,
                                                             bg="#090908", fg="#f5f1e8",
                                                             accent="#ff6b22", muted="#7a5a4a",
-                                                            placeholder=placeholder)
-            self._prompt_agent_picker.pack(fill="x", pady=(14, 10))
+                                                            placeholder=placeholder,
+                                                            # Smaller than the default 220px default: this
+                                                            # is a compact capture toast, not the full
+                                                            # settings window. expand=True below lets it
+                                                            # grow past this if the user drag-resizes the
+                                                            # window taller -- the question text box stays
+                                                            # a fixed height instead (see its own pack()).
+                                                            idle_height=100)
+            self._prompt_agent_picker.pack(fill="both", expand=True, pady=(14, 10))
         else:
             tk.Label(panel, text="● 현재 열려 있는 Codex 대화", bg="#11110f", fg="#74f7c5",
                      font=("Consolas", 10)).pack(anchor="w", pady=(14, 10))
@@ -614,7 +639,10 @@ class App:
         self._prompt_text = tk.Text(panel, height=8, wrap="word", bg="#090908", fg="#f5f1e8",
                                     insertbackground="#ff6b22", selectbackground="#7a3418",
                                     relief="flat", padx=12, pady=10, font=("Segoe UI", 11))
-        self._prompt_text.pack(fill="both", expand=True)
+        # fill="x" only, no expand: dragging the window taller should grow
+        # the conversation picker above (its own expand=True), not this --
+        # the question box stays a fixed ~8 lines regardless of window size.
+        self._prompt_text.pack(fill="x")
         self._prompt_text.bind("<Return>", self._on_prompt_return)
         window.bind("<Escape>", self._on_prompt_escape)
         window.protocol("WM_DELETE_WINDOW", self._cancel_capture_prompt)
@@ -815,6 +843,7 @@ class App:
         so reassigning both here and on the running controller is enough;
         no lock needed, this only ever runs on the Tk main thread."""
         self.settings.delivery_target = target_name
+        self.target_var.set(target_name)
         self.codex = DesktopPasteDelivery(resolve_delivery_target(target_name))
         self.capture.codex = self.codex
         threading.Thread(target=self.codex.warmup, name="airpointer-codex-warmup", daemon=True).start()
@@ -825,6 +854,22 @@ class App:
 
     def _delivery_tag(self) -> str:
         return self.codex.target.label.split()[0].upper()
+
+    def _sync_companion_delivery_target(self) -> None:
+        """Applies the browser's "보낼 곳" picker (replay-workspace.tsx) to
+        this app's own SEND TO setting, so a hotkey/gesture-triggered
+        capture and the browser's own screen-share capture stop silently
+        targeting two different apps. One-way (browser -> native), same
+        relationship _resolve_hotkey_bindings already has for hotkeys --
+        polled here rather than pushed, since CompanionState.configure()
+        runs on CompanionHttpServer's request thread, not this one, and
+        _set_delivery_target touches Tk widgets that only the main thread
+        may touch."""
+        if self.companion_state:
+            target = self.companion_state.delivery_target()
+            if target and target != self.settings.delivery_target:
+                self._set_delivery_target(target)
+        self.root.after(1000, self._sync_companion_delivery_target)
 
     def _resolve_hotkey_bindings(self) -> dict[str, str]:
         """Local Settings is the base; whatever the browser has configured
