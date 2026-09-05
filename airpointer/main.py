@@ -636,12 +636,12 @@ class App:
             tk.Label(panel, text="● 현재 열려 있는 Codex 대화", bg="#11110f", fg="#74f7c5",
                      font=("Consolas", 10)).pack(anchor="w", pady=(14, 10))
 
-        self._prompt_text = tk.Text(panel, height=8, wrap="word", bg="#090908", fg="#f5f1e8",
+        self._prompt_text = tk.Text(panel, height=4, wrap="word", bg="#090908", fg="#f5f1e8",
                                     insertbackground="#ff6b22", selectbackground="#7a3418",
                                     relief="flat", padx=12, pady=10, font=("Segoe UI", 11))
         # fill="x" only, no expand: dragging the window taller should grow
         # the conversation picker above (its own expand=True), not this --
-        # the question box stays a fixed ~8 lines regardless of window size.
+        # the question box stays a fixed ~4 lines regardless of window size.
         self._prompt_text.pack(fill="x")
         self._prompt_text.bind("<Return>", self._on_prompt_return)
         window.bind("<Escape>", self._on_prompt_escape)
