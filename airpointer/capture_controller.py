@@ -25,11 +25,19 @@ class CaptureController:
     def __init__(self, screen_buffer: ScreenReplayBuffer,
                  codex: CodexAppServerDelivery | DesktopPasteDelivery,
                  replay_seconds: Callable[[], int],
-                 window_history: Callable[[], str] | None = None) -> None:
+                 window_history: Callable[[], str] | None = None,
+                 on_sent: Callable[[tuple[Path, ...]], None] | None = None) -> None:
         self.buffer = screen_buffer
         self.codex = codex
         self.replay_seconds = replay_seconds
         self.window_history = window_history or (lambda: "")
+        # Lets the browser mirror what a gesture/hotkey-triggered send
+        # actually delivered (see main.App._publish_sent_frames) -- browser-
+        # originated captures already show their own frames locally
+        # (replay-workspace.tsx's own `frames` state), but a native capture
+        # never reached the browser at all before this, since it goes
+        # straight to Codex/Claude Desktop via desktop_paste.py.
+        self.on_sent = on_sent or (lambda _paths: None)
         self._queue: queue.Queue[
             tuple[CaptureKind, str, Region | None, tuple[Path, ...] | None, str | None] | None
         ] = queue.Queue(maxsize=2)
@@ -131,6 +139,10 @@ class CaptureController:
                 self._pending = (kind, thread_id, None, paths, user_prompt)
                 self._set_status("SEND FAILED", str(error))
                 return
+            try:
+                self.on_sent(paths)
+            except Exception:
+                pass  # best-effort mirror to the browser -- never block cleanup/status over it
             cleanup_paths(paths)
             self._pending = None
             self._set_status("SENT TO CODEX", "", time.time())

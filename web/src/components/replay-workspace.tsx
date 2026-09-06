@@ -8,7 +8,7 @@ import { ArrowClockwise, ArrowCounterClockwise, Camera, CaretDown, Check, Circle
 import { useCompanionGesture } from "@/hooks/use-companion-gesture";
 import type { HotkeyBindings } from "@/hooks/use-companion-gesture";
 import { BrowserReplayBuffer, frameFromVideo } from "@/lib/replay-buffer";
-import type { ReplayCapsule } from "@/lib/replay-buffer";
+import type { OverviewFrame, ReplayCapsule } from "@/lib/replay-buffer";
 import type { PromptTemplate } from "@/lib/prompt-template";
 import styles from "./replay-workspace.module.css";
 
@@ -32,7 +32,7 @@ type ClaudeThread = { id: string; title: string; status: string; project: string
 // mapping ClaudeThread.status into this at all).
 type PickerThread = { id: string; title: string; project: string; active?: boolean };
 type PendingAgentCapture =
-  | { mode: "current"; threadId: string; seconds: number; frames: string[]; region?: boolean }
+  | { mode: "current"; threadId: string; seconds: number; frames: OverviewFrame[]; region?: boolean }
   | { mode: "replay"; threadId: string; seconds: number; capsule: ReplayCapsule };
 type GestureAction = "replay" | "screenshot" | "region";
 type StageBox = { left: number; top: number; width: number; height: number };
@@ -74,7 +74,7 @@ export function ReplayWorkspace() {
   const [retention, setRetention] = useState(3);
   const [sendSeconds, setSendSeconds] = useState(15);
   const [status, setStatus] = useState<Status>("idle");
-  const [frames, setFrames] = useState<string[]>([]);
+  const [frames, setFrames] = useState<OverviewFrame[]>([]);
   const [analysis, setAnalysis] = useState("");
   const [message, setMessage] = useState("화면 공유를 시작하면 최근 장면이 이 기기에만 쌓입니다.");
   const [elapsed, setElapsed] = useState(0);
@@ -221,7 +221,9 @@ export function ReplayWorkspace() {
 
   const captureFrames = useCallback(async (mode: Mode) => {
     if (!stream || !screenVideo.current) throw new Error("먼저 화면 공유를 시작해 주세요.");
-    const nextFrames = mode === "current" ? [frameFromVideo(screenVideo.current)] : await buffer.current.recentFrames(sendSeconds, 6);
+    const nextFrames = mode === "current"
+      ? [{ url: frameFromVideo(screenVideo.current), atSeconds: 0 }]
+      : (await buffer.current.recentCapsule(sendSeconds, 6)).overviewFrames;
     if (!nextFrames.length) throw new Error("전송할 만큼 화면 버퍼가 아직 쌓이지 않았습니다.");
     setFrames(nextFrames);
     return nextFrames;
@@ -233,7 +235,7 @@ export function ReplayWorkspace() {
     try {
       const nextFrames = await captureFrames(mode);
       setStatus("analyzing"); setMessage(`${mode === "current" ? "현재 화면" : `최근 ${sendSeconds}초`}을 OpenAI API가 분석하고 있습니다.`);
-      const response = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode, frames: nextFrames }) });
+      const response = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode, frames: nextFrames.map((frame) => frame.url) }) });
       const data = await response.json() as { analysis?: string; error?: string };
       if (!response.ok || !data.analysis) throw new Error(data.error || "분석 결과를 받지 못했습니다.");
       setAnalysis(data.analysis); setStatus("done"); setMessage("분석이 끝났습니다. 전송한 프레임은 서버에 저장하지 않습니다.");
@@ -435,16 +437,16 @@ export function ReplayWorkspace() {
         // timeline, same as what a "current screen" send uses.
         const frames = pendingCapture.mode === "replay" ? pendingCapture.capsule.overviewFrames : pendingCapture.frames;
         const kind = pendingCapture.mode === "replay" ? "replay" : pendingCapture.region ? "region" : "screenshot";
-        data = await postToCompanion(frames, kind, prompt);
+        data = await postToCompanion(frames.map((frame) => frame.url), kind, prompt);
       } else if (pendingCapture.mode === "replay") {
         const { capsule } = pendingCapture;
         const form = new FormData();
         form.set("metadata", JSON.stringify({ threadId: pendingCapture.threadId, mode: pendingCapture.mode, seconds: pendingCapture.seconds, userPrompt: prompt, startedAt: capsule.startedAt, triggeredAt: capsule.triggeredAt, segments: capsule.segments.map(({ startedAt, durationMs, blob }) => ({ startedAt, durationMs, mimeType: blob.type })) }));
-        capsule.overviewFrames.forEach((frame, index) => form.append("overview", dataUrlToBlob(frame), `overview-${String(index + 1).padStart(2, "0")}.jpg`));
+        capsule.overviewFrames.forEach((frame, index) => form.append("overview", dataUrlToBlob(frame.url), `overview-${String(index + 1).padStart(2, "0")}.jpg`));
         capsule.segments.forEach((segment, index) => form.append("segment", segment.blob, `segment-${String(index + 1).padStart(3, "0")}.webm`));
         data = await postCapsuleToAgent(form);
       } else {
-        data = await postToAgent({ threadId: pendingCapture.threadId, mode: pendingCapture.mode, kind: pendingCapture.region ? "region" : "screenshot", seconds: pendingCapture.seconds, frames: pendingCapture.frames, userPrompt: prompt });
+        data = await postToAgent({ threadId: pendingCapture.threadId, mode: pendingCapture.mode, kind: pendingCapture.region ? "region" : "screenshot", seconds: pendingCapture.seconds, frames: pendingCapture.frames.map((frame) => frame.url), userPrompt: prompt });
       }
       const label = pendingCapture.mode === "replay" ? `최근 ${pendingCapture.seconds}초 Replay Capsule` : pendingCapture.region ? "선택 영역" : "현재 화면";
       setPendingCapture(null); setAgentPrompt(""); setAgentState("done");
@@ -478,8 +480,22 @@ export function ReplayWorkspace() {
     setHotkeyBindings((current) => ({ ...current, [action]: combo }));
   }, []);
 
-  const { pose, progress: gestureProgress, preview: companionPreview, selection: gestureSelection, error: gestureError, ready: companionReady, connected: companionConnected, activeMode } = useCompanionGesture({ enabled: gestureEnabled, token: companionToken, agentThreadId, gestures: gestureActions, hotkeys: hotkeyBindings, deliveryTarget });
+  const { pose, progress: gestureProgress, preview: companionPreview, sentFrames: companionSentFrames, selection: gestureSelection, error: gestureError, ready: companionReady, connected: companionConnected, activeMode } = useCompanionGesture({ enabled: gestureEnabled, token: companionToken, agentThreadId, gestures: gestureActions, hotkeys: hotkeyBindings, deliveryTarget });
   const hotkeyMode = activeMode ? activeMode === "hotkey" : launchMode === "hotkey";
+
+  // Mirrors a gesture/hotkey-triggered capture into the same "LOCAL RING
+  // BUFFER" grid below that otherwise only ever shows this page's own
+  // screen-share captures (see setFrames elsewhere in this file) -- a
+  // native capture never reached the browser at all before this, since it
+  // goes straight to Codex/Claude Desktop via desktop_paste.py.
+  useEffect(() => {
+    // atSeconds is a placeholder here -- the native side's change-detection
+    // picks (airpointer/screen_buffer.py's _select_notable_moments) don't
+    // carry their per-frame offset across the companion bridge yet (see
+    // App._publish_sent_frames), only the final image bytes. Worth wiring
+    // through later; for now this at least reuses the real selection.
+    if (companionSentFrames.length) setFrames(companionSentFrames.map((url) => ({ url, atSeconds: 0 })));
+  }, [companionSentFrames]);
 
   // Reset the boot-progress estimate the moment the switch turns off, during
   // render rather than as a setState call inside the effect below.
@@ -652,7 +668,7 @@ export function ReplayWorkspace() {
         <div className={styles.timelinePanel}>
           <div className={styles.timelineHead}><span>{frames.length ? `${frames.length} FRAMES SENT` : "LOCAL RING BUFFER"}</span><span>오래된 장면 자동 삭제</span></div>
           <div className={styles.frames}>
-            {frames.length ? frames.map((frame, index) => <figure key={`${frame.slice(-24)}-${index}`}>{/* Browser-generated data URLs are intentionally not passed through Next image optimization. */}<img src={frame} alt={`AI에 전송한 ${index + 1}번째 화면`} /><figcaption>-{Math.max(0, sendSeconds - Math.round((index * sendSeconds) / Math.max(1, frames.length - 1)))}s</figcaption></figure>) : Array.from({ length: 6 }, (_, index) => <div className={styles.framePlaceholder} key={index}><span>{index + 1}</span></div>)}
+            {frames.length ? frames.map((frame, index) => <figure key={`${frame.url.slice(-24)}-${index}`}>{/* Browser-generated data URLs are intentionally not passed through Next image optimization. */}<img src={frame.url} alt={`AI에 전송한 ${index + 1}번째 화면`} /><figcaption>-{frame.atSeconds.toFixed(1)}s</figcaption></figure>) : Array.from({ length: 6 }, (_, index) => <div className={styles.framePlaceholder} key={index}><span>{index + 1}</span></div>)}
           </div>
           <div className={styles.ruler}><span /><i style={{ left: `${bufferPercent}%` }} /></div>
         </div>

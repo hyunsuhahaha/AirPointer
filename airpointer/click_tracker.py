@@ -68,6 +68,20 @@ class ClickTracker:
             with self._lock:
                 self._events.clear()
 
+    def record_manual(self, app: str, control: str) -> None:
+        """Records a click AirPointer already knows about directly, instead
+        of trying to detect it via GetAsyncKeyState + UI Automation (see
+        _record_click/_element_name_at below). Wired to AirPointer's own
+        widgets (see main.App._tracked) rather than relying on the generic
+        path: that path deliberately skips AirPointer's own window
+        (self._own_pid in _record_click) since Tkinter doesn't implement UI
+        Automation providers well enough for _element_name_at() to reliably
+        name its buttons -- a wrapped `command=` callable already knows
+        exactly what it is, no detection needed."""
+        with self._lock:
+            self._events.append(ClickEvent(time.time(), app, control))
+            self._prune()
+
     def recent_summary(self, seconds: float | None = None, max_entries: int = 4,
                        title_limit: int = 40) -> str:
         """A single-line, oldest-to-newest chain like window_tracker's:

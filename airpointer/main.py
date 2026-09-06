@@ -5,6 +5,7 @@ import time
 import tkinter as tk
 from tkinter import ttk
 from pathlib import Path
+from typing import Callable
 
 from PIL import Image, ImageTk
 
@@ -81,7 +82,7 @@ class App:
         self.click_tracker = ClickTracker()
         self.capture = CaptureController(
             self.screen_buffer, self.codex, lambda: self.settings.replay_seconds,
-            self._activity_summary)
+            self._activity_summary, self._publish_sent_frames)
         if self.companion_state:
             self.companion_state.set_delivery_handler(self._deliver_companion_capture)
             self.companion_state.set_threads_handler(self._list_companion_threads)
@@ -179,7 +180,7 @@ class App:
 
         self.status = ttk.Label(frame, text="SYSTEM READY", foreground="#74f7c5", font=("Consolas", 9))
         self.status.pack(anchor="w", pady=(8, 6))
-        self.button = ttk.Button(frame, text="Start", command=self._toggle)
+        self.button = ttk.Button(frame, text="Start", command=self._toggle_tracked)
         self.button.pack(fill="x")
 
         self._build_replay_ui(replay)
@@ -193,14 +194,19 @@ class App:
             self.agent_picker = ConversationPicker(frame, self._select_agent, bg="#02090d", fg="#bdeeff",
                                                     accent="#44e5ff", muted="#527f91", placeholder=placeholder)
             self.agent_picker.pack(fill="x")
-            ttk.Button(frame, text="Refresh Tasks", command=self._refresh_agents).pack(fill="x", pady=(6, 14))
+            ttk.Button(frame, text="Refresh Tasks", command=self._tracked("Refresh Tasks", self._refresh_agents)).pack(fill="x", pady=(6, 14))
         else:
             ttk.Label(frame, text="● 현재 열려 있는 Codex 대화", foreground="#74f7c5",
                       font=("Consolas", 10)).pack(anchor="w", pady=(0, 14))
 
         replay_var = tk.BooleanVar(value=self.settings.replay_enabled)
+
+        def _replay_toggle_tracked() -> None:
+            enabled = replay_var.get()
+            self.click_tracker.record_manual("AirPointer", f"Screen Replay Buffer {'ON' if enabled else 'OFF'}")
+            self._set_replay_enabled(enabled)
         ttk.Checkbutton(frame, text="Screen Replay Buffer", variable=replay_var,
-                        command=lambda: self._set_replay_enabled(replay_var.get())).pack(anchor="w")
+                        command=_replay_toggle_tracked).pack(anchor="w")
         self._combo_setting(frame, "Keep recent", (1, 3, 5), self.settings.replay_minutes,
                             lambda value: setattr(self.settings, "replay_minutes", int(value)), "minutes")
         self._combo_setting(frame, "Send previous", (5, 15, 30, 60), self.settings.replay_seconds,
@@ -214,9 +220,11 @@ class App:
         target_row = ttk.Frame(frame)
         target_row.pack(fill="x")
         ttk.Radiobutton(target_row, text="Codex", variable=self.target_var, value="codex",
-                        command=lambda: self._set_delivery_target(self.target_var.get())).pack(side="left")
+                        command=self._tracked("Send To: Codex", lambda: self._set_delivery_target(self.target_var.get()))
+                        ).pack(side="left")
         ttk.Radiobutton(target_row, text="Claude Code", variable=self.target_var, value="claude",
-                        command=lambda: self._set_delivery_target(self.target_var.get())).pack(side="left", padx=(12, 0))
+                        command=self._tracked("Send To: Claude Code", lambda: self._set_delivery_target(self.target_var.get()))
+                        ).pack(side="left", padx=(12, 0))
 
         ttk.Label(frame, text="START MODE", foreground="#44e5ff",
                   font=("Consolas", 10, "bold")).pack(anchor="w", pady=(14, 4))
@@ -224,9 +232,11 @@ class App:
         mode_row = ttk.Frame(frame)
         mode_row.pack(fill="x")
         ttk.Radiobutton(mode_row, text="Gesture (camera)", variable=mode_var, value="gesture",
-                        command=lambda: self._set_launch_mode(mode_var.get())).pack(side="left")
+                        command=self._tracked("Start Mode: Gesture", lambda: self._set_launch_mode(mode_var.get()))
+                        ).pack(side="left")
         ttk.Radiobutton(mode_row, text="Hotkey (no camera)", variable=mode_var, value="hotkey",
-                        command=lambda: self._set_launch_mode(mode_var.get())).pack(side="left", padx=(12, 0))
+                        command=self._tracked("Start Mode: Hotkey", lambda: self._set_launch_mode(mode_var.get()))
+                        ).pack(side="left", padx=(12, 0))
         # Editing the combos themselves happens from the browser's companion
         # config (see companion_bridge.CompanionState.configure) -- this is
         # just a read-only reminder of whatever's currently bound, local or
@@ -248,9 +258,9 @@ class App:
         self.delivery_status.pack(anchor="w", pady=(0, 10))
         buttons = ttk.Frame(frame)
         buttons.pack(fill="x")
-        ttk.Button(buttons, text="Clear Buffer", command=self.screen_buffer.clear).pack(
+        ttk.Button(buttons, text="Clear Buffer", command=self._tracked("Clear Buffer", self.screen_buffer.clear)).pack(
             side="left", fill="x", expand=True, padx=(0, 3))
-        ttk.Button(buttons, text="Retry Send", command=self.capture.retry).pack(
+        ttk.Button(buttons, text="Retry Send", command=self._tracked("Retry Send", self.capture.retry)).pack(
             side="left", fill="x", expand=True, padx=(3, 0))
 
     @staticmethod
@@ -263,6 +273,14 @@ class App:
                              values=tuple(f"{value} {suffix}" for value in values))
         combo.pack(side="right")
         combo.bind("<<ComboboxSelected>>", lambda _event: command(variable.get().split()[0]))
+
+    def _toggle_tracked(self) -> None:
+        # Not just self._tracked("Start"/"Stop", self._toggle): the button's
+        # own label already flips between the two, so reading it at click
+        # time (before _toggle changes it) is simpler than duplicating that
+        # same active/inactive branch here.
+        self.click_tracker.record_manual("AirPointer", self.button.cget("text"))
+        self._toggle()
 
     def _toggle(self) -> None:
         if self._active_mode:
@@ -303,6 +321,19 @@ class App:
         if self.companion_state:
             self.companion_state.set_running(False)
 
+    def _tracked(self, control: str, action: Callable[[], None]) -> Callable[[], None]:
+        """Wraps a widget's `command=` callable so clicking it also lands in
+        the same activity log window_tracker/click_tracker already feed
+        (see _activity_summary) -- click_tracker's own GetAsyncKeyState +
+        UI Automation path deliberately skips AirPointer's own window
+        (Tkinter doesn't expose UI Automation names reliably), so this is
+        the accurate alternative: the widget already knows exactly what it
+        is, no detection needed."""
+        def wrapped() -> None:
+            self.click_tracker.record_manual("AirPointer", control)
+            action()
+        return wrapped
+
     def _activity_summary(self) -> str:
         """Combines the window-switch and click logs into the one string
         CaptureController hands to codex.send() as `window_history` -- kept
@@ -317,6 +348,22 @@ class App:
         if clicks:
             parts.append(f"클릭: {clicks}")
         return "\n".join(parts)
+
+    def _publish_sent_frames(self, paths: tuple[Path, ...]) -> None:
+        """Wired to CaptureController's on_sent -- mirrors what a
+        gesture/hotkey-triggered capture just sent into the browser's own
+        "LOCAL RING BUFFER" grid (replay-workspace.tsx), which otherwise only
+        ever shows the browser's own screen-share captures. Called on
+        CaptureController's delivery-worker thread, right before it deletes
+        `paths` -- must read them here or not at all."""
+        if not self.companion_state:
+            return
+        import base64
+        urls = []
+        for path in paths:
+            mime = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
+            urls.append(f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}")
+        self.companion_state.publish_sent(urls)
 
     def _deliver_companion_capture(self, target: str, thread_id: str, prompt: str,
                                     kind: str, frames: list[str]) -> dict:
@@ -590,7 +637,7 @@ class App:
         header_label = tk.Label(header_row, textvariable=self._prompt_header_var, bg="#11110f", fg="#ff8a50",
                                 font=("Consolas", 10, "bold"))
         header_label.pack(side="left", anchor="w")
-        tk.Button(header_row, text="✕", command=self._cancel_capture_prompt, bg="#11110f",
+        tk.Button(header_row, text="✕", command=self._tracked("Capture Prompt Close", self._cancel_capture_prompt), bg="#11110f",
                  fg="#ff8a50", activebackground="#2a1c14", activeforeground="#ff8a50",
                  relief="flat", bd=0, font=("Consolas", 11, "bold"),
                  cursor="hand2").pack(side="right")

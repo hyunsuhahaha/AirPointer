@@ -23,6 +23,7 @@ type Snapshot = {
   route: "replay" | "screenshot" | null;
   replayEvent: number;
   preview: string;
+  sentEvent: number;
 };
 
 const IDLE_PROGRESS: GestureProgress = { phase: "idle", value: 0, command: null };
@@ -32,6 +33,7 @@ export function useCompanionGesture({ enabled, token, agentThreadId, gestures, h
   const [pose, setPose] = useState<GesturePose>("none");
   const [progress, setProgress] = useState<GestureProgress>(IDLE_PROGRESS);
   const [preview, setPreview] = useState("");
+  const [sentFrames, setSentFrames] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [readyToken, setReadyToken] = useState("");
   const [activeMode, setActiveMode] = useState<"gesture" | "hotkey" | null>(null);
@@ -62,9 +64,13 @@ export function useCompanionGesture({ enabled, token, agentThreadId, gestures, h
     let firstFailureAt = 0;
     let syncedAgentThreadId: string | null = null;
     let syncedDeliveryTarget: string | null = null;
+    let lastSentEvent = -1;
     const localProxy = ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
     const statusUrl = localProxy ? `/api/companion?token=${encodeURIComponent(token)}` : `http://127.0.0.1:47822/status?token=${encodeURIComponent(token)}`;
     const configUrl = localProxy ? `/api/companion?token=${encodeURIComponent(token)}` : `http://127.0.0.1:47822/config?token=${encodeURIComponent(token)}`;
+    const sentFramesUrl = localProxy
+      ? `/api/companion/sent-frames?token=${encodeURIComponent(token)}`
+      : `http://127.0.0.1:47822/sent-frames?token=${encodeURIComponent(token)}`;
 
     const poll = async () => {
       try {
@@ -89,6 +95,22 @@ export function useCompanionGesture({ enabled, token, agentThreadId, gestures, h
         firstFailureAt = 0; setError(""); setConnected(true); setReadyToken(ready ? token : ""); setActiveMode(state.mode); setPose(state.pose); setPreview(state.preview);
         const palmActive = state.route === "replay" && (state.phase === "arming" || state.phase === "armed");
         setProgress(palmActive ? { phase: "holding", value: state.progress, command: null } : IDLE_PROGRESS);
+        // Only pull the actual images when the counter moves -- they can be
+        // several full-size JPEGs, and this status poll itself runs every
+        // 100ms, so fetching them unconditionally on every tick would be
+        // wasteful for something that only changes on an actual send.
+        if (state.sentEvent > 0 && state.sentEvent !== lastSentEvent) {
+          try {
+            const framesResponse = await fetch(sentFramesUrl, { cache: "no-store" });
+            if (framesResponse.ok) {
+              const payload = await framesResponse.json() as { frames?: string[] };
+              if (!cancelled && Array.isArray(payload.frames)) setSentFrames(payload.frames);
+            }
+          } catch {
+            // best-effort -- a missed refresh here isn't worth surfacing as a connection error
+          }
+        }
+        lastSentEvent = state.sentEvent;
       } catch {
         setReadyToken(""); setActiveMode(null);
         if (!firstFailureAt) firstFailureAt = Date.now();
@@ -112,6 +134,7 @@ export function useCompanionGesture({ enabled, token, agentThreadId, gestures, h
     pose: enabled ? pose : "none" as GesturePose,
     progress: enabled ? progress : IDLE_PROGRESS,
     preview: enabled ? preview : "",
+    sentFrames: enabled ? sentFrames : [],
     selection: IDLE_SELECTION,
     error: enabled ? error : "",
     ready: enabled && readyToken === token,

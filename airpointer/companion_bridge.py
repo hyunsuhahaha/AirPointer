@@ -58,6 +58,13 @@ class CompanionState:
         self._replay_event = 0
         self._preview = ""
         self._last_preview_at = 0.0
+        # What a gesture/hotkey-triggered send last actually delivered (see
+        # App._publish_sent_frames) -- kept out of snapshot()'s own payload
+        # since that's polled every 100ms and these can be several full-size
+        # JPEGs; the browser instead watches `sentEvent` for a bump and pulls
+        # the images themselves via /sent-frames only when it actually changed.
+        self._sent_frames: list[str] = []
+        self._sent_event = 0
         self._delivery_handler: DeliveryHandler | None = None
         self._threads_handler: ThreadsHandler | None = None
 
@@ -181,6 +188,22 @@ class CompanionState:
             if preview is not None:
                 self._preview = preview
 
+    def publish_sent(self, frames: list[str]) -> None:
+        """Called after a gesture/hotkey-triggered capture is actually
+        delivered (see App._publish_sent_frames) -- `frames` are the same
+        images that just went to Codex/Claude Desktop, so the browser's
+        "LOCAL RING BUFFER" grid can show what a native capture sent even
+        though it never touched the browser's own recording buffer."""
+        with self._lock:
+            self._sent_frames = frames[:6]
+            self._sent_event += 1
+
+    def sent_frames(self, token: str) -> tuple[int, dict]:
+        with self._lock:
+            if not token or token not in self._tokens:
+                return 403, {"error": "unauthorized", "frames": []}
+            return 200, {"frames": list(self._sent_frames)}
+
     def snapshot(self, token: str) -> dict[str, object] | None:
         with self._lock:
             if not token or token not in self._tokens:
@@ -195,6 +218,7 @@ class CompanionState:
                 "route": self._route,
                 "replayEvent": self._replay_event,
                 "preview": self._preview,
+                "sentEvent": self._sent_event,
             }
 
 
@@ -215,6 +239,8 @@ class CompanionHttpServer:
                     self._handle_status(parsed)
                 elif parsed.path == "/threads":
                     self._handle_threads(parsed)
+                elif parsed.path == "/sent-frames":
+                    self._handle_sent_frames(parsed)
                 else:
                     self.send_error(404)
 
@@ -241,6 +267,18 @@ class CompanionHttpServer:
                     self.send_error(400)
                     return
                 status, result = state_ref.list_threads(token, target)
+                body = json.dumps(result, separators=(",", ":")).encode("utf-8")
+                self.send_response(status)
+                self._cors()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def _handle_sent_frames(self, parsed) -> None:
+                token = parse_qs(parsed.query).get("token", [""])[0]
+                status, result = state_ref.sent_frames(token)
                 body = json.dumps(result, separators=(",", ":")).encode("utf-8")
                 self.send_response(status)
                 self._cors()
