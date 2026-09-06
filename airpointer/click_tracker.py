@@ -25,7 +25,10 @@ import win32gui
 import win32process
 from pywinauto.uia_element_info import UIAElementInfo
 
+from .selection_context import own_overlay_hidden
 from .window_tracker import _app_name, _shorten
+
+_own_pid = os.getpid()
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,16 +149,33 @@ def _element_name_at(x: int, y: int, window_hwnd: int) -> str:
     frequently wrapped in one or two unnamed containers. Stops at
     `window_hwnd` (the top-level window WindowFromPoint already identified)
     rather than falling back to its title: "clicked window X" duplicates
-    what window_tracker.py already reports and isn't "what was clicked"."""
+    what window_tracker.py already reports and isn't "what was clicked".
+
+    own_overlay_hidden() brackets the point query for the same reason
+    selection_context.element_label_at() needs it: AirPointer's own
+    click-through HUD overlay still gets hit by UIA's ElementFromPoint
+    (unlike the WindowFromPoint call _record_click() already used to find
+    `window_hwnd`, which correctly sees through it). Without this bracket,
+    _record_click() already correctly identifies the real app underneath,
+    but this function would resolve the CLICKED CONTROL itself to our own
+    overlay's own named pane instead -- and since that name is non-empty,
+    the loop below would happily accept it as if it were a real clicked
+    control (worse than returning "": a wrong, misleading value logged
+    into the click history instead of an honest "unknown"). The extra
+    `element.process_id == _own_pid` check below is defense in depth for
+    the same reason get_selected_text()/element_label_at() both check it,
+    in case the hide/show bracket above ever silently fails to take
+    effect (see _set_own_overlay_visible's own best-effort contract)."""
     try:
-        element = UIAElementInfo.from_point(x, y)
+        with own_overlay_hidden():
+            element = UIAElementInfo.from_point(x, y)
     except Exception:
         return ""
     for _ in range(4):
         if element is None:
             return ""
         try:
-            if element.handle == window_hwnd:
+            if element.handle == window_hwnd or element.process_id == _own_pid:
                 return ""
             name = (element.name or "").strip()
         except Exception:

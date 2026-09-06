@@ -19,6 +19,11 @@ class Settings:
     launch_mode: str = "gesture"  # "gesture" (camera) or "hotkey" (no camera)
     delivery_target: str = "codex"  # "codex" (Codex Desktop) or "claude" (Claude Desktop)
     hotkeys: Bindings = field(default_factory=lambda: dict(DEFAULT_BINDINGS))
+    # Off by default: clipboard text is more sensitive than the window/click
+    # activity log it sits next to (see clipboard_tracker.py), so tracking
+    # it needs an explicit opt-in rather than riding along with tracking
+    # start like window/click history already does.
+    clipboard_history_enabled: bool = False
 
     @classmethod
     def load(cls, path: Path | None = None) -> Settings:

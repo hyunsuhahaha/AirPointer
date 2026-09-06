@@ -4,6 +4,7 @@ import ctypes
 import tkinter as tk
 
 from .region_selection import SelectionView
+from .selection_context import register_own_overlay_hwnd
 
 
 class Overlay:
@@ -43,6 +44,17 @@ class Overlay:
         self._hwnd = self.window.winfo_id()
         self._base_ex_style = user32.GetWindowLongW(self._hwnd, -20) | 0x08000000
         user32.SetWindowLongW(self._hwnd, -20, self._base_ex_style | 0x20)
+        # Lets selection_context.element_label_at briefly hide this overlay
+        # around its UI Automation point queries -- WindowFromPoint (what
+        # real mouse clicks use for hit-testing) already sees through this
+        # window's WS_EX_TRANSPARENT click-through styling on its own, but
+        # IUIAutomation::ElementFromPoint does not: without this, every such
+        # query would just resolve to this overlay's own (unnamed) pane
+        # instead of whatever app is actually underneath (confirmed by
+        # hand: querying real screen points with this overlay up returned
+        # this window every time, while WindowFromPoint at the same points
+        # correctly returned the taskbar/Chrome beneath it).
+        register_own_overlay_hwnd(self._hwnd)
         try:
             # Keep the HUD and crop mask out of screenshots on supported Windows versions.
             user32.SetWindowDisplayAffinity(self._hwnd, 0x11)

@@ -236,6 +236,61 @@
 .privacyList p { margin: 0; display: flex; flex-direction: column; gap: 7px; }
 .privacyList b { font-size: 12px; }
 .privacyList span { color: var(--muted); font-size: 11px; line-height: 1.65; }
+.pipelineSection { padding: clamp(70px, 9vw, 130px) clamp(20px, 5vw, 76px); border-bottom: 1px solid var(--line); }
+.pipelineSection h2 { margin: 0; font-size: clamp(30px, 3.6vw, 52px); line-height: 1.08; letter-spacing: -.05em; }
+.pipelineTrack { position: relative; margin-top: clamp(46px, 6vw, 78px); display: flex; justify-content: space-between; gap: 8px; }
+.pipelineLine { position: absolute; left: 22px; right: 22px; top: 22px; height: 1px; background: var(--line); overflow: hidden; z-index: 0; }
+.pipelineBeam { position: absolute; inset-block: 0; width: 15%; background: linear-gradient(90deg, transparent, var(--accent), transparent); filter: drop-shadow(0 0 6px rgba(255,107,34,.65)); animation: pipelineSweep 6.4s linear infinite; }
+@keyframes pipelineSweep { 0% { left: -15%; } 100% { left: 100%; } }
+.pipelineNode { position: relative; z-index: 1; flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; }
+.pipelineIcon { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: var(--panel); border: 1px solid var(--line); color: var(--muted); animation: pipelinePulse 6.4s ease-in-out infinite; animation-delay: calc(var(--i) * 1.6s); }
+@keyframes pipelinePulse {
+  0%, 6% { color: var(--muted); border-color: var(--line); background: var(--panel); box-shadow: none; transform: scale(1); }
+  14%, 20% { color: var(--accent); border-color: rgba(255,107,34,.62); background: rgba(255,107,34,.1); box-shadow: 0 0 0 6px rgba(255,107,34,.12), 0 10px 26px rgba(255,107,34,.2); transform: scale(1.08); }
+  30%, 100% { color: var(--muted); border-color: var(--line); background: var(--panel); box-shadow: none; transform: scale(1); }
+}
+.pipelineText { display: flex; flex-direction: column; gap: 5px; align-items: center; }
+.pipelineText b { font-size: 12px; color: var(--ink); }
+.pipelineText small { color: var(--muted); font-size: 10px; line-height: 1.5; max-width: 16ch; word-break: keep-all; }
+@media (max-width: 780px) {
+  .pipelineTrack { flex-direction: column; align-items: flex-start; gap: 26px; }
+  .pipelineLine { left: 22px; top: 22px; bottom: 22px; right: auto; width: 1px; height: auto; }
+  .pipelineBeam { inset-inline: 0; width: auto; height: 15%; background: linear-gradient(180deg, transparent, var(--accent), transparent); animation-name: pipelineSweepVertical; }
+  @keyframes pipelineSweepVertical { 0% { top: -15%; } 100% { top: 100%; } }
+  .pipelineNode { flex-direction: row; text-align: left; }
+  .pipelineIcon { flex: 0 0 auto; }
+  .pipelineText { align-items: flex-start; }
+  .pipelineText small { max-width: none; }
+}
+.scorePanel { margin-top: clamp(36px, 5vw, 56px); border: 1px solid var(--line); background: var(--panel); padding: 20px 22px 22px; }
+.scorePanelHead { display: flex; justify-content: space-between; align-items: center; color: var(--muted); font: 500 10px var(--font-mono); letter-spacing: .08em; margin-bottom: 14px; }
+.scorePanelHeadRight { display: flex; align-items: center; gap: 16px; }
+.scorePanelHeadRight > span:first-child { color: var(--accent-soft); }
+.scoreLiveToggle { display: flex; align-items: center; gap: 6px; cursor: pointer; color: var(--muted); }
+.scoreLiveToggle input { accent-color: var(--accent); cursor: pointer; }
+.scoreLiveToggle:has(input:checked) { color: var(--accent-soft); }
+.scoreLiveToggle[data-available="false"] { opacity: .55; }
+.scoreCaption { margin: 0 0 8px; color: var(--muted); font-size: 11px; line-height: 1.7; max-width: 62ch; word-break: keep-all; }
+.scoreLiveHint { margin: 0 0 16px; color: var(--muted); font-size: 10px; line-height: 1.6; }
+.scoreChart { position: relative; height: 140px; overflow: hidden; }
+.scoreAxisLabel, .scoreThresholdLabel, .scoreEventLabel, .scorePeakLabel { position: absolute; color: var(--dim); font: 500 8px var(--font-mono); letter-spacing: .04em; white-space: nowrap; pointer-events: none; }
+.scoreAxisLabel[data-corner="top-left"] { top: 4px; left: 6px; }
+.scoreAxisLabel[data-corner="bottom-right"] { bottom: 4px; right: 6px; }
+.scoreThresholdLabel { top: calc(100% / 1.4 - 16px); right: 6px; color: var(--muted); }
+.scoreEventLabel { top: 4px; transform: translateX(-50%); color: var(--accent-soft); }
+.scorePeakLabel { top: 33%; transform: translateX(-50%); color: var(--ink); }
+.scoreChart svg { width: 100%; height: 100%; display: block; }
+.scoreThreshold { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 5 5; opacity: .5; }
+.scoreBand { fill: rgba(255,107,34,.08); }
+.scoreLine { fill: none; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.scorePeak { fill: var(--accent); }
+.scorePlayhead { position: absolute; top: 0; bottom: 0; left: 0; width: 2px; background: var(--accent); box-shadow: 0 0 10px rgba(255,107,34,.7); animation: scoreSweep 6.4s linear infinite; }
+@keyframes scoreSweep { 0% { left: 0%; } 100% { left: 100%; } }
+.scoreLegend { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 10px 22px; color: var(--muted); font: 500 9px var(--font-mono); letter-spacing: .04em; }
+@media (max-width: 640px) {
+  .scoreChart { height: 110px; }
+  .scoreAxisLabel, .scorePeakLabel { display: none; }
+}
 .footer { min-height: 92px; display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 0 clamp(20px, 5vw, 76px); color: var(--dim); font: 500 9px var(--font-mono); letter-spacing: .08em; }
 
 .promptBackdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 22px; background: rgba(5,5,4,.78); backdrop-filter: blur(8px); }

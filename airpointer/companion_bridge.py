@@ -13,6 +13,7 @@ from PIL import Image
 
 from .command_gesture import CommandView
 from .hotkeys import parse_binding
+from .screen_buffer import _GLOBAL_MIN_SCORE
 
 # (target, threadId, prompt, kind, frame data-URLs) -> {"ok": True} or
 # {"error": str}. Set once by App after it constructs its own CaptureController
@@ -63,8 +64,19 @@ class CompanionState:
         # since that's polled every 100ms and these can be several full-size
         # JPEGs; the browser instead watches `sentEvent` for a bump and pulls
         # the images themselves via /sent-frames only when it actually changed.
-        self._sent_frames: list[str] = []
+        # {"url": data-URL, "atSeconds": float} per frame -- atSeconds is
+        # 0 for a screenshot/region send (genuinely "just now") and the
+        # real captured-at offset for a replay send (see
+        # App._publish_sent_frames, which reads screen_buffer.py's
+        # export_recent() sidecar for the latter).
+        self._sent_frames: list[dict] = []
         self._sent_event = 0
+        # (epoch time, score) pairs from ScreenReplayBuffer.recent_scores(),
+        # pushed in by App._redraw() -- real data for the browser's live
+        # "TILE DIFF SCORE" chart when its 실시간 연동 checkbox is on. Small
+        # enough (a few hundred floats) to just ride along in snapshot()
+        # rather than needing its own endpoint like /sent-frames.
+        self._score_history: list[tuple[float, float]] = []
         self._delivery_handler: DeliveryHandler | None = None
         self._threads_handler: ThreadsHandler | None = None
 
@@ -188,7 +200,7 @@ class CompanionState:
             if preview is not None:
                 self._preview = preview
 
-    def publish_sent(self, frames: list[str]) -> None:
+    def publish_sent(self, frames: list[dict]) -> None:
         """Called after a gesture/hotkey-triggered capture is actually
         delivered (see App._publish_sent_frames) -- `frames` are the same
         images that just went to Codex/Claude Desktop, so the browser's
@@ -197,6 +209,10 @@ class CompanionState:
         with self._lock:
             self._sent_frames = frames[:6]
             self._sent_event += 1
+
+    def publish_scores(self, history: list[tuple[float, float]]) -> None:
+        with self._lock:
+            self._score_history = history
 
     def sent_frames(self, token: str) -> tuple[int, dict]:
         with self._lock:
@@ -219,6 +235,8 @@ class CompanionState:
                 "replayEvent": self._replay_event,
                 "preview": self._preview,
                 "sentEvent": self._sent_event,
+                "scoreHistory": list(self._score_history),
+                "scoreThreshold": _GLOBAL_MIN_SCORE,
             }
 
 

@@ -31,6 +31,14 @@ _make_dpi_aware()
 
 
 def main() -> int:
+    # Checked before anything else touches Tk/App -- this must be able to run
+    # as a quick, no-GUI, one-shot CLI call (Codex invokes it itself, see
+    # screen_buffer.write_manifest's frameQuery block), not spawn a whole
+    # second AirPointer window.
+    if len(sys.argv) > 1 and sys.argv[1] == "--replay-frame":
+        from airpointer.replay_query import main as replay_query_main
+        return replay_query_main(sys.argv[2:])
+
     from airpointer.main import App
     from airpointer.companion_bridge import CompanionHttpServer, CompanionState
     from airpointer.protocol import (CommandServer, command_from_arguments, register_protocol,

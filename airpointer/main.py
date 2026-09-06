@@ -12,6 +12,7 @@ from PIL import Image, ImageTk
 from .camera import CameraLoop
 from .capture_controller import CaptureController
 from .click_tracker import ClickTracker
+from .clipboard_tracker import ClipboardTracker
 from .codex_delivery import (
     AgentThread, CodexAppServerDelivery, DesktopPasteDelivery, resolve_delivery_target,
 )
@@ -21,6 +22,7 @@ from .conversation_picker import ConversationPicker
 from .overlay import Overlay
 from .region_selection import RegionSelector, SelectionView
 from .screen_buffer import ScreenReplayBuffer, cleanup_paths
+from .selection_context import get_selected_text
 from .hotkeys import HotkeyListener
 from .settings import Settings
 from .win32_focus import force_foreground
@@ -64,6 +66,31 @@ class App:
         self._prompt_window: tk.Toplevel | None = None
         self._prompt_kind: str = "replay"
         self._prompt_paths: tuple[Path, ...] = ()
+        # Selected text read at freeze() time (see _begin_capture_prompt),
+        # while focus was still on whatever app the user was using -- not a
+        # rolling log like window/click/clipboard history, just one value
+        # tied to the capture currently sitting in the prompt window.
+        self._prompt_extra_context: str = ""
+        # Replay-only (see _show_capture_prompt) -- lets the user pick how
+        # many frames to actually send, since Codex/Claude Desktop don't
+        # necessarily accept the same number of attachments comfortably.
+        # None for screenshot/region captures, where there's nothing to pick.
+        self._prompt_frame_count_var: tk.IntVar | None = None
+        self._prompt_frame_count_toggle_var: tk.StringVar | None = None
+        # The collapsible row itself -- starts unpacked (collapsed) each time
+        # the prompt window opens, like a settings disclosure, not an
+        # always-visible control on this otherwise compact capture toast.
+        self._prompt_frame_count_panel: tk.Frame | None = None
+        # Guards against a second Enter/submit re-entering while a changed
+        # frame count is still being re-extracted in the background (see
+        # _finish_submit_with_recount) -- without this, a double-press could
+        # kick off two overlapping export_recent() calls.
+        self._prompt_recounting: bool = False
+        # Source of truth for the panel's open/closed state -- NOT read back
+        # from winfo_ismapped() after pack()/pack_forget(), which only
+        # reflects reality once Tk has actually processed the geometry
+        # change (an idle/update cycle later), not synchronously.
+        self._prompt_frame_count_expanded: bool = False
         # (pointer_x, pointer_y, window_x, window_y) at drag start, or None
         # when not dragging -- see _begin_prompt_drag/_do_prompt_drag. Needed
         # because overrideredirect(True) (below) drops the OS title bar, so
@@ -80,9 +107,11 @@ class App:
         )
         self.window_tracker = WindowTracker()
         self.click_tracker = ClickTracker()
+        self.clipboard_tracker = ClipboardTracker()
         self.capture = CaptureController(
             self.screen_buffer, self.codex, lambda: self.settings.replay_seconds,
-            self._activity_summary, self._publish_sent_frames)
+            self._activity_summary, self._publish_sent_frames,
+            self.clipboard_tracker.suppress_delivery, self.clipboard_tracker.resume_after_delivery)
         if self.companion_state:
             self.companion_state.set_delivery_handler(self._deliver_companion_capture)
             self.companion_state.set_threads_handler(self._list_companion_threads)
@@ -207,6 +236,21 @@ class App:
             self._set_replay_enabled(enabled)
         ttk.Checkbutton(frame, text="Screen Replay Buffer", variable=replay_var,
                         command=_replay_toggle_tracked).pack(anchor="w")
+
+        # Stored on self (not a local, unlike replay_var above) so the
+        # capture-prompt window's own clipboard checkbox (see
+        # _show_capture_prompt) can share this exact BooleanVar -- Tk keeps
+        # every Checkbutton wired to one variable in sync automatically, so
+        # toggling either checkbox updates both instantly instead of the two
+        # drifting apart until the next window rebuild.
+        self._clipboard_history_var = tk.BooleanVar(value=self.settings.clipboard_history_enabled)
+        # Off by default (see clipboard_tracker.py) -- clipboard content can
+        # be more sensitive than a window title or clicked button name, so
+        # sending it needs this explicit, persisted opt-in rather than
+        # riding along with Screen Replay Buffer automatically.
+        ttk.Checkbutton(frame, text="Send Clipboard History", variable=self._clipboard_history_var,
+                        command=self._on_clipboard_checkbox_toggled).pack(anchor="w")
+
         self._combo_setting(frame, "Keep recent", (1, 3, 5), self.settings.replay_minutes,
                             lambda value: setattr(self.settings, "replay_minutes", int(value)), "minutes")
         self._combo_setting(frame, "Send previous", (5, 15, 30, 60), self.settings.replay_seconds,
@@ -301,6 +345,8 @@ class App:
             self.screen_buffer.start()
         self.window_tracker.start()
         self.click_tracker.start()
+        if self.settings.clipboard_history_enabled:
+            self.clipboard_tracker.start()
         if mode == "hotkey":
             self.hotkey_listener.start()
             self.status.config(text="HOTKEY MODE // SHORTCUTS ACTIVE")
@@ -315,6 +361,7 @@ class App:
         self.screen_buffer.stop(clear=True)
         self.window_tracker.stop(clear=True)
         self.click_tracker.stop(clear=True)
+        self.clipboard_tracker.stop(clear=True)
         self._active_mode = None
         self.button.config(text="Start")
         self.status.config(text="SYSTEM STANDBY")
@@ -335,11 +382,11 @@ class App:
         return wrapped
 
     def _activity_summary(self) -> str:
-        """Combines the window-switch and click logs into the one string
-        CaptureController hands to codex.send() as `window_history` -- kept
-        as a single callable/parameter (no new wire format) since both are
-        "what the user was doing right before this capture", just two
-        different signals of it."""
+        """Combines the window-switch, click, and (if enabled) clipboard
+        logs into the one string CaptureController hands to codex.send() as
+        `window_history` -- kept as a single callable/parameter (no new wire
+        format) since all three are "what the user was doing right before
+        this capture", just different signals of it."""
         parts = []
         windows = self.window_tracker.recent_summary()
         if windows:
@@ -347,6 +394,10 @@ class App:
         clicks = self.click_tracker.recent_summary()
         if clicks:
             parts.append(f"클릭: {clicks}")
+        if self.settings.clipboard_history_enabled:
+            clipboard = self.clipboard_tracker.recent_summary()
+            if clipboard:
+                parts.append(f"복사: {clipboard}")
         return "\n".join(parts)
 
     def _publish_sent_frames(self, paths: tuple[Path, ...]) -> None:
@@ -359,11 +410,31 @@ class App:
         if not self.companion_state:
             return
         import base64
-        urls = []
+        import json
+        import time as time_module
+        # export_recent() (screen_buffer.py) drops a sidecar next to a replay
+        # capture's frames with each one's real capture time -- read (and
+        # remove) it here so cleanup_paths()'s rmdir() of the now-empty
+        # folder still works afterward. capture_still()/capture_region()
+        # never write one (a screenshot has no "seconds ago" -- it's always
+        # right now), so `captured_at` staying empty there is correct, not
+        # a missing case.
+        captured_at: dict[str, float] = {}
+        if paths:
+            sidecar = paths[0].parent / "frame-times.json"
+            try:
+                captured_at = json.loads(sidecar.read_text(encoding="utf-8"))
+                sidecar.unlink(missing_ok=True)
+            except (OSError, ValueError):
+                captured_at = {}
+        now = time_module.time()
+        frames = []
         for path in paths:
             mime = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
-            urls.append(f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}")
-        self.companion_state.publish_sent(urls)
+            data = base64.b64encode(path.read_bytes()).decode("ascii")
+            at_seconds = max(0.0, now - captured_at[path.name]) if path.name in captured_at else 0.0
+            frames.append({"url": f"data:{mime};base64,{data}", "atSeconds": round(at_seconds, 2)})
+        self.companion_state.publish_sent(frames)
 
     def _deliver_companion_capture(self, target: str, thread_id: str, prompt: str,
                                     kind: str, frames: list[str]) -> dict:
@@ -453,6 +524,11 @@ class App:
         delivery = self.capture.status()
         buffer = self.screen_buffer.status()
         self.overlay.draw_command(self._command, delivery, buffer)
+        if self.companion_state:
+            # Fixed 30s window regardless of the browser's own "전송 구간"
+            # setting -- that picks how much gets sent to the Agent, this is
+            # just how much history the live score chart displays.
+            self.companion_state.publish_scores(self.screen_buffer.recent_scores(30))
         if self._selection.active:
             mode = f"AREA CAPTURE // {self._selection.phase.upper()}"
         elif self.camera.running:
@@ -495,6 +571,7 @@ class App:
         self.capture.close()
         self.window_tracker.stop(clear=True)
         self.click_tracker.stop(clear=True)
+        self.clipboard_tracker.stop(clear=True)
         self.hotkey_listener.stop()
         self.settings.agent_thread_id = self._agent_thread_id
         self.settings.save()
@@ -561,6 +638,15 @@ class App:
     # see _handle_command / _dispatch_hotkey_action) funnels through here so
     # there's exactly one prompt window implementation, not one per kind.
     _PROMPT_HEADER = {"screenshot": "SCREEN CAPTURED", "replay": "REPLAY CAPTURED", "region": "REGION CAPTURED"}
+    # Default matches export_recent()'s own default -- the slider below just
+    # lets a replay capture override it. Range is generous but well under
+    # Anthropic's ~20-images-per-message ceiling (Codex's own limit is
+    # undocumented as far as we could find) even before accounting for the
+    # fact that sending more means a slower/costlier vision pass regardless
+    # of whether the API would technically accept it.
+    _PROMPT_FRAME_COUNT_DEFAULT = 6
+    _PROMPT_FRAME_COUNT_MIN = 1
+    _PROMPT_FRAME_COUNT_MAX = 12
     _PROMPT_FREEZE_FAILURE = {
         "screenshot": "화면을 캡처하지 못했습니다.",
         "replay": "최근 화면 버퍼가 아직 준비되지 않았습니다.",
@@ -583,25 +669,49 @@ class App:
             return
 
         def freeze() -> None:
+            # Read before anything else in this thread -- focus is still on
+            # whatever app the user was using right up until this point; the
+            # screenshot grab below doesn't move focus either, but there's no
+            # reason to risk it. suppress_delivery()/resume_after_delivery()
+            # keep the Ctrl+C fallback's real (if momentary) clipboard write
+            # from being logged by ClipboardTracker as a user copy -- see
+            # selection_context.py's module docstring.
+            self.clipboard_tracker.suppress_delivery()
             try:
-                paths = (self.screen_buffer.export_recent(int(self.settings.replay_seconds))
+                selection = get_selected_text()
+            except Exception:
+                selection = ""
+            finally:
+                self.clipboard_tracker.resume_after_delivery()
+            extra_context = f"선택 텍스트: {selection}" if selection else ""
+            try:
+                # with_manifest is Codex-only (see capture_controller.py's own
+                # gating and docs/replay-change-detection.md) -- no point
+                # copying segments and writing a manifest.json for a target
+                # that can't act on the instruction anyway.
+                paths = (self.screen_buffer.export_recent(int(self.settings.replay_seconds),
+                                                          with_manifest=self.settings.delivery_target == "codex")
                          if kind == "replay" else self.screen_buffer.capture_still())
                 error = ""
             except Exception as caught:
                 paths, error = (), str(caught)
             try:
-                self.root.after(0, self._show_capture_prompt, kind, paths, error)
+                self.root.after(0, self._show_capture_prompt, kind, paths, error, extra_context)
             except tk.TclError:
                 cleanup_paths(paths)
 
         threading.Thread(target=freeze, name="airpointer-freeze-capture", daemon=True).start()
 
-    def _show_capture_prompt(self, kind: str, paths: tuple[Path, ...], error: str) -> None:
+    def _show_capture_prompt(self, kind: str, paths: tuple[Path, ...], error: str,
+                              extra_context: str = "") -> None:
         if error or not paths:
             self._show_native_notice("화면 고정 실패", error or self._PROMPT_FREEZE_FAILURE.get(kind, "화면 캡처에 실패했습니다."))
             return
         self._prompt_kind = kind
         self._prompt_paths = paths
+        self._prompt_extra_context = extra_context
+        self._prompt_recounting = False
+        self._prompt_frame_count_expanded = False
         window = tk.Toplevel(self.root)
         self._prompt_window = window
         window.overrideredirect(True)
@@ -641,6 +751,16 @@ class App:
                  fg="#ff8a50", activebackground="#2a1c14", activeforeground="#ff8a50",
                  relief="flat", bd=0, font=("Consolas", 11, "bold"),
                  cursor="hand2").pack(side="right")
+        # Same BooleanVar as the settings tab's own clipboard checkbox (see
+        # _build_replay_ui) -- this is the actual visible place a user
+        # decides that per send, not the settings tab they aren't looking at
+        # mid-capture. Toggling either one updates both and persists exactly
+        # like every other setting here (Settings.save() on _close()).
+        tk.Checkbutton(header_row, text="클립보드", variable=self._clipboard_history_var,
+                       command=self._on_clipboard_checkbox_toggled,
+                       bg="#11110f", fg="#ff8a50", activebackground="#11110f", activeforeground="#ff8a50",
+                       selectcolor="#2a1c14", relief="flat", bd=0, font=("Consolas", 9),
+                       cursor="hand2").pack(side="right", padx=(0, 6))
         # overrideredirect(True) (below) removes the OS title bar, so there's
         # neither a built-in way to drag this window nor resize grips --
         # the panel margin and header row/label act as the drag handle
@@ -690,6 +810,28 @@ class App:
         # the conversation picker above (its own expand=True), not this --
         # the question box stays a fixed ~4 lines regardless of window size.
         self._prompt_text.pack(fill="x")
+        if kind == "replay":
+            self._prompt_frame_count_var = tk.IntVar(value=self._PROMPT_FRAME_COUNT_DEFAULT)
+            self._prompt_frame_count_toggle_var = tk.StringVar()
+            toggle = tk.Label(panel, textvariable=self._prompt_frame_count_toggle_var,
+                              bg="#11110f", fg="#7a5a4a", font=("Consolas", 9),
+                              anchor="w", cursor="hand2")
+            toggle.pack(fill="x", pady=(8, 0))
+            toggle.bind("<Button-1>", self._toggle_prompt_frame_count_panel)
+            # Not packed yet -- starts collapsed, same "settings disclosure"
+            # feel as _build_replay_ui's own advanced sections, rather than
+            # sitting open on what's otherwise a compact capture toast.
+            self._prompt_frame_count_panel = tk.Frame(panel, bg="#11110f")
+            tk.Scale(self._prompt_frame_count_panel, from_=self._PROMPT_FRAME_COUNT_MIN,
+                     to=self._PROMPT_FRAME_COUNT_MAX, orient="horizontal",
+                     variable=self._prompt_frame_count_var, command=self._on_prompt_frame_count_changed,
+                     bg="#11110f", fg="#f5f1e8", troughcolor="#090908", highlightthickness=0,
+                     activebackground="#ff6b22", relief="flat", font=("Consolas", 9)).pack(fill="x")
+            self._update_prompt_frame_count_label()
+        else:
+            self._prompt_frame_count_var = None
+            self._prompt_frame_count_toggle_var = None
+            self._prompt_frame_count_panel = None
         self._prompt_text.bind("<Return>", self._on_prompt_return)
         window.bind("<Escape>", self._on_prompt_escape)
         window.protocol("WM_DELETE_WINDOW", self._cancel_capture_prompt)
@@ -783,6 +925,27 @@ class App:
         self._cancel_capture_prompt()
         return "break"
 
+    def _toggle_prompt_frame_count_panel(self, _event=None) -> None:
+        panel = self._prompt_frame_count_panel
+        if panel is None:
+            return
+        self._prompt_frame_count_expanded = not self._prompt_frame_count_expanded
+        if self._prompt_frame_count_expanded:
+            panel.pack(fill="x", pady=(4, 0))
+        else:
+            panel.pack_forget()
+        self._update_prompt_frame_count_label()
+
+    def _on_prompt_frame_count_changed(self, _value: str = "") -> None:
+        self._update_prompt_frame_count_label()
+
+    def _update_prompt_frame_count_label(self) -> None:
+        var, toggle_var = self._prompt_frame_count_var, self._prompt_frame_count_toggle_var
+        if var is None or toggle_var is None:
+            return
+        arrow = "▾" if self._prompt_frame_count_expanded else "▸"
+        toggle_var.set(f"{arrow} 첨부 개수 · {var.get()}장")
+
     def _load_prompt_agents(self) -> None:
         def load() -> None:
             try:
@@ -818,7 +981,7 @@ class App:
             self._prompt_header_var.set(self._prompt_base_label())
 
     def _submit_capture_prompt(self) -> None:
-        if self._prompt_window is None:
+        if self._prompt_window is None or self._prompt_recounting:
             return
         prompt = self._prompt_text.get("1.0", "end").strip()
         if self.codex.requires_thread_selection:
@@ -831,23 +994,76 @@ class App:
         if not prompt:
             self._prompt_header_var.set(f"{self._prompt_base_label()} · ENTER PROMPT")
             return
-        paths = self._prompt_paths
-        if not self.capture.send_prepared(self._prompt_kind, thread_id, paths, prompt):
+        # Only replay captures have a frame-count slider at all, and only
+        # actually paying for a fresh export_recent() when the chosen count
+        # differs from what freeze() already extracted -- the common case
+        # (slider left untouched) sends exactly as fast as before this existed.
+        desired_count = self._prompt_frame_count_var.get() if self._prompt_frame_count_var is not None else None
+        if desired_count is not None and desired_count != len(self._prompt_paths):
+            self._prompt_recounting = True
+            self._prompt_header_var.set(f"{self._prompt_base_label()} · 다시 추출 중…")
+            self._finish_submit_with_recount(thread_id, prompt, desired_count)
+            return
+        self._finish_submit(thread_id, prompt, self._prompt_paths)
+
+    def _finish_submit_with_recount(self, thread_id: str, prompt: str, desired_count: int) -> None:
+        old_paths = self._prompt_paths
+
+        def reextract() -> None:
+            try:
+                new_paths = self.screen_buffer.export_recent(
+                    int(self.settings.replay_seconds), frame_count=desired_count,
+                    with_manifest=self.settings.delivery_target == "codex")
+                error = ""
+            except Exception as caught:
+                new_paths, error = (), str(caught)
+            try:
+                self.root.after(0, self._apply_recount_result, thread_id, prompt, old_paths, new_paths, error)
+            except tk.TclError:
+                cleanup_paths(new_paths)
+        threading.Thread(target=reextract, name="airpointer-recount-capture", daemon=True).start()
+
+    def _apply_recount_result(self, thread_id: str, prompt: str, old_paths: tuple[Path, ...],
+                              new_paths: tuple[Path, ...], error: str) -> None:
+        # The window may have been cancelled/closed while re-extraction was
+        # in flight -- _cancel_capture_prompt already cleaned up old_paths in
+        # that case, so just discard whatever this late result produced.
+        if self._prompt_window is None:
+            cleanup_paths(new_paths)
+            return
+        self._prompt_recounting = False
+        if error or not new_paths:
+            self._prompt_header_var.set(f"{self._prompt_base_label()} · 다시 추출 실패")
+            return
+        cleanup_paths(old_paths)
+        self._prompt_paths = new_paths
+        self._finish_submit(thread_id, prompt, new_paths)
+
+    def _finish_submit(self, thread_id: str, prompt: str, paths: tuple[Path, ...]) -> None:
+        if not self.capture.send_prepared(self._prompt_kind, thread_id, paths, prompt,
+                                           self._prompt_extra_context):
             self._prompt_header_var.set(f"{self._prompt_base_label()} · BUSY")
             return
         self._prompt_paths = ()
+        self._prompt_extra_context = ""
         self._agent_thread_id = thread_id
         self.settings.agent_thread_id = thread_id
         self._destroy_prompt_window()
 
     def _cancel_capture_prompt(self) -> None:
         paths, self._prompt_paths = self._prompt_paths, ()
+        self._prompt_extra_context = ""
         cleanup_paths(paths)
         self._destroy_prompt_window()
 
     def _destroy_prompt_window(self) -> None:
         window, self._prompt_window = self._prompt_window, None
         self._prompt_agent_ids = {}
+        self._prompt_recounting = False
+        self._prompt_frame_count_expanded = False
+        self._prompt_frame_count_var = None
+        self._prompt_frame_count_toggle_var = None
+        self._prompt_frame_count_panel = None
         if window is not None:
             try:
                 window.destroy()
@@ -879,6 +1095,28 @@ class App:
             self.screen_buffer.start()
         elif not enabled:
             self.screen_buffer.stop(clear=True)
+
+    def _set_clipboard_history_enabled(self, enabled: bool) -> None:
+        # Persisted the same way every other checkbox/radio setting here is
+        # (mutate self.settings now, Settings.save() writes it out on
+        # _close()) -- next launch's Settings.load() picks it back up.
+        # Also takes effect immediately if tracking is already running,
+        # rather than only from the next Start, matching _set_replay_enabled.
+        self.settings.clipboard_history_enabled = enabled
+        if enabled and self._active_mode:
+            self.clipboard_tracker.start()
+        elif not enabled:
+            self.clipboard_tracker.stop(clear=True)
+
+    def _on_clipboard_checkbox_toggled(self) -> None:
+        """Shared `command=` for both clipboard checkboxes -- the settings
+        tab's (_build_replay_ui) and the capture-prompt window's own (see
+        _show_capture_prompt) -- since they share one BooleanVar
+        (self._clipboard_history_var), reading it here always reflects
+        whichever one the user just clicked."""
+        enabled = self._clipboard_history_var.get()
+        self.click_tracker.record_manual("AirPointer", f"Clipboard History {'ON' if enabled else 'OFF'}")
+        self._set_clipboard_history_enabled(enabled)
 
     def _set_launch_mode(self, mode: str) -> None:
         self.settings.launch_mode = mode

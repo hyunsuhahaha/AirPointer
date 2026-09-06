@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowClockwise, ArrowCounterClockwise, Camera, CaretDown, Check, CircleNotch, Desktop, DotsSixVertical, Gear, HandPalm, LockKey, MagnifyingGlass, PaperPlaneTilt, Play, Stop, WarningCircle, X } from "@phosphor-icons/react";
+import { ArrowClockwise, ArrowCounterClockwise, Camera, CaretDown, Check, CircleNotch, ClipboardText, Desktop, DotsSixVertical, Gear, HandPalm, LockKey, MagnifyingGlass, PaperPlaneTilt, Play, Sparkle, Stop, Target, WarningCircle, X } from "@phosphor-icons/react";
 import { useCompanionGesture } from "@/hooks/use-companion-gesture";
 import type { HotkeyBindings } from "@/hooks/use-companion-gesture";
 import { BrowserReplayBuffer, frameFromVideo } from "@/lib/replay-buffer";
@@ -43,6 +43,36 @@ const PROMPT_PRESETS = [
   "문제 원인과 해결 방법을 찾아줘",
   "여기서 다음에 무엇을 해야 하는지 알려줘",
 ];
+
+// Mirrors the real pipeline (screen_buffer.py -> capture_controller.py ->
+// clipboard_tracker.py/selection_context.py -> companion_bridge.py), but the
+// "active stage" sweep below is a decorative CSS-only loop, not a readout of
+// actual phase state -- there's no per-viewer telemetry cheap enough to
+// drive this honestly yet.
+const PIPELINE_STAGES = [
+  { Icon: Camera, label: "화면 캡처", detail: "순환 버퍼에 프레임 기록" },
+  { Icon: Sparkle, label: "변화 감지", detail: "바뀐 순간만 골라냄" },
+  { Icon: Target, label: "대표 프레임 선택", detail: "핵심 장면으로 압축" },
+  { Icon: ClipboardText, label: "컨텍스트 결합", detail: "클립보드 · 선택 영역 · 클릭 이력" },
+  { Icon: PaperPlaneTilt, label: "Agent 전달", detail: "Claude Code · Claude Desktop · Codex" },
+];
+
+type ScoreChart = {
+  points: string;
+  thresholdY: number;
+  bands: { x: number; width: number }[];
+  peaks: { x: number; y: number; score: number }[];
+};
+
+// Same hand-drawn curve as before "실시간 연동" existed -- shown whenever the
+// checkbox is off, or on but no real data is available yet (see
+// liveScoreAvailable/liveScoreChart in ReplayWorkspace).
+const DEMO_SCORE_CHART: ScoreChart = {
+  points: "0,118 25,120 50,116 75,119 100,122 125,109 150,68 175,34 200,50 225,90 250,117 275,120 300,114 325,119 350,122 375,121 400,112 425,74 450,40 475,58 500,92 525,116 550,119 575,116 600,120",
+  thresholdY: 100,
+  bands: [{ x: 138, width: 97 }, { x: 413, width: 100 }],
+  peaks: [{ x: 175, y: 34, score: 0.81 }, { x: 450, y: 40, score: 0.74 }],
+};
 
 const STAGE_MIN_WIDTH = 320;
 const STAGE_MIN_HEIGHT = 220;
@@ -112,6 +142,10 @@ export function ReplayWorkspace() {
   const [promptTemplate, setPromptTemplate] = useState<PromptTemplate | null>(null);
   const [promptSettingsState, setPromptSettingsState] = useState<"idle" | "loading" | "saving" | "error">("idle");
   const [promptSettingsMessage, setPromptSettingsMessage] = useState("");
+  // User intent, not availability -- stays checked across a connection drop
+  // so the chart just falls back to the demo curve with an explanation
+  // rather than silently unchecking itself (see liveScoreAvailable below).
+  const [liveScoreEnabled, setLiveScoreEnabled] = useState(false);
 
   const getStageBox = useCallback((): StageBox => {
     if (stageBox) return stageBox;
@@ -480,8 +514,59 @@ export function ReplayWorkspace() {
     setHotkeyBindings((current) => ({ ...current, [action]: combo }));
   }, []);
 
-  const { pose, progress: gestureProgress, preview: companionPreview, sentFrames: companionSentFrames, selection: gestureSelection, error: gestureError, ready: companionReady, connected: companionConnected, activeMode } = useCompanionGesture({ enabled: gestureEnabled, token: companionToken, agentThreadId, gestures: gestureActions, hotkeys: hotkeyBindings, deliveryTarget });
+  const { pose, progress: gestureProgress, preview: companionPreview, sentFrames: companionSentFrames, selection: gestureSelection, error: gestureError, ready: companionReady, connected: companionConnected, activeMode, scoreHistory: liveScoreHistory, scoreThreshold: liveScoreThreshold } = useCompanionGesture({ enabled: gestureEnabled, token: companionToken, agentThreadId, gestures: gestureActions, hotkeys: hotkeyBindings, deliveryTarget });
   const hotkeyMode = activeMode ? activeMode === "hotkey" : launchMode === "hotkey";
+
+  // AirPointer has to actually be running for scoreHistory to mean anything
+  // -- companion_bridge.py only ever gets real values pushed into it from
+  // App._redraw() while the native capture loop is alive (see main.py).
+  const liveScoreAvailable = gestureEnabled && companionReady;
+  const liveScoreChart = useMemo<ScoreChart | null>(() => {
+    if (liveScoreHistory.length < 2) return null;
+    const scores = liveScoreHistory.map(([, score]) => score);
+    // Real global-diff scores run far below 1.0 in practice (see the
+    // mem_probe.py measurement thread) -- scale to whatever's actually
+    // showing up so the line isn't squashed flat against the bottom.
+    const maxScore = Math.max(liveScoreThreshold * 1.4, ...scores, 0.001);
+    const minT = liveScoreHistory[0][0];
+    const maxT = liveScoreHistory[liveScoreHistory.length - 1][0];
+    const span = Math.max(maxT - minT, 0.001);
+    const toX = (t: number) => ((t - minT) / span) * 600;
+    const toY = (score: number) => 135 - (score / maxScore) * 125;
+    const points = liveScoreHistory.map(([t, score]) => `${toX(t).toFixed(1)},${toY(score).toFixed(1)}`).join(" ");
+
+    // One pass: a run of consecutive at-or-above-threshold samples becomes
+    // one shaded band plus one peak marker at that run's highest score --
+    // mirrors _ChangeTracker merging consecutive above-threshold frames into
+    // one ChangeEvent, just without the quiet-frame hysteresis (this only
+    // has the global score to work with, not the tile grid _ChangeTracker
+    // also checks -- see the legend's "전역 기준만" note).
+    const bands: { x: number; width: number }[] = [];
+    const peaks: { x: number; y: number; score: number }[] = [];
+    let runStartT: number | null = null;
+    let runBestT = 0;
+    let runBestScore = 0;
+    const closeRun = (endT: number) => {
+      if (runStartT === null) return;
+      bands.push({ x: toX(runStartT), width: Math.max(4, toX(endT) - toX(runStartT)) });
+      peaks.push({ x: toX(runBestT), y: toY(runBestScore), score: runBestScore });
+      runStartT = null;
+    };
+    liveScoreHistory.forEach(([t, score], index) => {
+      const above = score >= liveScoreThreshold;
+      if (above) {
+        if (runStartT === null) { runStartT = t; runBestT = t; runBestScore = score; }
+        else if (score > runBestScore) { runBestT = t; runBestScore = score; }
+        if (index === liveScoreHistory.length - 1) closeRun(t);
+      } else {
+        closeRun(liveScoreHistory[index - 1]?.[0] ?? t);
+      }
+    });
+
+    return { points, thresholdY: toY(liveScoreThreshold), bands, peaks };
+  }, [liveScoreHistory, liveScoreThreshold]);
+  const showLiveScore = liveScoreEnabled && liveScoreAvailable && liveScoreChart !== null;
+  const scoreChart = showLiveScore ? liveScoreChart! : DEMO_SCORE_CHART;
 
   // Mirrors a gesture/hotkey-triggered capture into the same "LOCAL RING
   // BUFFER" grid below that otherwise only ever shows this page's own
@@ -489,12 +574,11 @@ export function ReplayWorkspace() {
   // native capture never reached the browser at all before this, since it
   // goes straight to Codex/Claude Desktop via desktop_paste.py.
   useEffect(() => {
-    // atSeconds is a placeholder here -- the native side's change-detection
-    // picks (airpointer/screen_buffer.py's _select_notable_moments) don't
-    // carry their per-frame offset across the companion bridge yet (see
-    // App._publish_sent_frames), only the final image bytes. Worth wiring
-    // through later; for now this at least reuses the real selection.
-    if (companionSentFrames.length) setFrames(companionSentFrames.map((url) => ({ url, atSeconds: 0 })));
+    // atSeconds now comes from the native side for real (see
+    // App._publish_sent_frames, which reads screen_buffer.py's
+    // export_recent() sidecar) -- 0 for a screenshot/region send is
+    // genuinely "just now", not a placeholder.
+    if (companionSentFrames.length) setFrames(companionSentFrames);
   }, [companionSentFrames]);
 
   // Reset the boot-progress estimate the moment the switch turns off, during
@@ -574,7 +658,7 @@ export function ReplayWorkspace() {
     <main className={styles.shell}>
       <header className={styles.nav}>
         <a className={styles.brand} href="#top" aria-label="방금그거뭐였지 홈"><span className={styles.brandMark} aria-hidden="true">↺</span><span>방금그거뭐였지</span></a>
-        <div className={styles.navMeta}><span className={styles.localBadge}><LockKey size={14} weight="bold" /> LOCAL BUFFER</span><a href="#how">작동 원리</a><a href="#privacy">개인정보</a></div>
+        <div className={styles.navMeta}><span className={styles.localBadge}><LockKey size={14} weight="bold" /> LOCAL BUFFER</span><a href="#how">작동 원리</a><a href="#privacy">개인정보</a><a href="#pipeline">파이프라인</a></div>
       </header>
 
       <section className={styles.hero} id="top">
@@ -726,6 +810,73 @@ export function ReplayWorkspace() {
           </motion.section>
         </motion.div>}
       </AnimatePresence>
+
+      <section className={styles.pipelineSection} id="pipeline">
+        <p className={styles.eyebrow}>HOW AIRPOINTER THINKS</p>
+        <h2>다섯 단계로<br />화면이 Agent에 도착합니다.</h2>
+        <div className={styles.pipelineTrack}>
+          <div className={styles.pipelineLine} aria-hidden="true"><span className={styles.pipelineBeam} /></div>
+          {PIPELINE_STAGES.map(({ Icon, label, detail }, index) => (
+            <div className={styles.pipelineNode} style={{ "--i": index } as React.CSSProperties} key={label}>
+              <span className={styles.pipelineIcon}><Icon size={20} weight="bold" /></span>
+              <span className={styles.pipelineText}><b>{label}</b><small>{detail}</small></span>
+            </div>
+          ))}
+        </div>
+
+        {/* Off (or on with nothing to show yet), this renders DEMO_SCORE_CHART
+            -- a hand-drawn curve, not a live readout. Checked while AirPointer
+            is running, it renders liveScoreChart instead: real per-frame
+            scores from _ChangeTracker.observe(), plumbed through
+            ScreenReplayBuffer.recent_scores() -> companion_bridge.py's
+            publish_scores() -> this page's /status poll. Either way the
+            rendering below is the same code path -- see ScoreChart above. */}
+        <div className={styles.scorePanel}>
+          <div className={styles.scorePanelHead}>
+            <span>TILE DIFF SCORE{showLiveScore && " · LIVE"}</span>
+            <div className={styles.scorePanelHeadRight}>
+              <span>_ChangeTracker.observe()</span>
+              <label className={styles.scoreLiveToggle} data-available={liveScoreAvailable} title={liveScoreAvailable ? undefined : "AirPointer 연결 시 사용 가능"}>
+                <input type="checkbox" checked={liveScoreEnabled} onChange={(event) => setLiveScoreEnabled(event.target.checked)} />
+                <span>실시간 연동</span>
+              </label>
+            </div>
+          </div>
+          <p className={styles.scoreCaption}>프레임마다 화면이 바뀐 정도를 점수로 매깁니다. 점선(임계값)을 넘는 구간을 하나의 &ldquo;이벤트&rdquo;로 묶고, 그 안에서 점수가 가장 높은 프레임을 대표 프레임으로 뽑습니다.</p>
+          {liveScoreEnabled && !showLiveScore && (
+            <p className={styles.scoreLiveHint}>
+              {!liveScoreAvailable ? "AirPointer 연결 대기 중 — 그동안 데모 곡선을 보여줍니다." : "데이터를 모으는 중입니다 — 그동안 데모 곡선을 보여줍니다."}
+            </p>
+          )}
+          <div className={styles.scoreChart}>
+            <svg viewBox="0 0 600 140" preserveAspectRatio="none">
+              <line x1="0" y1={scoreChart.thresholdY} x2="600" y2={scoreChart.thresholdY} className={styles.scoreThreshold} />
+              {scoreChart.bands.map((band, index) => (
+                <rect key={index} x={band.x} y="0" width={band.width} height="140" className={styles.scoreBand} />
+              ))}
+              <polyline className={styles.scoreLine} points={scoreChart.points} />
+              {scoreChart.peaks.map((peak, index) => (
+                <rect key={index} x={peak.x - 4} y={peak.y - 4} width="8" height="8" className={styles.scorePeak} />
+              ))}
+            </svg>
+            {!showLiveScore && <span className={styles.scorePlayhead} />}
+            <span className={styles.scoreAxisLabel} data-corner="top-left">점수 높음 ↑</span>
+            <span className={styles.scoreAxisLabel} data-corner="bottom-right">시간 →</span>
+            <span className={styles.scoreThresholdLabel} style={{ top: `calc(${(scoreChart.thresholdY / 140) * 100}% - 16px)` }}>임계값</span>
+            {scoreChart.bands.map((band, index) => (
+              <span className={styles.scoreEventLabel} style={{ left: `${((band.x + band.width / 2) / 600) * 100}%` }} key={index}>이벤트 구간</span>
+            ))}
+            {scoreChart.peaks.map((peak, index) => (
+              <span className={styles.scorePeakLabel} style={{ left: `${(peak.x / 600) * 100}%` }} key={index}>대표 프레임</span>
+            ))}
+          </div>
+          <div className={styles.scoreLegend}>
+            <span>diff score</span>
+            <span>{showLiveScore ? `THRESHOLD · GLOBAL_MIN_SCORE ${liveScoreThreshold} (전역 기준만, 타일 기준 생략)` : "THRESHOLD · GLOBAL_MIN_SCORE 0.02 / TILE_MIN_SCORE 0.15"}</span>
+            <span>{scoreChart.peaks.length ? `PEAK ${scoreChart.peaks.map((peak) => peak.score.toFixed(2)).join(" · ")}` : "PEAK 없음"}</span>
+          </div>
+        </div>
+      </section>
 
       <footer className={styles.footer}><span>방금그거뭐였지</span><span>AI Championship 2026 Prototype</span><span>Built for moments that disappear.</span></footer>
     </main>

@@ -32,6 +32,9 @@ The user explicitly starts browser screen sharing. One-second recording segments
 - Browser recordings remain in memory until the user explicitly requests analysis.
 - The deployed React app uses a server route for Responses API calls so API keys never enter browser code.
 - The native Python AirPointer remains the path for gesture-driven local screen capture (mouse-drag region selection, palm-hold replay) and sending directly to a local Codex task. It does not control the OS mouse cursor.
+- A capture's prompt can optionally include the last 30 seconds of copied text alongside window/click activity, so the agent knows what the user recently copied, not just clicked. Off by default: clipboard content can carry meaningfully more sensitive material than a window title or button name, so it needs an explicit opt-in rather than riding along with window/click tracking automatically.
+- A replay capture's detected-change hint names the actual UI control when Windows' accessibility tree exposes one (e.g. "저장 버튼"), falling back to a coarse screen-quadrant phrase otherwise -- resolved locally via UI Automation, no vision model call.
+- Text the user has selected on screen at the moment a capture is triggered is read (via UI Automation, or a Ctrl+C fallback that safety-checks the target and restores the clipboard immediately) and attached to the prompt, so the agent gets the exact wording instead of re-reading it off a screenshot. Always on, unlike the clipboard-history opt-in above: it only ever reflects what the user is already pointing at for this specific capture, not a rolling log of unrelated past copies.
 - The deployed web app sends still images sampled from the replay because model image input is the reliable cross-platform interface.
 - Inferred deployment target: Vercel. This can be replaced without changing the browser capture module.
 

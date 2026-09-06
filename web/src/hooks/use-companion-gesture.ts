@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { GesturePose, GestureProgress, RegionSelectionView } from "@/lib/gesture";
+import type { OverviewFrame } from "@/lib/replay-buffer";
 
 type GestureActions = { replay: boolean; screenshot: boolean; region: boolean };
 export type HotkeyBindings = { replay: string; screenshot: string; region: string };
@@ -24,6 +25,8 @@ type Snapshot = {
   replayEvent: number;
   preview: string;
   sentEvent: number;
+  scoreHistory: [number, number][];
+  scoreThreshold: number;
 };
 
 const IDLE_PROGRESS: GestureProgress = { phase: "idle", value: 0, command: null };
@@ -33,7 +36,9 @@ export function useCompanionGesture({ enabled, token, agentThreadId, gestures, h
   const [pose, setPose] = useState<GesturePose>("none");
   const [progress, setProgress] = useState<GestureProgress>(IDLE_PROGRESS);
   const [preview, setPreview] = useState("");
-  const [sentFrames, setSentFrames] = useState<string[]>([]);
+  const [sentFrames, setSentFrames] = useState<OverviewFrame[]>([]);
+  const [scoreHistory, setScoreHistory] = useState<[number, number][]>([]);
+  const [scoreThreshold, setScoreThreshold] = useState(0.02);
   const [error, setError] = useState("");
   const [readyToken, setReadyToken] = useState("");
   const [activeMode, setActiveMode] = useState<"gesture" | "hotkey" | null>(null);
@@ -95,6 +100,8 @@ export function useCompanionGesture({ enabled, token, agentThreadId, gestures, h
         firstFailureAt = 0; setError(""); setConnected(true); setReadyToken(ready ? token : ""); setActiveMode(state.mode); setPose(state.pose); setPreview(state.preview);
         const palmActive = state.route === "replay" && (state.phase === "arming" || state.phase === "armed");
         setProgress(palmActive ? { phase: "holding", value: state.progress, command: null } : IDLE_PROGRESS);
+        if (Array.isArray(state.scoreHistory)) setScoreHistory(state.scoreHistory);
+        if (typeof state.scoreThreshold === "number") setScoreThreshold(state.scoreThreshold);
         // Only pull the actual images when the counter moves -- they can be
         // several full-size JPEGs, and this status poll itself runs every
         // 100ms, so fetching them unconditionally on every tick would be
@@ -103,7 +110,7 @@ export function useCompanionGesture({ enabled, token, agentThreadId, gestures, h
           try {
             const framesResponse = await fetch(sentFramesUrl, { cache: "no-store" });
             if (framesResponse.ok) {
-              const payload = await framesResponse.json() as { frames?: string[] };
+              const payload = await framesResponse.json() as { frames?: OverviewFrame[] };
               if (!cancelled && Array.isArray(payload.frames)) setSentFrames(payload.frames);
             }
           } catch {
@@ -135,6 +142,8 @@ export function useCompanionGesture({ enabled, token, agentThreadId, gestures, h
     progress: enabled ? progress : IDLE_PROGRESS,
     preview: enabled ? preview : "",
     sentFrames: enabled ? sentFrames : [],
+    scoreHistory: enabled ? scoreHistory : [],
+    scoreThreshold,
     selection: IDLE_SELECTION,
     error: enabled ? error : "",
     ready: enabled && readyToken === token,
