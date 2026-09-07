@@ -1,11 +1,13 @@
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
-import { formatCaptureMetadata, isAnalysisPayload } from "@/lib/analysis-payload";
+import { ANALYSIS_RESPONSE_INSTRUCTIONS, analysisTaskText, formatCaptureMetadata, isAnalysisPayload, needsTransientReplaySearch, parseAnalysisResult } from "@/lib/analysis-payload";
+import { replayExplorationRequestsFrom } from "@/lib/replay-frame-request";
 
 export const runtime = "nodejs";
 const attempts = new Map<string, number[]>();
 const MAX_IMAGE_CHARS = 1_600_000;
-const MAX_TOTAL_CHARS = 7_500_000;
+const MAX_TOTAL_CHARS = 30_000_000;
+const MAX_FRAMES = 24;
 // A user question riding along a capture (e.g. from the PiP window's own
 // prompt box) -- generous enough for a real question, capped so this can't
 // become a way to pad the request past what the frames themselves cost.
@@ -36,17 +38,11 @@ export async function POST(request: Request) {
     const body: unknown = await request.json();
     if (!isAnalysisPayload(body)) return NextResponse.json({ error: "화면 또는 후속 질문이 올바르지 않습니다." }, { status: 400 });
     const total = body.frames.reduce((sum, frame) => sum + frame.length, 0);
-    if (body.frames.length > 6 || total > MAX_TOTAL_CHARS || body.frames.some((frame) => frame.length > MAX_IMAGE_CHARS)) {
+    if (body.frames.length > MAX_FRAMES || total > MAX_TOTAL_CHARS || body.frames.some((frame) => frame.length > MAX_IMAGE_CHARS)) {
       return NextResponse.json({ error: "프레임 용량이 너무 큽니다." }, { status: 413 });
     }
     const question = body.question?.trim().slice(0, MAX_QUESTION_CHARS);
-    const baseInstruction = body.mode === "text" ? "새 화면은 첨부되지 않았습니다. 이전 대화 텍스트를 바탕으로 후속 질문에 한국어로 간결하게 답하세요. 현재 화면이나 이전 이미지를 직접 보고 있다고 말하지 마세요." : body.mode === "replay" ? "시간순으로 캡처된 화면입니다. 방금 어떤 변화가 있었는지, 문제가 보이면 가능한 원인과 바로 할 다음 행동을 한국어로 간결하게 설명하세요." : "현재 화면입니다. 무엇이 보이는지, 문제가 있다면 가능한 원인과 바로 할 다음 행동을 한국어로 간결하게 설명하세요.";
-    // The question (if any) is appended to baseInstruction below, not
-    // substituted for it -- the base instruction still anchors the model on
-    // "describe what happened" even when the user's own question is
-    // narrower (e.g. "이 에러 뭐야?"), so a vague question doesn't lose the
-    // context a blank submission would have gotten.
-    //
+    const queried = body.metadata?.images.some((image) => image.kind === "queried-frame" || image.kind === "queried-crop");
     // History is folded into that same single user turn's text as a
     // labeled transcript, not replayed as separate role-tagged `input`
     // items -- the SDK's types for a manually-reconstructed assistant turn
@@ -66,15 +62,81 @@ export async function POST(request: Request) {
     });
     const captureContext = formatCaptureMetadata(body.metadata);
     const instruction = [
-      captureContext,
+      analysisTaskText(body.mode, question, queried, body.metadata?.requestedSeconds, body.exploration),
       historyLines.length ? `이전 대화:\n${historyLines.join("\n")}` : "",
-      question ? `${baseInstruction}\n\n사용자 질문: ${question}` : baseInstruction,
+      captureContext,
+      question ? "최종 응답은 위 사용자 질문에 대한 답만 작성하세요." : "",
     ].filter(Boolean).join("\n\n");
     const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const remainingFrames = body.exploration ? body.exploration.frameBudget - body.exploration.usedFrames : 0;
+    const canQueryReplay = body.mode === "replay" && Boolean(body.metadata) && Boolean(body.exploration)
+      && remainingFrames > 0 && body.exploration!.round < body.exploration!.maxRounds;
+    // Product behavior, not a demo shortcut: when a real user asks about a
+    // fleeting event, representative before/after frames are not sufficient
+    // evidence. The model still chooses the timestamps; this only guarantees
+    // that the local replay is consulted once before it answers.
+    const needsTransientSearch = canQueryReplay && needsTransientReplaySearch(question, body.exploration!.round);
     const response = await client.responses.create({
-      model: process.env.OPENAI_MODEL || "gpt-5.4-mini",
+      model: body.model || process.env.OPENAI_MODEL || "gpt-5.4-mini",
+      instructions: ANALYSIS_RESPONSE_INSTRUCTIONS,
       store: false,
       max_output_tokens: 700,
+      text: { format: {
+        type: "json_schema",
+        name: "screen_analysis_with_evidence",
+        strict: true,
+        schema: {
+          type: "object",
+          properties: {
+            answer: { type: "string", description: "사용자 질문에 대한 직접적이고 간결한 한국어 답변" },
+            evidence: { type: "array", maxItems: 12, description: "답을 실제로 뒷받침하는 첨부 화면 근거. 새 화면이 없는 후속 질문이면 빈 배열", items: {
+              type: "object",
+              properties: {
+                frame_number: { type: "integer", minimum: 1, maximum: 24, description: "입력에 첨부된 이미지의 1부터 시작하는 번호" },
+                claim: { type: "string", description: "이 프레임에서 직접 확인되는 근거" },
+              },
+              required: ["frame_number", "claim"],
+              additionalProperties: false,
+            } },
+          },
+          required: ["answer", "evidence"],
+          additionalProperties: false,
+        },
+      } },
+      ...(canQueryReplay ? { tools: [
+        {
+          type: "function" as const,
+          name: "request_replay_frames",
+          description: `브라우저에만 보존된 최근 ${body.metadata!.requestedSeconds}초 영상에서 추가 시점을 조회합니다. 기준 시각 이전을 음수 초로 지정하세요. 핵심 전환 구간이 넓으면 그 구간 안을 여러 점으로 촘촘히 좁히고, 다음 응답에서 필요하면 다시 호출할 수 있습니다. 이번 호출은 남은 전체 예산 ${remainingFrames}장 안에서 사용하세요.`,
+          strict: true,
+          parameters: {
+            type: "object",
+            properties: { offsets_seconds: { type: "array", minItems: 1, maxItems: remainingFrames, items: { type: "number" } } },
+            required: ["offsets_seconds"],
+            additionalProperties: false,
+          },
+        },
+        {
+          type: "function" as const,
+          name: "request_replay_crop",
+          description: "첨부 프레임의 작은 오류 문구나 UI 영역을 원본 해상도로 확대 조회합니다. 좌표는 화면 전체 대비 0~1이며 꼭 필요한 영역만 지정하세요.",
+          strict: true,
+          parameters: {
+            type: "object",
+            properties: {
+              frame_number: { type: "integer", minimum: 1, maximum: body.frames.length },
+              left: { type: "number", minimum: 0, maximum: 1 },
+              top: { type: "number", minimum: 0, maximum: 1 },
+              right: { type: "number", minimum: 0, maximum: 1 },
+              bottom: { type: "number", minimum: 0, maximum: 1 },
+            },
+            required: ["frame_number", "left", "top", "right", "bottom"],
+            additionalProperties: false,
+          },
+        },
+      ], tool_choice: needsTransientSearch
+        ? { type: "function" as const, name: "request_replay_frames" }
+        : "auto" as const } : {}),
       input: [{
         role: "user",
         content: [
@@ -83,7 +145,10 @@ export async function POST(request: Request) {
         ],
       }],
     });
-    return NextResponse.json({ captureContext, analysis: response.output_text || "화면을 분석했지만 설명을 만들지 못했습니다." });
+    const explorationRequests = canQueryReplay ? replayExplorationRequestsFrom(response.output, body.metadata!.requestedSeconds, body.frames.length, remainingFrames) : [];
+    if (explorationRequests.length) return NextResponse.json({ captureContext, explorationRequests });
+    const result = parseAnalysisResult(response.output_text || "화면을 분석했지만 설명을 만들지 못했습니다.", body.frames.length);
+    return NextResponse.json({ captureContext, ...result });
   } catch (error) {
     console.error("analysis_failed", error instanceof Error ? error.message : "unknown");
     return NextResponse.json({ error: "AI 분석에 실패했습니다. 잠시 후 다시 시도해 주세요." }, { status: 500 });

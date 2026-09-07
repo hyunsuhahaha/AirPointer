@@ -45,3 +45,6 @@ next-env.d.ts
 
 # local visual QA
 *-qa.png
+
+# downloaded by the browser OCR smoke test
+/eng.traineddata

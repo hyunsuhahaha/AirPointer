@@ -1,5 +1,11 @@
 export type ReplaySegment = { blob: Blob; startedAt: number; durationMs: number };
-export type OverviewFrame = { url: string; atSeconds: number; capturedAt?: number; sampleOffsetsSeconds?: number[] };
+export type NormalizedBox = [number, number, number, number];
+export type OverviewFrame = {
+  url: string; atSeconds: number; capturedAt?: number; sampleOffsetsSeconds?: number[];
+  kind?: "replay-frame" | "queried-frame" | "queried-crop";
+  focusBox?: NormalizedBox;
+  privacyHints?: { box: NormalizedBox; category: string }[];
+};
 export type ReplayCapsule = {
   overviewFrames: OverviewFrame[];
   segments: ReplaySegment[];
@@ -240,7 +246,7 @@ function selectEventsDiverse(events: ChangeEvent[], budget: number): ChangeEvent
 // Python version there's no "segment" indirection: each candidate already
 // is a specific instant, so picking one per notable event is enough (no
 // need to allow the same bucket twice).
-function selectNotable<T extends { capturedAt: number }>(candidates: T[], events: ChangeEvent[], count: number): T[] {
+export function selectNotable<T extends { capturedAt: number }>(candidates: T[], events: ChangeEvent[], count: number): T[] {
   if (candidates.length <= count) return [...candidates];
   const byTime = [...candidates].sort((a, b) => a.capturedAt - b.capturedAt);
   const nearest = (at: number): T | null => {
@@ -354,25 +360,15 @@ export class BrowserReplayBuffer {
     const recent = this.segments.filter((segment) => segment.startedAt + segment.durationMs >= cutoff);
     if (!recent.length) return { overviewFrames: [], segments: [], startedAt: cutoff, triggeredAt: now };
     const windowEvents = this.changeEvents.filter((event) => event.peakAt >= cutoff && event.peakAt <= now);
-    const previewCandidates = this.previewFrames.filter((frame) => frame.capturedAt >= cutoff && frame.capturedAt <= now);
-    let frames = await framesFromPreviews(selectNotable(previewCandidates, windowEvents, Math.min(60, previewCandidates.length)));
-    if (!frames.length) {
-      const sampleIntervalMs = Math.max(250, Math.ceil((seconds * 1_000) / 60 / 50) * 50);
-      const candidates = sampleSegmentPoints(recent, cutoff, now, sampleIntervalMs);
-      const chosen = selectNotable(candidates, windowEvents, Math.min(60, candidates.length));
-      const bySegment = new Map<number, Array<{ ratio: number; capturedAt: number }>>();
-      for (const point of chosen) {
-        const points = bySegment.get(point.segmentIndex) || [];
-        points.push({ ratio: point.ratio, capturedAt: point.capturedAt });
-        bySegment.set(point.segmentIndex, points);
-      }
-      const groups = await Promise.all([...bySegment].map(async ([segmentIndex, points]) => {
-        try { return await framesFromBlob(recent[segmentIndex].blob, points); }
-        catch { return []; }
-      }));
-      frames = groups.flat().sort((a, b) => a.capturedAt - b.capturedAt);
-    }
-    return { overviewFrames: makeContactSheets(frames, now, count), segments: [...recent], startedAt: cutoff, triggeredAt: now };
+    const candidates = sampleSegmentPoints(recent, cutoff, now, PREVIEW_INTERVAL_MS);
+    const chosen = selectNotable(candidates, windowEvents, Math.min(count, candidates.length));
+    const frames = await decodeReplayPoints(recent, chosen);
+    return { overviewFrames: makeReplayFrames(frames, now, "replay-frame"), segments: [...recent], startedAt: cutoff, triggeredAt: now };
+  }
+
+  async framesAtOffsets(capsule: ReplayCapsule, offsetsSeconds: number[]): Promise<OverviewFrame[]> {
+    const points = replayPointsAtOffsets(capsule.segments, capsule.triggeredAt, offsetsSeconds);
+    return makeReplayFrames(await decodeReplayPoints(capsule.segments, points), capsule.triggeredAt, "queried-frame");
   }
 
   // The single highest-scoring detected change in the window, as a
@@ -476,19 +472,6 @@ export function frameFromVideo(video: HTMLVideoElement, quality = 0.76): string 
   return canvas.toDataURL("image/jpeg", quality);
 }
 
-async function framesFromPreviews(previews: PreviewFrame[]): Promise<TimedFrame[]> {
-  return Promise.all(previews.map(async (preview) => {
-    const image = new Image();
-    image.src = preview.dataUrl;
-    await image.decode();
-    const canvas = document.createElement("canvas");
-    canvas.width = image.naturalWidth;
-    canvas.height = image.naturalHeight;
-    canvas.getContext("2d")!.drawImage(image, 0, 0);
-    return { canvas, capturedAt: preview.capturedAt };
-  }));
-}
-
 export function frameFromVideoRegion(video: HTMLVideoElement,
   region: { left: number; top: number; right: number; bottom: number }, quality = 0.82): string {
   const sourceWidth = Math.max(1, video.videoWidth);
@@ -544,6 +527,35 @@ function sampleSegmentPoints(segments: ReplaySegment[], cutoff: number, now: num
   });
 }
 
+export function surroundingReplayOffsets(atSeconds: number, windowSeconds: number, span = 1, step = 0.25): number[] {
+  const center = Math.max(0.01, Math.min(windowSeconds, atSeconds));
+  const count = Math.max(1, Math.round((span * 2) / step));
+  return Array.from({ length: count + 1 }, (_, index) => {
+    const age = Math.max(0.01, Math.min(windowSeconds, center + span - index * step));
+    return -Number(age.toFixed(3));
+  }).filter((value, index, values) => index === 0 || value !== values[index - 1]);
+}
+
+export function replayPointsAtOffsets(segments: ReplaySegment[], triggeredAt: number, offsetsSeconds: number[]) {
+  return offsetsSeconds.flatMap((offsetSeconds) => {
+    const capturedAt = triggeredAt + offsetSeconds * 1_000;
+    const segmentIndex = segments.findIndex((segment) => capturedAt >= segment.startedAt && capturedAt < segment.startedAt + segment.durationMs);
+    if (segmentIndex < 0) return [];
+    const segment = segments[segmentIndex];
+    return [{ segmentIndex, ratio: (capturedAt - segment.startedAt) / segment.durationMs, capturedAt, offsetSeconds }];
+  });
+}
+
+async function decodeReplayPoints(segments: ReplaySegment[], points: Array<{ segmentIndex: number; ratio: number; capturedAt: number }>) {
+  const bySegment = new Map<number, Array<{ ratio: number; capturedAt: number }>>();
+  for (const point of points) bySegment.set(point.segmentIndex, [...(bySegment.get(point.segmentIndex) ?? []), point]);
+  const groups = await Promise.all([...bySegment].map(async ([segmentIndex, segmentPoints]) => {
+    try { return await framesFromBlob(segments[segmentIndex].blob, segmentPoints); }
+    catch { return []; }
+  }));
+  return groups.flat().sort((a, b) => a.capturedAt - b.capturedAt);
+}
+
 async function framesFromBlob(blob: Blob, points: Array<{ ratio: number; capturedAt: number }>): Promise<TimedFrame[]> {
   const video = document.createElement("video");
   video.muted = true;
@@ -565,7 +577,7 @@ async function framesFromBlob(blob: Blob, points: Array<{ ratio: number; capture
         video.onseeked = done;
         window.setTimeout(done, 180);
       });
-      frames.push({ canvas: thumbnailFromVideo(video), capturedAt: point.capturedAt });
+      frames.push({ canvas: frameCanvas(video), capturedAt: point.capturedAt });
     }
     return frames;
   } finally { URL.revokeObjectURL(url); }
@@ -581,36 +593,20 @@ function thumbnailFromVideo(video: HTMLVideoElement) {
   return canvas;
 }
 
-function makeContactSheets(frames: TimedFrame[], now: number, maxSheets: number): OverviewFrame[] {
-  const perSheet = 10;
-  return Array.from({ length: Math.min(maxSheets, Math.ceil(frames.length / perSheet)) }, (_, sheetIndex) => {
-    const page = frames.slice(sheetIndex * perSheet, (sheetIndex + 1) * perSheet);
-    const cellWidth = 640;
-    const cellHeight = Math.max(...page.map((frame) => frame.canvas.height));
-    const columns = 2;
-    const rows = Math.ceil(page.length / columns);
-    const sheet = document.createElement("canvas");
-    sheet.width = cellWidth * columns;
-    sheet.height = cellHeight * rows;
-    const context = sheet.getContext("2d")!;
-    context.fillStyle = "#0c0c0b";
-    context.fillRect(0, 0, sheet.width, sheet.height);
-    page.forEach((frame, index) => {
-      const x = (index % columns) * cellWidth;
-      const y = Math.floor(index / columns) * cellHeight;
-      context.drawImage(frame.canvas, x, y, cellWidth, frame.canvas.height);
-      context.fillStyle = "rgba(0,0,0,.82)";
-      context.fillRect(x + 8, y + 8, 90, 25);
-      context.fillStyle = "#ff8a50";
-      context.font = "600 15px monospace";
-      context.fillText(`-${((now - frame.capturedAt) / 1_000).toFixed(2)}s`, x + 15, y + 26);
-    });
-    // Representative offset for this sheet's own outer caption (see
-    // replay-workspace.tsx's frame grid) -- the middle sub-frame's real
-    // capture time, now that selection is no longer uniform so an
-    // index-based guess would be wrong.
-    const representative = page[Math.floor(page.length / 2)] ?? page[0];
-    return { capturedAt: now, sampleOffsetsSeconds: page.map(frame => Math.max(0, (now - frame.capturedAt) / 1000)), url: sheet.toDataURL("image/jpeg", 0.68), atSeconds: Math.max(0, (now - representative.capturedAt) / 1_000) };
+function frameCanvas(video: HTMLVideoElement) {
+  const width = Math.min(1280, Math.max(1, video.videoWidth));
+  const height = Math.max(1, Math.round(width * video.videoHeight / Math.max(1, video.videoWidth)));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  canvas.getContext("2d")!.drawImage(video, 0, 0, width, height);
+  return canvas;
+}
+
+function makeReplayFrames(frames: TimedFrame[], triggeredAt: number, kind: "replay-frame" | "queried-frame"): OverviewFrame[] {
+  return frames.map((frame) => {
+    const atSeconds = Math.max(0, (triggeredAt - frame.capturedAt) / 1_000);
+    return { capturedAt: frame.capturedAt, sampleOffsetsSeconds: [atSeconds], url: frame.canvas.toDataURL("image/jpeg", 0.78), atSeconds, kind };
   });
 }
 
