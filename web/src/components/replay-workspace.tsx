@@ -398,9 +398,9 @@ export function ReplayWorkspace() {
     if (!window.documentPictureInPicture) return;
     setPipMessage("");
     try {
-      const pipWindow = await window.documentPictureInPicture.requestWindow({ width: 380, height: 240 });
+      const pipWindow = await window.documentPictureInPicture.requestWindow({ width: 320, height: 120 });
       pipWindowRef.current = pipWindow;
-      pipWindow.document.title = "방금그거뭐였지 · 캡처와 대화";
+      pipWindow.document.title = "캡처";
       pipWindow.document.documentElement.lang = "ko";
       pipWindow.document.documentElement.className = document.documentElement.className;
       pipWindow.document.body.style.cssText = "margin:0;background:#111210;color-scheme:dark";
