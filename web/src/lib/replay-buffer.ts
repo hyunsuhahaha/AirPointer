@@ -1,5 +1,5 @@
 export type ReplaySegment = { blob: Blob; startedAt: number; durationMs: number };
-export type OverviewFrame = { url: string; atSeconds: number };
+export type OverviewFrame = { url: string; atSeconds: number; capturedAt?: number; sampleOffsetsSeconds?: number[] };
 export type ReplayCapsule = {
   overviewFrames: OverviewFrame[];
   segments: ReplaySegment[];
@@ -610,7 +610,7 @@ function makeContactSheets(frames: TimedFrame[], now: number, maxSheets: number)
     // capture time, now that selection is no longer uniform so an
     // index-based guess would be wrong.
     const representative = page[Math.floor(page.length / 2)] ?? page[0];
-    return { url: sheet.toDataURL("image/jpeg", 0.68), atSeconds: Math.max(0, (now - representative.capturedAt) / 1_000) };
+    return { capturedAt: now, sampleOffsetsSeconds: page.map(frame => Math.max(0, (now - frame.capturedAt) / 1000)), url: sheet.toDataURL("image/jpeg", 0.68), atSeconds: Math.max(0, (now - representative.capturedAt) / 1_000) };
   });
 }
 

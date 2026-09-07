@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
-import { isAnalysisPayload } from "@/lib/analysis-payload";
+import { formatCaptureMetadata, isAnalysisPayload } from "@/lib/analysis-payload";
 
 export const runtime = "nodejs";
 const attempts = new Map<string, number[]>();
@@ -64,7 +64,9 @@ export async function POST(request: Request) {
       historyBudget -= text.length;
       return [`${turn.role === "user" ? "사용자" : "AI"}: ${text}`];
     });
+    const captureContext = formatCaptureMetadata(body.metadata);
     const instruction = [
+      captureContext,
       historyLines.length ? `이전 대화:\n${historyLines.join("\n")}` : "",
       question ? `${baseInstruction}\n\n사용자 질문: ${question}` : baseInstruction,
     ].filter(Boolean).join("\n\n");
@@ -81,7 +83,7 @@ export async function POST(request: Request) {
         ],
       }],
     });
-    return NextResponse.json({ analysis: response.output_text || "화면을 분석했지만 설명을 만들지 못했습니다." });
+    return NextResponse.json({ captureContext, analysis: response.output_text || "화면을 분석했지만 설명을 만들지 못했습니다." });
   } catch (error) {
     console.error("analysis_failed", error instanceof Error ? error.message : "unknown");
     return NextResponse.json({ error: "AI 분석에 실패했습니다. 잠시 후 다시 시도해 주세요." }, { status: 500 });

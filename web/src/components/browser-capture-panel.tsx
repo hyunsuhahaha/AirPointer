@@ -7,11 +7,13 @@ import styles from "./browser-capture-panel.module.css";
 import { cropRegion } from "@/lib/replay-buffer";
 import type { ChangeHighlight } from "@/lib/replay-buffer";
 
+import type { CaptureSnapshot } from "@/lib/analysis-payload";
+
 export type AnalysisMode = "current" | "replay" | "text";
 export type ConversationTurn = { role: "user" | "assistant"; text: string };
-export type Analyze = (mode: AnalysisMode, question?: string, history?: ConversationTurn[], image?: string) => Promise<{ text: string } | { error: string }>;
+export type Analyze = (mode: AnalysisMode, question?: string, history?: ConversationTurn[], image?: CaptureSnapshot) => Promise<{ text: string; captureContext?: string } | { error: string }>;
 export function RegionCapture({ image, busy, onSend, onCancel }: {
-  image: string; busy: boolean; onSend: (image: string, question: string) => Promise<void>; onCancel: () => void;
+  image: CaptureSnapshot; busy: boolean; onSend: (image: CaptureSnapshot, question: string) => Promise<void>; onCancel: () => void;
 }) {
   const [box, setBox] = useState<[number, number, number, number]>([0.25, 0.25, 0.75, 0.75]);
   const anchor = useRef<[number, number] | null>(null);
@@ -39,7 +41,7 @@ export function RegionCapture({ image, busy, onSend, onCancel }: {
           ? [l, t, Math.max(l + 0.02, Math.min(1, r + dx)), Math.max(t + 0.02, Math.min(1, b + dy))]
           : (() => { const x = Math.max(-l, Math.min(1 - r, dx)); const y = Math.max(-t, Math.min(1 - b, dy)); return [l + x, t + y, r + x, b + y]; })());
       }}>
-      <img src={image} alt="분석 전 고정한 공유 화면" draggable={false} />
+      <img src={image.url} alt="분석 전 고정한 공유 화면" draggable={false} />
       <span className={styles.selection} style={{ left: `${box[0] * 100}%`, top: `${box[1] * 100}%`, width: `${(box[2] - box[0]) * 100}%`, height: `${(box[3] - box[1]) * 100}%` }} />
     </div>
     <p className={styles.regionHint}>방향키로 이동 · Shift + 방향키로 크기 조절</p>
@@ -47,7 +49,7 @@ export function RegionCapture({ image, busy, onSend, onCancel }: {
     <div className={styles.regionActions}>
       <button className={styles.regionSubmit} disabled={locked || box[2] - box[0] < 0.01 || box[3] - box[1] < 0.01} onClick={async () => {
         setPreparing(true); setError("");
-        try { await onSend(await cropRegion(image, box, 0), question); }
+        try { await onSend({ ...image, url: await cropRegion(image.url, box, 0), selection: box }, question); }
         catch { setError("영역을 준비하지 못했습니다. 다시 선택해 주세요."); }
         finally { setPreparing(false); }
       }}>{locked ? <CircleNotch className={styles.spinner} size={15} /> : <FrameCorners size={15} />}{locked ? "처리 중…" : "선택 영역 분석"}</button>
@@ -57,15 +59,15 @@ export function RegionCapture({ image, busy, onSend, onCancel }: {
   </section>;
 }
 
-type DisplayTurn = ConversationTurn & { source?: string };
+type DisplayTurn = ConversationTurn & { source?: string; captureContext?: string };
 
 export function BrowserCapturePanel({ active, busy, elapsed, retention, seconds, highlight, snapshot, analyze }: {
   active: boolean; busy: boolean; elapsed: number; retention: number; seconds: number;
-  highlight: ChangeHighlight | null; snapshot: () => string; analyze: Analyze;
+  highlight: ChangeHighlight | null; snapshot: () => CaptureSnapshot; analyze: Analyze;
 }) {
   const [history, setHistory] = useState<DisplayTurn[]>([]);
   const [question, setQuestion] = useState("");
-  const [region, setRegion] = useState("");
+  const [region, setRegion] = useState<CaptureSnapshot | null>(null);
   const [error, setError] = useState("");
   const [pending, setPending] = useState<DisplayTurn | null>(null);
   const [expanded, setExpanded] = useState(false);
@@ -78,7 +80,7 @@ export function BrowserCapturePanel({ active, busy, elapsed, retention, seconds,
     try { panel.current?.ownerDocument.defaultView?.resizeTo(open ? 380 : 320, open ? 560 : 120); } catch { /* The browser owns PiP window placement. */ }
   };
   useEffect(() => { end.current?.scrollIntoView({ block: "end" }); }, [history, pending]);
-  const send = async (mode: AnalysisMode, image?: string, regionQuestion?: string) => {
+  const send = async (mode: AnalysisMode, image?: CaptureSnapshot, regionQuestion?: string) => {
     if (inFlight.current || busy) return;
     const prompt = regionQuestion ?? question.trim();
     if (mode === "text" && (!prompt || !history.length)) return;
@@ -90,8 +92,8 @@ export function BrowserCapturePanel({ active, busy, elapsed, retention, seconds,
     try {
       const result = await analyze(mode, prompt || undefined, history.map(({ role, text }) => ({ role, text })), image);
       if ("text" in result) {
-        setHistory((previous) => [...previous, turn, { role: "assistant", text: result.text } as DisplayTurn].slice(-8));
-        setQuestion(""); setRegion("");
+        setHistory((previous) => [...previous, { ...turn, captureContext: result.captureContext }, { role: "assistant", text: result.text } as DisplayTurn].slice(-8));
+        setQuestion(""); setRegion(null);
       } else setError(result.error);
     } catch {
       setError("답변을 가져오지 못했어요. 잠시 후 다시 보내주세요.");
@@ -108,8 +110,8 @@ export function BrowserCapturePanel({ active, busy, elapsed, retention, seconds,
     <header className={styles.header}>
       <span className={styles.recordingLabel} title={`로컬 버퍼 ${Math.floor(elapsed / 1000)}초 / ${retention}분`}><span className={styles.dot} data-active={active} />{active ? "기록 중" : "공유 꺼짐"}</span>
       <div className={styles.headerActions}>
-        {expanded && <button className={styles.iconButton} aria-label="새 대화" title="새 대화" disabled={locked || !history.length} onClick={() => { setHistory([]); setQuestion(""); setRegion(""); setError(""); }}><Plus size={17} /></button>}
-        <button className={styles.iconButton} disabled={locked} aria-label={expanded ? "버튼만 남기기" : "대화 펼치기"} title={expanded ? "작게 접기" : "대화 펼치기"} onClick={() => { setRegion(""); resize(!expanded); }}>{expanded ? <CornersIn size={17} /> : <CornersOut size={17} />}</button>
+        {expanded && <button className={styles.iconButton} aria-label="새 대화" title="새 대화" disabled={locked || !history.length} onClick={() => { setHistory([]); setQuestion(""); setRegion(null); setError(""); }}><Plus size={17} /></button>}
+        <button className={styles.iconButton} disabled={locked} aria-label={expanded ? "버튼만 남기기" : "대화 펼치기"} title={expanded ? "작게 접기" : "대화 펼치기"} onClick={() => { setRegion(null); resize(!expanded); }}>{expanded ? <CornersIn size={17} /> : <CornersOut size={17} />}</button>
       </div>
     </header>
     <div className={styles.actions} aria-label="화면 캡처">
@@ -126,12 +128,13 @@ export function BrowserCapturePanel({ active, busy, elapsed, retention, seconds,
             <figure><div className={styles.comparisonImage}><img src={highlight.afterUrl} alt="변화 이후" /><span className={styles.changeBox} style={{ left: `${highlight.bbox[0] * 100}%`, top: `${highlight.bbox[1] * 100}%`, width: `${(highlight.bbox[2] - highlight.bbox[0]) * 100}%`, height: `${(highlight.bbox[3] - highlight.bbox[1]) * 100}%` }} /></div><figcaption>이후 · 변화 영역</figcaption></figure>
           </div>
         </details>}
-        {region && active ? <RegionCapture image={region} busy={locked} onCancel={() => setRegion("")} onSend={(image, prompt) => send("current", image, prompt)} /> : <>
+        {region && active ? <RegionCapture image={region} busy={locked} onCancel={() => setRegion(null)} onSend={(image, prompt) => send("current", image, prompt)} /> : <>
           {!turns.length && !locked && <div className={styles.empty}><p>{active ? "화면을 선택하면 분석 결과가 표시됩니다." : "메인 탭에서 화면 공유를 시작하세요."}</p></div>}
           <div className={styles.conversation} role="log" aria-label="AI 대화" aria-live="polite" aria-busy={locked}>
             {turns.map((turn, index) => <article key={index} className={`${styles.turn} ${turn.role === "user" ? styles.userTurn : styles.answer}`} aria-label={turn.role === "user" ? "내 질문" : "AI 답변"}>
               {turn.source && <div className={styles.source}><FrameCorners size={11} />{turn.source}</div>}
               <p>{turn.text}</p>
+              {turn.captureContext && <details className={styles.receipt}><summary>전송 정보</summary><pre>{turn.captureContext}</pre></details>}
             </article>)}
             {locked && <div className={styles.thinking} role="status"><CircleNotch className={styles.spinner} size={15} />분석 중</div>}
             <div ref={end} />

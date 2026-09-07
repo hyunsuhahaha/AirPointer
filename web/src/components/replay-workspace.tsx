@@ -14,6 +14,7 @@ import type { ChangeHighlight, OverviewFrame, ReplayCapsule } from "@/lib/replay
 import type { PromptTemplate } from "@/lib/prompt-template";
 import styles from "./replay-workspace.module.css";
 import { BrowserCapturePanel, RegionCapture } from "./browser-capture-panel";
+import type { CaptureMetadata, CaptureSnapshot } from "@/lib/analysis-payload";
 import type { AnalysisMode } from "./browser-capture-panel";
 
 // Document Picture-in-Picture (Chrome/Edge 116+) isn't in TS's DOM lib yet --
@@ -145,6 +146,7 @@ export function ReplayWorkspace() {
   const [status, setStatus] = useState<Status>("idle");
   const [frames, setFrames] = useState<OverviewFrame[]>([]);
   const [analysis, setAnalysis] = useState("");
+  const [captureContext, setCaptureContext] = useState("");
   // "방금 뭐가 바뀌었나" highlight card -- the single most notable detected
   // change in the send window, as a before/after pair plus a zoomed crop.
   // Recomputed on a timer (see the effect near `elapsed` below), not on
@@ -218,7 +220,7 @@ export function ReplayWorkspace() {
   const [pipOpen, setPipOpen] = useState(false);
   const [pipMessage, setPipMessage] = useState("");
   const [pipContainer, setPipContainer] = useState<HTMLElement | null>(null);
-  const [regionImage, setRegionImage] = useState("");
+  const [regionImage, setRegionImage] = useState<CaptureSnapshot | null>(null);
   const analysisInFlight = useRef(false);
   // Deliberately deferred to an effect (not a useState lazy initializer)
   // so the first client render matches the SSR pass (window is undefined
@@ -318,7 +320,7 @@ export function ReplayWorkspace() {
     setElapsed(0);
     setStatus("idle");
     setMessage("버퍼를 비웠습니다. 화면 데이터는 남아 있지 않습니다.");
-    setRegionImage("");
+    setRegionImage(null);
   }, [stream]);
 
   const startSharing = useCallback(async () => {
@@ -328,7 +330,7 @@ export function ReplayWorkspace() {
     try {
       const nextStream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 15, max: 24 } }, audio: false });
       if (!screenVideo.current) return;
-      setRegionImage("");
+      setRegionImage(null);
       setHighlight(null); setHighlightZoomUrl("");
       screenVideo.current.srcObject = nextStream;
       await screenVideo.current.play();
@@ -336,7 +338,7 @@ export function ReplayWorkspace() {
       buffer.current.start(nextStream);
       nextStream.getVideoTracks()[0].addEventListener("ended", () => {
         buffer.current.stop(); setStream(null); setElapsed(0); setStatus("idle"); setMessage("화면 공유가 종료되어 버퍼를 비웠습니다.");
-        setHighlight(null); setHighlightZoomUrl(""); setRegionImage("");
+        setHighlight(null); setHighlightZoomUrl(""); setRegionImage(null);
       }, { once: true });
       setStream(nextStream);
       setFrames([]); setAnalysis(""); setStatus("recording"); setMessage("기록 중입니다. 트리거 전에는 어떤 화면도 서버로 보내지 않습니다.");
@@ -352,8 +354,8 @@ export function ReplayWorkspace() {
     // highlight is available -- it's the small/cut-off text the AI would
     // otherwise squint at in the full-size frames, so it goes in alongside
     // them rather than instead of one of them.
-    const nextFrames = mode === "current"
-      ? [{ url: frameFromVideo(screenVideo.current), atSeconds: 0 }]
+    const nextFrames: OverviewFrame[] = mode === "current"
+      ? [{ url: frameFromVideo(screenVideo.current), atSeconds: 0, capturedAt: Date.now() }]
       : (await buffer.current.recentCapsule(sendSeconds, highlightZoomUrl ? 5 : 6)).overviewFrames;
     if (!nextFrames.length) throw new Error("전송할 만큼 화면 버퍼가 아직 쌓이지 않았습니다.");
     if (mode === "replay" && highlightZoomUrl) nextFrames.push({ url: highlightZoomUrl, atSeconds: 0 });
@@ -362,7 +364,7 @@ export function ReplayWorkspace() {
   }, [highlightZoomUrl, sendSeconds, stream]);
 
   // All browser triggers share one request guard, including the PiP portal.
-  const analyzeWithOpenAI = useCallback(async (mode: AnalysisMode, question?: string, history?: ConversationTurn[], image?: string): Promise<{ text: string } | { error: string }> => {
+  const analyzeWithOpenAI = useCallback(async (mode: AnalysisMode, question?: string, history?: ConversationTurn[], image?: CaptureSnapshot): Promise<{ text: string; captureContext?: string } | { error: string }> => {
     if (mode !== "text" && !image && (!stream || !screenVideo.current)) {
       const error = "먼저 화면 공유를 시작해 주세요.";
       setStatus("error"); setMessage(error);
@@ -370,16 +372,30 @@ export function ReplayWorkspace() {
     }
     if (analysisInFlight.current) return { error: "이전 분석이 끝난 뒤 다시 보내주세요." };
     analysisInFlight.current = true;
-    setStatus("preparing"); setAnalysis("");
+    setStatus("preparing"); setAnalysis(""); setCaptureContext("");
     try {
-      const nextFrames = mode === "text" ? [] : image ? [{ url: image, atSeconds: 0 }] : await captureFrames(mode);
+      const nextFrames: OverviewFrame[] = mode === "text" ? [] : image ? [{ url: image.url, atSeconds: 0, capturedAt: image.capturedAt }] : await captureFrames(mode);
       if (image) setFrames(nextFrames);
+      const settings = stream?.getVideoTracks()[0]?.getSettings();
+      const surface = image?.surface ?? settings?.displaySurface;
+      const metadata: CaptureMetadata | undefined = mode === "text" ? undefined : {
+        capturedAt: nextFrames[0].capturedAt ?? Date.now(),
+        surface: surface === "browser" || surface === "window" || surface === "monitor" ? surface : "unknown",
+        width: image?.width ?? screenVideo.current!.videoWidth,
+        height: image?.height ?? screenVideo.current!.videoHeight,
+        requestedSeconds: mode === "replay" ? sendSeconds : 0,
+        selection: image?.selection,
+        images: nextFrames.map(frame => ({
+          kind: image ? "selection" : mode === "current" ? "screen" : frame.sampleOffsetsSeconds ? "contact-sheet" : "change-crop",
+          offsetsSeconds: image || mode === "current" ? [0] : frame.sampleOffsetsSeconds ?? [],
+        })),
+      };
       setStatus("analyzing"); setMessage(`${mode === "text" ? "질문" : image ? "선택 영역" : mode === "current" ? "현재 화면" : `최근 ${sendSeconds}초`}을 OpenAI API가 분석하고 있습니다.`);
-      const response = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode, frames: nextFrames.map((frame) => frame.url), question, history }) });
-      const data = await response.json() as { analysis?: string; error?: string };
+      const response = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode, frames: nextFrames.map((frame) => frame.url), question, history, metadata }) });
+      const data = await response.json() as { analysis?: string; error?: string; captureContext?: string };
       if (!response.ok || !data.analysis) throw new Error(data.error || "분석 결과를 받지 못했습니다.");
-      setAnalysis(data.analysis); setStatus("done"); setMessage("분석이 끝났습니다. 전송한 프레임은 서버에 저장하지 않습니다.");
-      return { text: data.analysis };
+      setCaptureContext(data.captureContext ?? ""); setAnalysis(data.analysis); setStatus("done"); setMessage("분석이 끝났습니다. 전송한 프레임은 서버에 저장하지 않습니다.");
+      return { text: data.analysis, captureContext: data.captureContext };
     } catch (reason) {
       const error = reason instanceof Error ? reason.message : "전송에 실패했습니다.";
       setStatus("error"); setMessage(error);
@@ -391,7 +407,9 @@ export function ReplayWorkspace() {
 
   const snapshot = useCallback(() => {
     if (!stream || !screenVideo.current) throw new Error("먼저 화면 공유를 시작해 주세요.");
-    return frameFromVideo(screenVideo.current);
+    const surface = stream.getVideoTracks()[0]?.getSettings().displaySurface;
+    return { url: frameFromVideo(screenVideo.current), capturedAt: Date.now(), width: screenVideo.current.videoWidth, height: screenVideo.current.videoHeight,
+      surface: surface === "browser" || surface === "window" || surface === "monitor" ? surface : "unknown" } satisfies CaptureSnapshot;
   }, [stream]);
 
   const openCapturePip = useCallback(async () => {
@@ -961,9 +979,9 @@ export function ReplayWorkspace() {
           <button className={styles.secondary} onClick={() => void analyzeWithOpenAI("replay")} disabled={!stream || status === "analyzing"}><ArrowCounterClockwise size={18} /> 최근 {sendSeconds}초 확인하기</button>
           <button className={styles.secondary} onClick={() => void analyzeWithOpenAI("current")} disabled={!stream || status === "analyzing"}><Camera size={18} /> 지금 화면 확인하기</button>
           <button className={styles.secondary} disabled={!stream || status === "preparing" || status === "analyzing"} onClick={() => { try { setRegionImage(snapshot()); } catch { setMessage("먼저 화면 공유를 시작해 주세요."); } }}><Target size={18} /> 영역 선택해서 확인하기</button>
-          {regionImage && stream && <RegionCapture image={regionImage} busy={status === "preparing" || status === "analyzing"} onCancel={() => setRegionImage("")} onSend={async (image, question) => {
+          {regionImage && stream && <RegionCapture image={regionImage} busy={status === "preparing" || status === "analyzing"} onCancel={() => setRegionImage(null)} onSend={async (image, question) => {
             const result = await analyzeWithOpenAI("current", question, [], image);
-            if ("text" in result) setRegionImage("");
+            if ("text" in result) setRegionImage(null);
           }} />}
           <div className={styles.status} data-tone={status === "error" ? "error" : status === "done" ? "done" : "normal"}>{status === "analyzing" || status === "preparing" ? <CircleNotch className={styles.spin} size={16} /> : status === "error" ? <WarningCircle size={16} /> : status === "done" ? <Check size={16} /> : <span className={styles.statusDot} />}<div><strong>{stateLabel}</strong><span>{message}</span></div></div>
           <label className={styles.switch}><input type="checkbox" checked={browserGestureEnabled} onChange={(event) => setBrowserGestureEnabled(event.target.checked)} /><span /><b>카메라로 제스처 켜기 (브라우저, 설치 불필요)</b></label>
@@ -1031,7 +1049,7 @@ export function ReplayWorkspace() {
           <div className={styles.ruler}><span /><i style={{ left: `${bufferPercent}%` }} /></div>
         </div>
         <AnimatePresence mode="wait">
-          {(status === "analyzing" || analysis) && <motion.article className={styles.analysis} initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}><div className={styles.analysisLabel}><span>AI</span><p>{status === "analyzing" ? "화면 변화 읽는 중" : "방금 일어난 일"}</p></div><div>{status === "analyzing" ? <div className={styles.analysisLoading}><span /><span /><span /></div> : <p>{analysis}</p>}</div></motion.article>}
+          {(status === "analyzing" || analysis) && <motion.article className={styles.analysis} initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}><div className={styles.analysisLabel}><span>AI</span><p>{status === "analyzing" ? "화면 변화 읽는 중" : "방금 일어난 일"}</p></div><div>{status === "analyzing" ? <div className={styles.analysisLoading}><span /><span /><span /></div> : <><p>{analysis}</p>{captureContext && <details><summary>전송 정보</summary><pre style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>{captureContext}</pre></details>}</>}</div></motion.article>}
         </AnimatePresence>
       </section>
 

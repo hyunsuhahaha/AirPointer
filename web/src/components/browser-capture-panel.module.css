@@ -78,3 +78,7 @@
   .composer { padding-top: 8px; padding-bottom: 8px; }.inputBox textarea { min-height: 52px; }
 }
 @media (prefers-reduced-motion: reduce) { .panel *, .region * { animation: none !important; transition: none !important; } }
+
+.receipt { margin-top: 10px; font-size: 11px; color: #a5a7a2; }
+.receipt summary { cursor: pointer; }
+.receipt pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.6; }
