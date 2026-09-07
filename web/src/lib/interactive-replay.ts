@@ -27,7 +27,7 @@ export class InteractiveReplay {
       if (!scene) return [];
       return [{ url: scene.url, atSeconds: seconds, capturedAt: at, kind,
         sampleOffsetsSeconds: [seconds], focusBox: scene.focusBox,
-        // The sandbox contains only fictional order data; automatic OCR still runs.
+        // The sandbox contains only local development fixtures; automatic OCR still runs.
       }];
     });
   }

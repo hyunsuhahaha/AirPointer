@@ -11,7 +11,7 @@ import { useBrowserHandGesture } from "@/hooks/use-browser-gesture";
 import type { GestureCommand } from "@/lib/gesture";
 import { BrowserReplayBuffer, cropRegion, frameFromVideo, surroundingReplayOffsets, withReplayBookmarks } from "@/lib/replay-buffer";
 import type { ChangeHighlight, NormalizedBox, OverviewFrame, ReplayCapsule } from "@/lib/replay-buffer";
-import { DEMO_OVERVIEW_OFFSETS, DEMO_SCENARIOS, demoFrameAtOffset, demoFrameState, demoFramesAtOffsets, demoScenario } from "@/lib/demo-replay";
+import { DEMO_OVERVIEW_OFFSETS, demoFrameAtOffset, demoFrameState, demoFramesAtOffsets, demoScenario } from "@/lib/demo-replay";
 import type { DemoScenarioId } from "@/lib/demo-replay";
 import { createPrivacyRedactor } from "@/lib/privacy-redaction";
 import type { PrivacyReport } from "@/lib/privacy-redaction";
@@ -199,8 +199,8 @@ export function ReplayWorkspace() {
   const [privacyImage, setPrivacyImage] = useState<CaptureSnapshot | null>(null);
   const [demoMode, setDemoMode] = useState<"idle" | "playing" | "ready">("idle");
   const [demoElapsed, setDemoElapsed] = useState(0);
-  const [demoScenarioId, setDemoScenarioId] = useState<DemoScenarioId>("payment");
-  const [demoQuestion, setDemoQuestion] = useState(demoScenario("payment").question);
+  const [demoScenarioId, setDemoScenarioId] = useState<DemoScenarioId>("runtime");
+  const [demoQuestion, setDemoQuestion] = useState(demoScenario("runtime").question);
   // "방금 뭐가 바뀌었나" highlight card -- the single most notable detected
   // change in the send window, as a before/after pair plus a zoomed crop.
   // Recomputed on a timer (see the effect near `elapsed` below), not on
@@ -1241,13 +1241,13 @@ export function ReplayWorkspace() {
       </div>}
 
       <section hidden={demoArmed || Boolean(interactiveReplay)} className={styles.intro} id="top"><div><p>REWIND. FIND. EXPLAIN.</p><h1>방금그거뭐였지<span>놓친 순간을 찾는 AI 리플레이</span></h1><div>방금 사라진 오류, 다시 재현하지 마세요.<br />놓친 화면을 되짚고, 근거와 함께 설명합니다.</div></div><span className={styles.introIndex}>01 — 03<br /><b>놓침 → 발견 → 기록</b></span></section>
-      {demoArmed && demoScenarioId === "payment" && <InteractiveCase onExit={stopDemo} onFreeze={(replay, question) => {
+      {demoArmed && demoScenarioId === "runtime" && <InteractiveCase onExit={stopDemo} onFreeze={(replay, question) => {
         setInteractiveReplay(replay); setDemoArmed(false); setDemoMode("ready"); setDemoQuestion(question);
         setSendSeconds(Math.ceil(replay.seconds)); setRetention(1); setFrames(replay.overview());
         setAnalysis(""); setIncident(undefined); setAnalysisEvidence([]); setExploration(undefined);
         setResultFocus(true); setAutoAnalyze(true);
       }} />}
-      <section hidden={(demoArmed && demoScenarioId === "payment") || (Boolean(interactiveReplay) && resultFocus) || (Boolean(analysis) && resultFocus && viewMode === "browser")} className={styles.hero}>
+      <section hidden={(demoArmed && demoScenarioId === "runtime") || (Boolean(interactiveReplay) && resultFocus) || (Boolean(analysis) && resultFocus && viewMode === "browser")} className={styles.hero}>
         <div className={styles.stageColumn}>
           <div className={styles.stageHeader}><span>{demoActive ? `JUDGE DEMO · ${selectedDemo.label}` : "LIVE DESKTOP"}</span><span>{demoMode === "playing" ? "PLAYING" : demoMode === "ready" ? "REPLAY READY" : stream ? "CAPTURING" : "NOT CONNECTED"}</span></div>
           <div className={styles.stageViewport} ref={stageViewportRef}>
@@ -1261,9 +1261,9 @@ export function ReplayWorkspace() {
               <video ref={screenVideo} className={`${styles.screenVideo} ${stream ? styles.visible : ""}`} muted playsInline />
               {demoActive && demoVisualFrame ? <DemoWorkspace frame={demoVisualFrame} title={selectedDemo.title} playing={demoMode === "playing"} onStop={stopDemo} /> : !stream && <div className={styles.emptyStage}>
                 <span className={styles.sceneNumber}>{demoArmed ? "01 / 사건 발생" : "INTERACTIVE CASE 001"}</span>
-                <strong>{demoArmed ? (demoScenarioId === "payment" ? "이 주문의 결제를 다시 처리해 보세요." : selectedDemo.title) : "눈 깜빡할 사이 사라진 단서."}</strong>
+                <strong>{demoArmed ? selectedDemo.title : "눈 깜빡할 사이 사라진 단서."}</strong>
                 <span>{demoArmed ? "아래 버튼으로 처리를 시작하세요. 잠깐 나타나는 알림을 확인해 보세요." : "직접 오류를 만나고, AI와 함께 그 순간을 되찾아보세요."}</span>
-                {demoArmed ? <div className={styles.sampleOrder}><small>샘플 운영 화면 · 실제 결제 없음</small><div><span>ORDER #10428</span><b>$428.00</b></div><p>결제 상태 <b>처리 대기</b></p><button className={styles.primary} onClick={() => void startDemo()}>{demoScenarioId === "payment" ? "결제 재시도" : "시나리오 실행"} →</button><button className={styles.demoReplay} onClick={() => setDemoArmed(false)}>돌아가기</button></div> : <><div className={styles.emptyActions}><button className={styles.primary} onClick={() => setDemoArmed(true)}><Play size={18} weight="fill" /> 30초 체험하기</button><button className={styles.demoStart} onClick={() => void startSharing()} aria-label="화면 공유 시작">내 화면에서 사용하기 ↗</button></div><small>설치·가입·화면 공유 없이 체험 · AI 분석 시간 별도</small><details className={styles.demoScenarioPicker}><summary>다른 사건 선택</summary><select aria-label="체험 시나리오" value={demoScenarioId} onChange={(event) => { const id = event.target.value as DemoScenarioId; setDemoScenarioId(id); setDemoQuestion(demoScenario(id).question); }}>{DEMO_SCENARIOS.map((scenario) => <option key={scenario.id} value={scenario.id}>{scenario.label} · {scenario.title}</option>)}</select></details></>}
+                {demoArmed ? <div className={styles.sampleOrder}><small>기록된 샘플 화면</small><div><span>{selectedDemo.label}</span></div><p>{selectedDemo.detail}</p><button className={styles.primary} onClick={() => void startDemo()}>시나리오 실행 →</button><button className={styles.demoReplay} onClick={() => setDemoArmed(false)}>돌아가기</button></div> : <><div className={styles.emptyActions}><button className={styles.primary} onClick={() => { setDemoScenarioId("runtime"); setDemoArmed(true); }}><Play size={18} weight="fill" /> 30초 체험하기</button><button className={styles.demoStart} onClick={() => void startSharing()} aria-label="화면 공유 시작">내 화면에서 사용하기 ↗</button><a className={styles.demoStart} href="/developer-lab" target="_blank" rel="noreferrer">PiP용 개발 작업 탭 열기 ↗</a></div><small>설치·가입·화면 공유 없이 체험 · AI 분석 시간 별도</small></>}
               </div>}
               {stream && <div className={styles.liveFlag}><span /> REC</div>}
               <div hidden={!stream && !demoActive} className={styles.nowLine} style={{ left: `${Math.max(2, bufferPercent)}%` }}><span>NOW</span></div>
@@ -1336,7 +1336,7 @@ export function ReplayWorkspace() {
             </ol>
             <textarea aria-label="샘플 리플레이에 질문" value={demoQuestion} disabled={demoMode === "playing" || status === "analyzing" || status === "preparing"} onChange={(event) => setDemoQuestion(event.target.value)} maxLength={500} />
             <button type="submit" disabled={demoMode !== "ready" || !demoQuestion.trim() || status === "analyzing" || status === "preparing"}>{status === "analyzing" || status === "preparing" ? <CircleNotch className={styles.spin} size={16} /> : <Sparkle size={16} weight="fill" />}{demoMode === "playing" ? "재생이 끝나면 질문할 수 있어요" : "AI로 사라진 오류 찾기"}</button>
-            {demoMode !== "playing" && <div className={styles.demoPromptLinks}><button type="button" className={styles.demoReplay} onClick={() => void startDemo()}><ArrowCounterClockwise size={14} /> 다시 재생</button><button type="button" className={styles.demoReplay} onClick={stopDemo}>다른 시나리오 선택</button></div>}
+            {demoMode !== "playing" && <div className={styles.demoPromptLinks}><button type="button" className={styles.demoReplay} onClick={() => { if (interactiveReplay) { stopDemo(); setDemoArmed(true); } else void startDemo(); }}><ArrowCounterClockwise size={14} /> 다시 체험</button><button type="button" className={styles.demoReplay} onClick={stopDemo}>체험 종료</button></div>}
           </form> : <>
             {!stream && <div className={styles.welcomeSteps}><h2>사라졌어도,<br />찾을 수 있으니까.</h2><ol><li><b>01</b> 잠깐 나타난 오류를 놓치세요.</li><li><b>02</b> AI가 과거 화면에서 단서를 찾습니다.</li><li><b>03</b> 근거와 함께 사건을 기록하세요.</li></ol></div>}
             {stream && <textarea className={styles.workQuestion} aria-label="공유 화면에 질문" placeholder="방금 어떤 일이 있었나요?" value={workQuestion} onChange={event => setWorkQuestion(event.target.value)} maxLength={500} />}

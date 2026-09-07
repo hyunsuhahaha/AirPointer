@@ -10,11 +10,11 @@ import styles from "./incident-review.module.css";
 export function IncidentReview({ frames, evidence, answer, incident, context, sample, exploration, onEvidence }: {
   frames: OverviewFrame[]; evidence: EvidenceItem[]; answer: string; incident?: Incident; context: string; sample: boolean; exploration?: ExplorationProgress; onEvidence: (index: number) => void;
 }) {
-  const [activeEvidence, setActiveEvidence] = useState(0);
+  const [activeEvidence, setActiveEvidence] = useState<number | null>(null);
   const [sequence, setSequence] = useState(0);
   const [excluded, setExcluded] = useState<number[]>([]);
   const [notice, setNotice] = useState("");
-  const selectedEvidence = Math.max(0, Math.min(activeEvidence, evidence.length - 1));
+  const selectedEvidence = Math.max(0, Math.min(activeEvidence ?? Math.max(0, evidence.findIndex(item => item.focusBox || item.frame.focusBox)), evidence.length - 1));
   const report = { answer, incident, context, sample, evidence: evidence.filter((_, i) => !excluded.includes(i)).map(e => ({ claim: e.claim, image: e.frame.url, seconds: e.frame.atSeconds })) };
   return <section className={styles.review} aria-label="리플레이 사건 작업대">
     <ReplayCinema frames={frames} evidence={evidence} activeEvidence={selectedEvidence} sequence={sequence} exploration={exploration} onOpenEvidence={onEvidence} />

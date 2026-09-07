@@ -23,3 +23,5 @@
 @media(max-width:1050px) { .layout { grid-template-columns: minmax(0, 1fr) 240px; gap: 20px; }.guide h3 { font-size: 23px; } }
 @media(max-width:780px) { .layout { grid-template-columns: 1fr; }.guide { display: grid; grid-template-columns: 1fr 1fr; column-gap: 24px; }.guide > .eyebrow,.guide > h3,.guide > ol { grid-column: 1; }.receipt { grid-column: 2; grid-row: 1 / 4; align-self: center; }.question { grid-column: 1 / -1; }.find,.footnote { grid-column: 1 / -1; }.top { flex-direction: column; gap: 12px; }.top h2 { font-size: 24px; } }
 @media(max-width:440px) { .case { padding: 22px 14px; }.browserBar small,.recording small { display: none; }.browserBar b { font-size: 9px; }.guide h3 { font-size: 21px; }.guide li { font-size: 11px; gap: 8px; }.receipt strong { font-size: 14px; } }
+
+@media(max-width:440px) { .guide { display: block; } .guide h3 { font-size: 23px; } }

@@ -90,7 +90,7 @@ export const ANALYSIS_MODELS = [
 ] as const;
 export type AnalysisModelId = typeof ANALYSIS_MODELS[number]["id"];
 
-export const ANALYSIS_RESPONSE_INSTRUCTIONS = "사용자가 질문을 제공한 경우 그 질문이 유일한 응답 과업입니다. 첨부 화면과 리플레이는 질문을 해결하기 위한 관찰 근거일 뿐, 별도로 요약할 대상이 아닙니다. 질문과 무관한 앱 전환, 창 목록, 화면 타임라인을 설명하지 마세요. 결론부터 직접 답하고 필요한 화면 근거만 언급하세요. evidence에는 답을 실제로 뒷받침하는 첨부 이미지 번호와 그 이미지에서 확인되는 사실만 넣으세요.";
+export const ANALYSIS_RESPONSE_INSTRUCTIONS = "사용자가 질문을 제공한 경우 그 질문이 유일한 응답 과업입니다. 첨부 화면과 리플레이는 질문을 해결하기 위한 관찰 근거일 뿐, 별도로 요약할 대상이 아닙니다. 질문과 무관한 앱 전환, 창 목록, 화면 타임라인을 설명하지 마세요. 결론부터 직접 답하고 필요한 화면 근거만 언급하세요. 개발 중 잠깐 나타난 오류를 묻는 경우, 관련된 직전 조작(필터 변경·실행·저장), 읽을 수 있는 오류 문구와 위치, 이후 증상을 시간 순서로 연결하세요. 각 관찰에 화면 근거를 연결하고 화면에서 보이지 않는 API 응답이나 내부 원인은 추정으로 구분하세요. 오류가 실제로 보이지 않으면 정상이라고 단정하거나 오류를 만들어내지 말고 필요한 구간을 재탐색하세요. evidence에는 답을 실제로 뒷받침하는 첨부 이미지 번호와 그 이미지에서 확인되는 사실만 넣으세요.";
 
 export type AnalysisEvidence = { frameIndex: number; claim: string };
 
