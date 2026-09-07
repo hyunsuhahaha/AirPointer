@@ -19,6 +19,7 @@ from .codex_delivery import (
 from .companion_bridge import CompanionState
 from .command_gesture import CommandEvent, CommandView
 from .conversation_picker import ConversationPicker
+from .memory_ingest import ScreenMemoryIngestor
 from .overlay import Overlay
 from .region_selection import RegionSelector, SelectionView
 from .screen_buffer import ScreenReplayBuffer, cleanup_paths
@@ -101,9 +102,17 @@ class App:
         # Same overrideredirect(True) reasoning: no OS resize grips either.
         self._prompt_resize_origin: tuple[str, int, int, int, int, int, int] | None = None
         self._prompt_agent_ids: dict[str, str] = {}
+        # Own MemoryStore instance, not shared with CompanionHttpServer's --
+        # both point at the same on-disk SQLite file (default_memory_root()
+        # is deterministic) and each opens/closes its own short-lived
+        # connection per call, so two Python-level instances writing to it
+        # from different threads is the same access pattern the standalone
+        # MCP server (a whole separate process) already relies on.
+        self.memory_ingestor = ScreenMemoryIngestor()
         self.screen_buffer = ScreenReplayBuffer(
             lambda: self.settings.replay_minutes * 60,
             lambda: self.settings.capture_fps,
+            on_frame=self.memory_ingestor.consider,
         )
         self.window_tracker = WindowTracker()
         self.click_tracker = ClickTracker()

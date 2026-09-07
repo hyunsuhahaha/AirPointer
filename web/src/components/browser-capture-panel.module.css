@@ -23,13 +23,16 @@
 .timePicker select { width: 52px; padding-left: 6px; padding-right: 18px; font-variant-numeric: tabular-nums; }
 .timePicker svg { right: 5px; }
 .srOnly { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
-.actions { flex: none; padding: 0 12px 12px; display: grid; grid-template-columns: 1.15fr 1fr 1fr; gap: 6px; }
+.actions { flex: none; padding: 0 12px 12px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; }
+.actions > button { min-width: 0; white-space: nowrap; }
 .replay { min-height: 36px; padding: 7px 9px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--pip-line); border-radius: 8px; background: #20211d; color: var(--pip-ink); }
 .replay:hover:not(:disabled) { background: #2b2d26; }
 .replay[aria-pressed="true"], .secondary[aria-pressed="true"] { border-color: var(--pip-accent); background: #30322a; color: var(--pip-ink); }
-.replayLabel { display: flex; align-items: center; gap: 6px; font-weight: 500; font-size: 11px; }
+.replayLabel { min-width: 0; display: flex; align-items: center; justify-content: center; gap: 5px; font-weight: 500; font-size: 11px; white-space: nowrap; }
+.replayLabel svg, .secondary svg { flex: none; }
 .secondary { min-height: 34px; border: 1px solid var(--pip-line); border-radius: 8px; background: #191a17; color: #d2cfc7; display: flex; align-items: center; justify-content: center; gap: 7px; font-size: 11px !important; padding: 6px 9px; }
 .secondary:hover:not(:disabled) { background: #252620; color: var(--pip-ink); }
+.bookmarkAction { position: relative; padding-inline: 5px; gap: 4px; }.bookmarkAction > span { position: absolute; top: 5px; right: 5px; min-width: 13px; height: 13px; padding: 0 3px; display: grid; place-items: center; border-radius: 7px; background: #b1cd9a; color: #111210; font: 700 8px/1 var(--font-mono), monospace; }
 .panel[data-expanded="true"] .actions { border-bottom: 1px solid var(--pip-line); }
 .privacyBar { flex: none; min-height: 34px; padding: 5px 12px; display: flex; align-items: center; gap: 6px; border-bottom: 1px solid var(--pip-line); color: var(--pip-muted); background: #151612; font-size: 9px; }
 .privacyBar[data-enabled="true"] { color: #c9dfb5; }
@@ -78,6 +81,8 @@
 .explorationHead > span { color: var(--pip-muted); font: 500 8px var(--font-mono), monospace; }
 .explorationBar { height: 2px; margin: 9px 0 11px; overflow: hidden; background: #32332e; }
 .explorationBar > span { display: block; width: 100%; height: 100%; transform-origin: left; background: #b1cd9a; transition: transform 220ms ease-out; }
+.timingReceipt { display: flex; flex-wrap: wrap; gap: 5px 9px; padding-bottom: 9px; color: #8f938a; font: 500 9px/1.4 var(--font-mono); }
+.timingReceipt strong { color: #b1cd9a; }
 .exploration ol { margin: 0; padding: 0; display: grid; list-style: none; }
 .exploration li { position: relative; display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; gap: 7px; align-items: start; padding: 4px 0 8px; }
 .exploration li:not(:last-child)::after { content: ""; position: absolute; left: 5px; top: 19px; bottom: -1px; width: 1px; background: #3f4739; }
@@ -156,6 +161,13 @@
 .regionCanvas { position: relative; touch-action: none; cursor: crosshair; line-height: 0; overflow: hidden; border-radius: 7px; }
 .regionCanvas img { display: block; width: 100%; }
 .selection { position: absolute; pointer-events: none; border: 1px solid #d3d6cb; box-shadow: 0 0 0 100vmax #05070491; }
+.selectionMoveEdge { position: absolute; z-index: 2; pointer-events: auto; cursor: move; }
+.selectionMoveTop, .selectionMoveBottom { left: -7px; right: -7px; height: 13px; }
+.selectionMoveLeft, .selectionMoveRight { top: -7px; bottom: -7px; width: 13px; }
+.selectionMoveTop { top: -7px; }
+.selectionMoveRight { right: -7px; }
+.selectionMoveBottom { bottom: -7px; }
+.selectionMoveLeft { left: -7px; }
 .privacySelection { display: grid; place-items: center; border-color: #b1cd9a; background: rgba(17,18,16,.84); }
 .privacySelection b { color: #c9dfb5; font: 600 10px var(--font-mono), monospace; letter-spacing: .08em; }
 .selection::before, .selection::after { content: ""; position: absolute; width: 9px; height: 9px; border-color: var(--pip-accent); }

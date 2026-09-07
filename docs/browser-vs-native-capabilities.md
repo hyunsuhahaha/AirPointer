@@ -17,6 +17,28 @@
 네이티브 앱은 이 네 가지를 Windows API로 직접 건드리기 때문에 가능한 일이고, 웹 데모는
 `getDisplayMedia` / `getUserMedia` / 일반 DOM 이벤트로 갈 수 있는 데까지만 간다.
 
+## 확정된 브라우저 제품 구조: 교육 모드와 작업 모드
+
+순수 브라우저 경험은 입력장치가 아니라 **사용 목적**을 기준으로 두 런타임 모드로 분리한다.
+
+| 모드 | 주 화면 | 사용하는 브라우저 API/엔진 | 사용하지 않는 것 | 목적 |
+|---|---|---|---|---|
+| 교육 모드 | 카메라 미리보기와 손 인식 피드백 | `getUserMedia`, MediaPipe HandLandmarker | 화면 공유·리플레이·작업 PiP | 손짓을 배우고 직접 성공시켜 보는 교육·체험 |
+| 작업 모드 | 공유 화면과 Document PiP | `getDisplayMedia`, 리플레이 버퍼, PiP 버튼, 포커스 상태 단축키 | 카메라 권한·카메라 스트림·MediaPipe 손 인식 | 개발·문서·운영 중 놓친 상황을 복원해 Agent에 전달 |
+
+작업 모드에서 카메라는 숨겨진 채 유지되는 보조 입력이 아니다. 아예 요청하거나 실행하지 않는다.
+교육 모드에서 작업 모드로 전환할 때는 카메라 트랙 종료, `video.srcObject` 해제, HandLandmarker와
+관련 Worker/타이머 종료, 카메라 프레임용 Canvas·버퍼 해제까지 완료해야 한다. 이는 단순한 UI
+전환이 아니라 메모리와 연산 자원을 분리하는 **서로 다른 런타임 프로필**이다.
+
+작업 모드의 개발·문서·운영은 별도 최상위 모드가 아니라 같은 캡처/PiP 흐름 안의 작업 프로필로
+취급한다. 설치 없는 작업 모드의 트리거는 PiP 버튼과 포커스 상태의 브라우저 단축키다. OS 전역
+단축키는 AirPointer.exe가 있을 때만 제공한다.
+
+> **구현 상태:** 위 분리는 확정된 제품 방향이며 아직 코드에 완전히 적용되지 않았다. 현재
+> `use-browser-gesture.ts`의 브라우저 손바닥 트리거는 작업 화면과 연결되어 있다. 아래 표는
+> 현재 코드의 실제 기능을 기록하므로, 모드 분리 구현 전까지 해당 행을 그대로 유지한다.
+
 ## 1. 순수 브라우저만으로 가능한 동작
 
 다운로드나 로컬 프로세스 없이, `web/` 앱만 브라우저에서 열면 되는 것들.
@@ -29,7 +51,7 @@
 | "방금 뭐가 바뀌었나" 하이라이트 카드 (가장 두드러진 변화의 before/after + 확대 crop) | `replay-buffer.ts`의 `recentHighlight` |
 | 현재 화면 즉시 캡처 / 최근 5·15·30·60초 리플레이 캡처 (콘택트시트 생성) | `replay-workspace.tsx`의 `captureFrames` |
 | OpenAI Responses API로 화면 분석 (서버가 API 키 보관, `store:false`, 서버 인스턴스별 IP당 분당 20회 제한) | `web/src/app/api/analyze/route.ts` |
-| 브라우저 내장 손 제스처: **손바닥 2초 유지 → 최근 구간 전송**만 지원 (MediaPipe WASM, CDN 로드, 웹캠) | `use-browser-gesture.ts` |
+| 브라우저 내장 손 제스처: **손바닥 2초 유지 → 최근 구간 전송**만 지원 (MediaPipe WASM, CDN 로드, 웹캠). 현재 구현이며, 목표 구조에서는 교육 모드 전용으로 이동 | `use-browser-gesture.ts` |
 | 프롬프트 템플릿 조회/저장/초기화 | `web/src/app/api/prompt-settings/route.ts` |
 | 프리뷰 스테이지 드래그 이동/리사이즈, 버퍼 상태 HUD, 실시간 변화 스코어 차트 | `replay-workspace.tsx` UI 상태 (스테이지 박스, HUD 관련 부분) |
 | 탭 포커스 시 키보드 단축키 (`Alt+Shift+S`/`Alt+Shift+D`, 커스텀 가능) — 알트탭하면 못 받음 | `replay-workspace.tsx`의 `browserHotkeyEnabled` 이펙트, `comboFromKeyEvent` |
@@ -37,6 +59,7 @@
 | 고정한 공유 화면에서 드래그 영역 선택, 방향키 이동·Shift 크기 조절, 취소·확정 후 잘라낸 이미지만 분석 | `RegionCapture`, `cropRegion(..., 0)` — 메인 화면과 PiP 양쪽 |
 | 새 화면을 보내지 않는 텍스트 후속 질문 | `mode: text`, 빈 `frames`, 최근 대화 최대 8개 메시지/6,000자, 질문 500자 |
 | 모든 브라우저 트리거의 중복 분석 방지 | `analysisInFlight` + PiP 입력/버튼 잠금 |
+| Screen Memory 작업대: OCR 화면 검색, DVR 시간여행, 북마크·태그, 활동 요약, Markdown 리포트 | `screen-memory-workbench.tsx`, `screen-memory.ts`; IndexedDB에 자동 기록 최대 500개와 북마크 보관 |
 
 ## 2. 네이티브 앱(AirPointer.exe) 다운로드 시 추가되는 동작
 
@@ -52,6 +75,20 @@
 | 최근 30초 창 전환·클릭 이력을 컨텍스트 한 줄로 첨부 | README "Agent Replay" 본문 |
 | 리플레이 변화 지점의 실제 UI 요소 이름(UI Automation) 또는 온디바이스 OCR 텍스트를 위치 힌트로 첨부 | `docs/replay-change-detection.md`; README 본문 |
 | Codex Desktop 대화 목록 조회/전환 후 전송 | README "웹 버전 실행 및 배포" |
+| 브라우저 Screen Memory를 SQLite와 이미지 파일로 동기화하고 토큰 보호 HTTP API 제공 | `memory_store.py`, `companion_bridge.py`, `/api/companion/memory` |
+| AirPointer 자체 화면 캡처를 화면 변화·15초 간격으로 자동 OCR해 같은 SQLite에 적재 (`source: native`) | `memory_ingest.py`, `ocr_fallback.recognize_frame_text` |
+| Codex/Claude MCP 설정에 Screen Memory 서버를 자동 등록 (기존 등록·설정은 보존, `.bak` 백업) | `mcp_install.py` |
+
+## Screen Memory API/MCP 지원 범위
+
+| 데이터 경로 | Codex | Claude | 현재 상태 |
+|---|---:|---:|---|
+| 브라우저 IndexedDB만 사용 | MCP 검색 불가 | MCP 검색 불가 | 웹 작업대 안에서는 검색·시간여행·북마크·요약·리포트 모두 사용 가능 |
+| 브라우저 + AirPointer Companion + SQLite | MCP 검색 가능 | MCP 검색 가능 | 완전 연결됨. Companion을 나중에 연결하면 최근 로컬 기록 최대 120개 재동기화 |
+| 네이티브 AirPointer 자체 캡처 버퍼(AirPointer 실행 중) | 기존 화면 전송 + MCP 검색 가능 | 기존 화면 전송 + MCP 검색 가능 | 15초 간격 또는 화면 변화 시 자동으로 SQLite에 적재됨(`memory_ingest.py`). 웹 작업대에는 나타나지 않음 |
+| 샘플 체험 기록 | MCP 검색 불가 | MCP 검색 불가 | 실제 기록과 섞이지 않도록 브라우저에만 저장 |
+
+`python -m airpointer.mcp_server`는 특정 Agent 전용이 아닌 표준 stdio MCP 서버다. 따라서 Codex와 Claude 양쪽에 등록할 수 있지만, 각 클라이언트 설정에 명령을 별도로 추가해야 한다(`python -m airpointer.mcp_install`로 자동화 가능). 이 MCP는 `%LOCALAPPDATA%\AirPointer\screen-memory`의 SQLite를 직접 읽으며 HTTP 연결 토큰은 사용하지 않는다. 자세한 API와 도구 목록은 [screen-memory.md](screen-memory.md) 참고.
 
 ## 3. 코드는 있지만 연결되지 않은 것 (browser-only로 완성 가능)
 

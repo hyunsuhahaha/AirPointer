@@ -2,7 +2,7 @@ export type ReplaySegment = { blob: Blob; startedAt: number; durationMs: number 
 export type NormalizedBox = [number, number, number, number];
 export type OverviewFrame = {
   url: string; atSeconds: number; capturedAt?: number; sampleOffsetsSeconds?: number[];
-  kind?: "replay-frame" | "queried-frame" | "queried-crop";
+  kind?: "replay-frame" | "bookmarked-frame" | "queried-frame" | "queried-crop";
   focusBox?: NormalizedBox;
   privacyHints?: { box: NormalizedBox; category: string }[];
 };
@@ -366,9 +366,9 @@ export class BrowserReplayBuffer {
     return { overviewFrames: makeReplayFrames(frames, now, "replay-frame"), segments: [...recent], startedAt: cutoff, triggeredAt: now };
   }
 
-  async framesAtOffsets(capsule: ReplayCapsule, offsetsSeconds: number[]): Promise<OverviewFrame[]> {
+  async framesAtOffsets(capsule: ReplayCapsule, offsetsSeconds: number[], kind: "bookmarked-frame" | "queried-frame" = "queried-frame"): Promise<OverviewFrame[]> {
     const points = replayPointsAtOffsets(capsule.segments, capsule.triggeredAt, offsetsSeconds);
-    return makeReplayFrames(await decodeReplayPoints(capsule.segments, points), capsule.triggeredAt, "queried-frame");
+    return makeReplayFrames(await decodeReplayPoints(capsule.segments, points), capsule.triggeredAt, kind);
   }
 
   // The single highest-scoring detected change in the window, as a
@@ -536,6 +536,14 @@ export function surroundingReplayOffsets(atSeconds: number, windowSeconds: numbe
   }).filter((value, index, values) => index === 0 || value !== values[index - 1]);
 }
 
+export function withReplayBookmarks(baseFrames: OverviewFrame[], bookmarks: OverviewFrame[], triggeredAt: number, limit = 6): OverviewFrame[] {
+  const extras = bookmarks.slice(-Math.max(0, limit)).map((frame) => {
+    const atSeconds = Math.max(0, (triggeredAt - (frame.capturedAt ?? triggeredAt)) / 1_000);
+    return { ...frame, atSeconds, sampleOffsetsSeconds: [atSeconds], kind: "bookmarked-frame" as const };
+  });
+  return [...baseFrames, ...extras];
+}
+
 export function replayPointsAtOffsets(segments: ReplaySegment[], triggeredAt: number, offsetsSeconds: number[]) {
   return offsetsSeconds.flatMap((offsetSeconds) => {
     const capturedAt = triggeredAt + offsetSeconds * 1_000;
@@ -603,7 +611,7 @@ function frameCanvas(video: HTMLVideoElement) {
   return canvas;
 }
 
-function makeReplayFrames(frames: TimedFrame[], triggeredAt: number, kind: "replay-frame" | "queried-frame"): OverviewFrame[] {
+function makeReplayFrames(frames: TimedFrame[], triggeredAt: number, kind: "replay-frame" | "bookmarked-frame" | "queried-frame"): OverviewFrame[] {
   return frames.map((frame) => {
     const atSeconds = Math.max(0, (triggeredAt - frame.capturedAt) / 1_000);
     return { capturedAt: frame.capturedAt, sampleOffsetsSeconds: [atSeconds], url: frame.canvas.toDataURL("image/jpeg", 0.78), atSeconds, kind };

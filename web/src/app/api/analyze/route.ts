@@ -141,7 +141,10 @@ export async function POST(request: Request) {
         role: "user",
         content: [
           { type: "input_text", text: instruction },
-          ...body.frames.map((imageUrl) => ({ type: "input_image" as const, image_url: imageUrl, detail: "high" as const })),
+          ...body.frames.flatMap((imageUrl, index) => [
+            { type: "input_text" as const, text: frameLabel(body.metadata, index) },
+            { type: "input_image" as const, image_url: imageUrl, detail: "high" as const },
+          ]),
         ],
       }],
     });
@@ -153,6 +156,13 @@ export async function POST(request: Request) {
     console.error("analysis_failed", error instanceof Error ? error.message : "unknown");
     return NextResponse.json({ error: "AI 분석에 실패했습니다. 잠시 후 다시 시도해 주세요." }, { status: 500 });
   }
+}
+
+function frameLabel(metadata: Parameters<typeof formatCaptureMetadata>[0], index: number) {
+  const image = metadata?.images[index];
+  if (!image) return `이미지 ${index + 1}`;
+  const offsets = image.offsetsSeconds.length ? ` · 기준 시각보다 ${image.offsetsSeconds.map((value) => value.toFixed(2)).join(", ")}초 전` : "";
+  return `이미지 ${index + 1} · ${image.kind}${offsets}`;
 }
 
 function allow(ip: string) {

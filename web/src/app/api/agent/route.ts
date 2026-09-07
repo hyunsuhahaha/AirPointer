@@ -101,7 +101,7 @@ async function prepareCapsule(request: Request, captureDir: string): Promise<Pre
   }
   const overviewFiles = form.getAll("overview").filter((entry): entry is File => typeof entry !== "string");
   const segmentFiles = form.getAll("segment").filter((entry): entry is File => typeof entry !== "string");
-  if (!overviewFiles.length || overviewFiles.length > 6 || !segmentFiles.length || segmentFiles.length > 70 || segmentFiles.length !== metadata.segments.length) throw new PayloadError("Replay Capsule 파일 구성이 올바르지 않습니다.", 400);
+  if (!overviewFiles.length || overviewFiles.length > 12 || !segmentFiles.length || segmentFiles.length > 70 || segmentFiles.length !== metadata.segments.length) throw new PayloadError("Replay Capsule 파일 구성이 올바르지 않습니다.", 400);
   const totalBytes = [...overviewFiles, ...segmentFiles].reduce((sum, file) => sum + file.size, 0);
   if (totalBytes > MAX_CAPSULE_BYTES) throw new PayloadError("Replay Capsule 용량이 너무 큽니다.", 413);
   if (overviewFiles.some((file) => !["image/jpeg", "image/png"].includes(file.type)) || segmentFiles.some((file) => !file.type.startsWith("video/webm"))) throw new PayloadError("Replay Capsule 파일 형식을 지원하지 않습니다.", 400);

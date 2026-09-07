@@ -31,7 +31,7 @@ export type CaptureMetadata = {
   height: number;
   requestedSeconds: number;
   selection?: [number, number, number, number];
-  images: { kind: "screen" | "contact-sheet" | "selection" | "change-crop" | "replay-frame" | "queried-frame" | "queried-crop"; offsetsSeconds: number[] }[];
+  images: { kind: "screen" | "contact-sheet" | "selection" | "change-crop" | "replay-frame" | "bookmarked-frame" | "queried-frame" | "queried-crop"; offsetsSeconds: number[] }[];
 };
 
 export type ReplayExploration = { round: number; maxRounds: number; frameBudget: number; usedFrames: number };
@@ -52,7 +52,7 @@ function isCaptureMetadata(value: unknown, count: number): value is CaptureMetad
     && finite(m.requestedSeconds, 3600)
     && (m.selection === undefined || (Array.isArray(m.selection) && m.selection.length === 4 && m.selection.every(n => finite(n, 1)) && m.selection[0] < m.selection[2] && m.selection[1] < m.selection[3]))
     && Array.isArray(m.images) && m.images.length === count && count <= 24
-    && m.images.every(i => i && ["screen", "contact-sheet", "selection", "change-crop", "replay-frame", "queried-frame", "queried-crop"].includes(i.kind) && Array.isArray(i.offsetsSeconds) && i.offsetsSeconds.length <= 10 && i.offsetsSeconds.every(n => finite(n, 3600)));
+    && m.images.every(i => i && ["screen", "contact-sheet", "selection", "change-crop", "replay-frame", "bookmarked-frame", "queried-frame", "queried-crop"].includes(i.kind) && Array.isArray(i.offsetsSeconds) && i.offsetsSeconds.length <= 10 && i.offsetsSeconds.every(n => finite(n, 3600)));
 }
 
 function isReplayExploration(value: unknown, frameCount: number): value is ReplayExploration {
@@ -68,7 +68,7 @@ function isReplayExploration(value: unknown, frameCount: number): value is Repla
 export function formatCaptureMetadata(m?: CaptureMetadata): string {
   if (!m) return "";
   const kinds = { screen: "현재 화면", "contact-sheet": "시간순 모음 (왼쪽→오른쪽, 위→아래)", selection: "선택 영역", "change-crop": "변화 확대 (시각 미확인)",
-    "replay-frame": "변화 감지 알고리즘이 고른 대표 프레임", "queried-frame": "AI 요청으로 로컬 영상에서 추가 조회한 프레임", "queried-crop": "AI 요청으로 특정 화면을 고해상도 확대한 프레임" };
+    "replay-frame": "변화 감지 알고리즘이 고른 대표 프레임", "bookmarked-frame": "사용자가 북마크한 시점의 추가 프레임", "queried-frame": "AI 요청으로 로컬 영상에서 추가 조회한 프레임", "queried-crop": "AI 요청으로 특정 화면을 고해상도 확대한 프레임" };
   return [
     "브라우저 캡처 정보",
     `기준 시각: ${new Date(m.capturedAt).toISOString()}`,

@@ -29,6 +29,21 @@ browser workspace plus Document Picture-in-Picture, with no executable, extensio
 required. Native AirPointer is an optional Windows expansion. Hosted AI analysis still requires
 internet access and a server-side API key.
 
+The pure-browser product is being separated into two purpose-based runtime modes. They are not two
+views that keep the same capture engines alive in the background:
+
+- **Education mode:** the camera preview and hand recognition are the primary experience. It teaches
+  and demonstrates gestures with immediate visual feedback.
+- **Work mode:** shared-screen replay and Document Picture-in-Picture are the primary experience for
+  development and general work. It does not request camera permission and must not initialize or
+  retain a camera stream, MediaPipe hand recognizer, camera worker, sampling timer, or camera-frame
+  canvas. Work-mode actions come from the PiP controls and focus-bound browser shortcuts; native
+  global shortcuts remain an optional installed-app capability.
+
+Changing from Education mode to Work mode must release the camera runtime rather than merely hide
+its preview. Development, document, and operations use cases are profiles inside Work mode, not
+separate top-level modes.
+
 The PiP workspace shows buffer status and detected before/after images, supports current/replay
 capture and a frozen-preview region picker, and supports text-only follow-up questions. Region
 selection works with pointer dragging or arrow keys (Shift resizes). No images are sent for a
@@ -37,7 +52,11 @@ share an in-flight request guard.
 
 ## Operating Context
 
-The user explicitly starts browser screen sharing. One-second recording segments form a bounded local ring buffer. The wired browser gesture is holding an open palm for two seconds to analyze recent context. Manual controls provide the same actions for accessibility and demonstrations.
+In Work mode, the user explicitly starts browser screen sharing. One-second recording segments form
+a bounded local ring buffer, and PiP buttons or focus-bound browser shortcuts trigger analysis. The
+camera is not part of this runtime. In Education mode, the user explicitly grants camera access and
+uses the visible preview to learn and demonstrate gestures without keeping the work-mode screen
+capture stack active. Manual controls remain available for accessibility and demonstrations.
 
 ## Capabilities and Constraints
 

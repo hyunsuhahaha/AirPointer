@@ -13,6 +13,7 @@ from PIL import Image
 
 from .command_gesture import CommandView
 from .hotkeys import parse_binding
+from .memory_store import MemoryStore
 from .screen_buffer import _GLOBAL_MIN_SCORE
 
 # (target, threadId, prompt, kind, frame data-URLs) -> {"ok": True} or
@@ -241,9 +242,11 @@ class CompanionState:
 
 
 class CompanionHttpServer:
-    def __init__(self, state: CompanionState, port: int = 47822) -> None:
+    def __init__(self, state: CompanionState, port: int = 47822,
+                 memory_store: MemoryStore | None = None) -> None:
         self.state = state
         state_ref = state
+        memory_ref = memory_store or MemoryStore()
 
         class Handler(BaseHTTPRequestHandler):
             def do_OPTIONS(self) -> None:
@@ -259,8 +262,54 @@ class CompanionHttpServer:
                     self._handle_threads(parsed)
                 elif parsed.path == "/sent-frames":
                     self._handle_sent_frames(parsed)
+                elif parsed.path.startswith("/memory/"):
+                    self._handle_memory_get(parsed)
                 else:
                     self.send_error(404)
+
+            def _authorized_token(self, parsed) -> str | None:
+                token = parse_qs(parsed.query).get("token", [""])[0]
+                if state_ref.snapshot(token) is None:
+                    self._json(403, {"error": "unauthorized"})
+                    return None
+                return token
+
+            def _json(self, status: int, payload: dict | list) -> None:
+                body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                self.send_response(status)
+                self._cors()
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def _handle_memory_get(self, parsed) -> None:
+                if self._authorized_token(parsed) is None:
+                    return
+                query = parse_qs(parsed.query)
+                try:
+                    limit = int(query.get("limit", ["50"])[0])
+                    from_at = float(query.get("from", ["0"])[0])
+                    to_raw = query.get("to", [""])[0]
+                    to_at = float(to_raw) if to_raw else None
+                    if parsed.path in ("/memory/search", "/memory/timeline"):
+                        bookmarked_raw = query.get("bookmarked", [""])[0]
+                        bookmarked = None if bookmarked_raw == "" else bookmarked_raw.lower() == "true"
+                        frames = memory_ref.search(query.get("q", [""])[0], from_at, to_at, bookmarked, limit)
+                        if parsed.path == "/memory/timeline":
+                            frames.reverse()
+                        self._json(200, {"frames": frames})
+                    elif parsed.path == "/memory/bookmarks":
+                        self._json(200, {"frames": memory_ref.search(from_at=from_at, to_at=to_at, bookmarked=True, limit=limit)})
+                    elif parsed.path == "/memory/summary":
+                        self._json(200, memory_ref.summary(from_at, to_at))
+                    elif parsed.path == "/memory/reports":
+                        self._json(200, {"reports": memory_ref.list_reports(limit)})
+                    else:
+                        self.send_error(404)
+                except (TypeError, ValueError):
+                    self._json(400, {"error": "invalid memory query"})
 
             def _handle_status(self, parsed) -> None:
                 token = parse_qs(parsed.query).get("token", [""])[0]
@@ -312,8 +361,41 @@ class CompanionHttpServer:
                     self._handle_config(parsed)
                 elif parsed.path == "/send":
                     self._handle_send(parsed)
+                elif parsed.path.startswith("/memory/"):
+                    self._handle_memory_post(parsed)
                 else:
                     self.send_error(404)
+
+            def _read_json(self, maximum: int) -> dict:
+                length = min(int(self.headers.get("Content-Length", "0")), maximum)
+                payload = json.loads(self.rfile.read(length))
+                if not isinstance(payload, dict):
+                    raise ValueError("JSON object required")
+                return payload
+
+            def _handle_memory_post(self, parsed) -> None:
+                if self._authorized_token(parsed) is None:
+                    return
+                try:
+                    payload = self._read_json(6 * 1024 * 1024)
+                    if parsed.path == "/memory/frames":
+                        self._json(201, memory_ref.add_frame(payload))
+                    elif parsed.path == "/memory/frame":
+                        frame_id = str(payload.get("id", ""))
+                        result = memory_ref.update_frame(frame_id, bookmarked=payload.get("bookmarked"), note=payload.get("note"), tags=payload.get("tags"), text=payload.get("text"))
+                        self._json(200 if result else 404, result or {"error": "frame not found"})
+                    elif parsed.path == "/memory/delete":
+                        deleted = memory_ref.delete_frame(str(payload.get("id", "")))
+                        self._json(200 if deleted else 404, {"deleted": deleted})
+                    elif parsed.path == "/memory/report":
+                        from_at = float(payload.get("from", 0))
+                        to_at = float(payload["to"]) if payload.get("to") is not None else None
+                        title = str(payload.get("title", "AirPointer 개발 리포트"))
+                        self._json(201, memory_ref.create_report(from_at, to_at, title, bool(payload.get("automatic", False))))
+                    else:
+                        self.send_error(404)
+                except (TypeError, ValueError, json.JSONDecodeError) as error:
+                    self._json(400, {"error": str(error)})
 
             def _handle_config(self, parsed) -> None:
                 token = parse_qs(parsed.query).get("token", [""])[0]

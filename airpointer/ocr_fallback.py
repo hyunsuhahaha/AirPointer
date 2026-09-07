@@ -23,6 +23,10 @@ from __future__ import annotations
 
 import asyncio
 import io
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from PIL import Image
 
 _MAX_LENGTH = 60  # a one-line location hint, not a transcript -- same idea as selection_context._LABEL_MAX_LENGTH
 _UNSET = object()
@@ -45,17 +49,37 @@ def text_label_at(rect: tuple[int, int, int, int]) -> str | None:
     return text if len(text) <= _MAX_LENGTH else text[:_MAX_LENGTH].rstrip() + "…"
 
 
+def recognize_frame_text(image: "Image.Image") -> str:
+    """Same best-effort, never-raises contract as text_label_at, but takes an
+    already-captured image (e.g. ScreenReplayBuffer's own per-frame grab, via
+    memory_ingest.py) instead of grabbing the screen itself, and returns the
+    full recognized text (no _MAX_LENGTH one-line-hint truncation) for
+    full-frame Screen Memory indexing rather than a location label."""
+    try:
+        text = asyncio.run(_recognize_image(image))
+    except Exception:
+        return ""
+    return " ".join(text.split())
+
+
 async def _recognize(rect: tuple[int, int, int, int]) -> str:
+    if _get_engine() is None:
+        return ""
+    from PIL import ImageGrab
+
+    image = ImageGrab.grab(bbox=rect, all_screens=True)
+    return await _recognize_image(image)
+
+
+async def _recognize_image(image: "Image.Image") -> str:
     engine = _get_engine()
     if engine is None:
         return ""
-    from PIL import ImageGrab
     from winsdk.windows.graphics.imaging import BitmapDecoder
     from winsdk.windows.storage.streams import DataWriter, InMemoryRandomAccessStream
 
-    image = ImageGrab.grab(bbox=rect, all_screens=True).convert("RGB")
     buf = io.BytesIO()
-    image.save(buf, format="PNG")
+    image.convert("RGB").save(buf, format="PNG")
 
     stream = InMemoryRandomAccessStream()
     writer = DataWriter(stream.get_output_stream_at(0))

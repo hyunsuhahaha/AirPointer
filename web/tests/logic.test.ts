@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { GestureCommandDetector, RegionSelectionDetector } from "../src/lib/gesture.ts";
-import { evenlySpaced, replayPointsAtOffsets, selectNotable, surroundingReplayOffsets } from "../src/lib/replay-buffer.ts";
+import { evenlySpaced, replayPointsAtOffsets, selectNotable, surroundingReplayOffsets, withReplayBookmarks } from "../src/lib/replay-buffer.ts";
 import { DEMO_SCENARIOS, demoFrameState } from "../src/lib/demo-replay.ts";
 import { formatReplayRange, replayExplorationRequestsFrom } from "../src/lib/replay-frame-request.ts";
 import { sensitiveCategory } from "../src/lib/privacy-redaction.ts";
@@ -103,6 +103,14 @@ test("순수 브라우저도 네이티브와 같이 대표 프레임을 최대 6
   assert.equal(selected.length, 6);
   assert.equal(selected[0].capturedAt, 0);
   assert.equal(selected.at(-1)?.capturedAt, 14_750);
+});
+
+test("리플레이 북마크는 N초 대표 프레임을 건드리지 않고 별도 이미지로 추가한다", () => {
+  const base = Array.from({ length: 6 }, (_, index) => ({ url: `base-${index}`, atSeconds: index }));
+  const bookmarks = [{ url: "marked-before-window", atSeconds: 0, capturedAt: 1_000 }];
+  const combined = withReplayBookmarks(base, bookmarks, 25_000);
+  assert.deepEqual(combined.slice(0, 6), base);
+  assert.deepEqual(combined[6], { url: "marked-before-window", capturedAt: 1_000, atSeconds: 24, sampleOffsetsSeconds: [24], kind: "bookmarked-frame" });
 });
 
 test("AI가 대표 프레임 사이의 시점을 요청하면 브라우저 로컬 세그먼트로 매핑한다", () => {

@@ -2,7 +2,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowCounterClockwise, ArrowUp, Camera, CaretDown, Check, CircleNotch, CornersIn, CornersOut, FrameCorners, LockSimple, Pause, Play, Plus, ShieldCheck, X } from "@phosphor-icons/react";
+import { ArrowCounterClockwise, ArrowUp, BookmarkSimple, Camera, CaretDown, Check, CircleNotch, CornersIn, CornersOut, FrameCorners, LockSimple, Pause, Play, Plus, ShieldCheck, X } from "@phosphor-icons/react";
 import styles from "./browser-capture-panel.module.css";
 import { cropRegion } from "@/lib/replay-buffer";
 import type { ChangeHighlight, NormalizedBox, OverviewFrame } from "@/lib/replay-buffer";
@@ -14,13 +14,18 @@ import type { AnalysisModelId, CaptureSnapshot } from "@/lib/analysis-payload";
 export type AnalysisMode = "current" | "replay" | "text";
 export type ConversationTurn = { role: "user" | "assistant"; text: string };
 export type EvidenceItem = { claim: string; frame: OverviewFrame; timeline?: OverviewFrame[]; focusBox?: NormalizedBox };
-export type ExplorationProgress = { active: boolean; usedFrames: number; frameBudget: number; round: number; maxRounds: number; steps: { label: string; detail: string; added: number; status?: "working" | "done" }[] };
+export type AnalysisTiming = { totalMs: number; captureMs: number; privacyMs: number; apiMs: number; replayMs: number; evidenceMs: number };
+export type ExplorationProgress = { active: boolean; usedFrames: number; frameBudget: number; round: number; maxRounds: number; steps: { label: string; detail: string; added: number; status?: "working" | "done" }[]; timing?: AnalysisTiming };
 export type Analyze = (mode: AnalysisMode, question?: string, history?: ConversationTurn[], image?: CaptureSnapshot, model?: AnalysisModelId) => Promise<{ text: string; captureContext?: string; evidence?: EvidenceItem[]; exploration?: ExplorationProgress; privacy?: PrivacyReport } | { error: string }>;
 export function RegionCapture({ image, busy, onSend, onCancel }: {
   image: CaptureSnapshot; busy: boolean; onSend: (image: CaptureSnapshot, question: string) => Promise<void>; onCancel: () => void;
 }) {
   const [box, setBox] = useState<[number, number, number, number]>([0.25, 0.25, 0.75, 0.75]);
-  const anchor = useRef<[number, number] | null>(null);
+  const drag = useRef<
+    | { mode: "draw"; anchor: [number, number] }
+    | { mode: "move"; anchor: [number, number]; box: [number, number, number, number] }
+    | null
+  >(null);
   const [question, setQuestion] = useState("");
   const [error, setError] = useState("");
   const [preparing, setPreparing] = useState(false);
@@ -31,10 +36,33 @@ export function RegionCapture({ image, busy, onSend, onCancel }: {
   };
   return <section aria-label="캡처 영역 선택" className={styles.region}>
     <div className={styles.regionHeading}><strong>영역 선택</strong><span>드래그로 영역 선택</span></div>
-    <div tabIndex={0} role="group" aria-label="선택 영역: 방향키로 이동, Shift와 방향키로 크기 조절" className={styles.regionCanvas}
-      onPointerDown={(event) => { if (locked || event.button !== 0) return; event.preventDefault(); event.currentTarget.focus(); anchor.current = position(event); event.currentTarget.setPointerCapture(event.pointerId); }}
-      onPointerMove={(event) => { if (!anchor.current || locked) return; const [x, y] = position(event); const [ax, ay] = anchor.current; setBox([Math.min(x, ax), Math.min(y, ay), Math.max(x, ax), Math.max(y, ay)]); }}
-      onPointerUp={() => { anchor.current = null; }} onPointerCancel={() => { anchor.current = null; }}
+    <div tabIndex={0} role="group" aria-label="선택 영역: 경계선을 드래그하거나 방향키로 이동, Shift와 방향키로 크기 조절" className={styles.regionCanvas}
+      onPointerDown={(event) => {
+        if (locked || event.button !== 0) return;
+        event.preventDefault();
+        event.currentTarget.focus();
+        const point = position(event);
+        drag.current = (event.target as HTMLElement).dataset.selectionMove === "true"
+          ? { mode: "move", anchor: point, box }
+          : { mode: "draw", anchor: point };
+        event.currentTarget.setPointerCapture(event.pointerId);
+      }}
+      onPointerMove={(event) => {
+        if (!drag.current || locked) return;
+        const [x, y] = position(event);
+        if (drag.current.mode === "draw") {
+          const [ax, ay] = drag.current.anchor;
+          setBox([Math.min(x, ax), Math.min(y, ay), Math.max(x, ax), Math.max(y, ay)]);
+          return;
+        }
+        const { anchor: [ax, ay], box: [left, top, right, bottom] } = drag.current;
+        const width = right - left;
+        const height = bottom - top;
+        const nextLeft = Math.max(0, Math.min(1 - width, left + x - ax));
+        const nextTop = Math.max(0, Math.min(1 - height, top + y - ay));
+        setBox([nextLeft, nextTop, nextLeft + width, nextTop + height]);
+      }}
+      onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }}
       onKeyDown={(event) => {
         if (event.key === "Escape" && !locked) { onCancel(); return; }
         if (!event.key.startsWith("Arrow") || locked) return;
@@ -46,9 +74,14 @@ export function RegionCapture({ image, busy, onSend, onCancel }: {
           : (() => { const x = Math.max(-l, Math.min(1 - r, dx)); const y = Math.max(-t, Math.min(1 - b, dy)); return [l + x, t + y, r + x, b + y]; })());
       }}>
       <img src={image.url} alt="분석 전 고정한 공유 화면" draggable={false} />
-      <span className={styles.selection} style={{ left: `${box[0] * 100}%`, top: `${box[1] * 100}%`, width: `${(box[2] - box[0]) * 100}%`, height: `${(box[3] - box[1]) * 100}%` }} />
+      <span className={styles.selection} style={{ left: `${box[0] * 100}%`, top: `${box[1] * 100}%`, width: `${(box[2] - box[0]) * 100}%`, height: `${(box[3] - box[1]) * 100}%` }}>
+        <i aria-hidden="true" data-selection-move="true" className={`${styles.selectionMoveEdge} ${styles.selectionMoveTop}`} />
+        <i aria-hidden="true" data-selection-move="true" className={`${styles.selectionMoveEdge} ${styles.selectionMoveRight}`} />
+        <i aria-hidden="true" data-selection-move="true" className={`${styles.selectionMoveEdge} ${styles.selectionMoveBottom}`} />
+        <i aria-hidden="true" data-selection-move="true" className={`${styles.selectionMoveEdge} ${styles.selectionMoveLeft}`} />
+      </span>
     </div>
-    <p className={styles.regionHint}>방향키로 이동 · Shift + 방향키로 크기 조절</p>
+    <p className={styles.regionHint}>경계선을 드래그해 이동 · 방향키로 이동 · Shift + 방향키로 크기 조절</p>
     <input aria-label="선택 영역에 대한 질문" aria-required="true" placeholder="무엇을 확인할까요?" value={question} maxLength={500} disabled={locked} onChange={(event) => setQuestion(event.target.value)} className={styles.regionInput} />
     <div className={styles.regionActions}>
       <button className={styles.regionSubmit} disabled={locked || !question.trim() || box[2] - box[0] < 0.01 || box[3] - box[1] < 0.01} onClick={async () => {
@@ -120,9 +153,10 @@ export function EvidenceTimeMachine({ evidence, onClose }: { evidence: EvidenceI
 
 type DisplayTurn = ConversationTurn & { source?: string; captureContext?: string; evidence?: EvidenceItem[]; exploration?: ExplorationProgress };
 
-export function BrowserCapturePanel({ active, busy, elapsed, retention, seconds, onSecondsChange, frames, highlight, exploration, snapshot, analyze, initialExpanded = false, demoMode = "idle", demoQuestion = "", privacyEnabled, onPrivacyEnabledChange, privacyZone, onPrivacyZoneChange, privacyReport }: {
+export function BrowserCapturePanel({ active, busy, elapsed, retention, seconds, onSecondsChange, bookmarkCount, bookmarkEnabled, onBookmark, frames, highlight, exploration, snapshot, analyze, initialExpanded = false, demoMode = "idle", demoQuestion = "", privacyEnabled, onPrivacyEnabledChange, privacyZone, onPrivacyZoneChange, privacyReport }: {
   active: boolean; busy: boolean; elapsed: number; retention: number; seconds: number;
   onSecondsChange: (seconds: number) => void;
+  bookmarkCount: number; bookmarkEnabled: boolean; onBookmark: () => void;
   frames: OverviewFrame[]; highlight: ChangeHighlight | null; exploration?: ExplorationProgress; snapshot: () => CaptureSnapshot; analyze: Analyze;
   initialExpanded?: boolean; demoMode?: "idle" | "playing" | "ready"; demoQuestion?: string;
   privacyEnabled: boolean; onPrivacyEnabledChange: (enabled: boolean) => void; privacyZone?: NormalizedBox; onPrivacyZoneChange: (box?: NormalizedBox) => void; privacyReport?: PrivacyReport;
@@ -223,6 +257,7 @@ export function BrowserCapturePanel({ active, busy, elapsed, retention, seconds,
       <button className={styles.replay} disabled={!active || locked} aria-label="최근 리플레이 첨부" aria-pressed={captureMode === "replay"} title={`최근 ${seconds}초 첨부`} onClick={() => selectCapture("replay")}><span className={styles.replayLabel}><ArrowCounterClockwise size={17} weight="bold" />리플레이</span></button>
       <button className={styles.secondary} disabled={!active || locked} aria-pressed={captureMode === "current"} onClick={() => selectCapture("current")}><Camera size={15} />화면</button>
       <button className={styles.secondary} disabled={!active || locked} onClick={captureRegion}><FrameCorners size={15} />영역</button>
+      <button className={`${styles.secondary} ${styles.bookmarkAction}`} disabled={!bookmarkEnabled} aria-label={`현재 시점 북마크${bookmarkCount ? ` · ${bookmarkCount}개 저장됨` : ""}`} title="현재 화면을 별도 저장해 다음 리플레이에 추가" onClick={onBookmark}><BookmarkSimple size={15} weight={bookmarkCount ? "fill" : "regular"} />북마크{bookmarkCount ? <span>{bookmarkCount}</span> : null}</button>
     </div>
     {expanded && <>
       <div className={styles.privacyBar} data-enabled={privacyEnabled}>
@@ -245,7 +280,7 @@ export function BrowserCapturePanel({ active, busy, elapsed, retention, seconds,
             {frames.map((frame, index) => <button type="button" key={`${frame.atSeconds}-${index}`} aria-label={`${index + 1}번째 전송 화면 크게 보기`}
               onClick={() => setPreviewImage({ url: frame.url, alt: `${index + 1}번째 전송 화면 확대` })}>
               <img src={frame.url} alt={`${index + 1}번째 전송 화면`} />
-              <span data-query={frame.kind !== "replay-frame"}>{frame.kind === "queried-crop" ? "확대 " : frame.kind === "queried-frame" ? "추가 " : ""}{frame.atSeconds > 0.005 ? `-${frame.atSeconds.toFixed(2)}s` : "현재"}</span>
+              <span data-query={frame.kind !== "replay-frame"}>{frame.kind === "queried-crop" ? "확대 " : frame.kind === "queried-frame" ? "추가 " : frame.kind === "bookmarked-frame" ? "북마크 " : ""}{frame.atSeconds > 0.005 ? `-${frame.atSeconds.toFixed(2)}s` : "현재"}</span>
             </button>)}
           </div>
         </details>}
@@ -297,6 +332,14 @@ function ExplorationMeter({ value }: { value: ExplorationProgress }) {
   return <section className={styles.exploration} aria-label="적응형 프레임 탐색 현황" aria-live="polite">
     <div className={styles.explorationHead}><strong>{value.active ? <><CircleNotch className={styles.spinner} size={12} />AI 탐색 실시간</> : <><Check size={12} weight="bold" />탐색 완료</>}</strong><span>{value.usedFrames}/{value.frameBudget} frames · {value.round}/{value.maxRounds} rounds</span></div>
     <div className={styles.explorationBar} role="progressbar" aria-label="프레임 조회 예산" aria-valuemin={0} aria-valuemax={value.frameBudget} aria-valuenow={value.usedFrames}><span style={{ transform: `scaleX(${percent / 100})` }} /></div>
+    {value.timing && <div className={styles.timingReceipt} aria-label="분석 성능 측정">
+      <strong>총 {(value.timing.totalMs / 1000).toFixed(1)}초</strong>
+      <span>캡처 {(value.timing.captureMs / 1000).toFixed(1)}s</span>
+      <span>가림 {(value.timing.privacyMs / 1000).toFixed(1)}s</span>
+      <span>AI {(value.timing.apiMs / 1000).toFixed(1)}s</span>
+      <span>재탐색 {(value.timing.replayMs / 1000).toFixed(1)}s</span>
+      <span>근거 {(value.timing.evidenceMs / 1000).toFixed(1)}s</span>
+    </div>}
     <ol>{value.steps.map((step, index) => { const working = value.active && step.status === "working"; return <li key={`${step.label}-${index}`} data-status={working ? "working" : "done"}><span>{working ? <CircleNotch className={styles.spinner} size={11} /> : <Check size={11} weight="bold" />}</span><p><b>{step.label}</b><small>{step.detail}</small></p><em>{working ? "LIVE" : step.added ? `+${step.added}` : "완료"}</em></li>; })}</ol>
   </section>;
 }

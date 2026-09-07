@@ -14,6 +14,10 @@ type OcrWorker = {
   terminate(): Promise<unknown>;
 };
 
+// OCR cost grows quickly with 4K captures. Scan a bounded copy, then apply
+// the normalized boxes to the original-resolution frame.
+const OCR_MAX_EDGE = 1280;
+
 const PATTERNS: Array<[SensitiveCategory, RegExp]> = [
   ["API 키", /\b(?:sk-(?:proj-)?[a-z0-9_-]{8,}|akia[a-z0-9]{12,}|(?:api[_ -]?key)\s*[:=]\s*["']?[a-z0-9_-]{8,})\b/i],
   ["인증 토큰", /\b(?:bearer\s+[a-z0-9._~+/=-]{8,}|gh[pousr]_[a-z0-9]{12,}|(?:access[_ -]?token|secret)\s*[:=]\s*["']?[a-z0-9._~+/=-]{8,})\b/i],
@@ -58,6 +62,16 @@ async function loadImage(url: string): Promise<HTMLImageElement> {
   return image;
 }
 
+function ocrSource(image: HTMLImageElement): { url: string; width: number; height: number } {
+  const scale = Math.min(1, OCR_MAX_EDGE / Math.max(image.naturalWidth, image.naturalHeight));
+  if (scale === 1) return { url: image.src, width: image.naturalWidth, height: image.naturalHeight };
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+  canvas.getContext("2d")!.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return { url: canvas.toDataURL("image/jpeg", 0.76), width: canvas.width, height: canvas.height };
+}
+
 export async function createPrivacyRedactor(onProgress?: (message: string) => void) {
   let workerPromise: Promise<OcrWorker> | undefined;
   const getWorker = () => workerPromise ??= (async () => {
@@ -78,9 +92,10 @@ export async function createPrivacyRedactor(onProgress?: (message: string) => vo
       if (!hinted.length) {
         onProgress?.("화면 안의 민감정보를 기기에서 찾고 있습니다.");
         const worker = await getWorker();
-        const { data } = await worker.recognize(frame.url, {}, { text: true, blocks: true });
+        const source = ocrSource(image);
+        const { data } = await worker.recognize(source.url, {}, { text: true, blocks: true });
         const lines = (data.blocks ?? []).flatMap((block) => block.paragraphs ?? []).flatMap((paragraph) => paragraph.lines ?? []);
-        automatic = sensitiveLineRegions(lines, image.naturalWidth, image.naturalHeight);
+        automatic = sensitiveLineRegions(lines, source.width, source.height);
       }
       const regions = [...hinted, ...automatic, ...(manualBox ? [{ box: manualBox, category: "사용자 지정" }] : [])];
       if (!regions.length) return { url: frame.url, regions };

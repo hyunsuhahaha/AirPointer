@@ -84,7 +84,8 @@ class ScreenReplayBuffer:
                  root: Path | None = None, max_bytes: int = 250 * 1024 * 1024,
                  grab: Callable[[], np.ndarray] | None = None,
                  grab_region: Callable[[Region], Image.Image] | None = None,
-                 element_label: Callable[[tuple[int, int, int, int], int, int], str | None] | None = None
+                 element_label: Callable[[tuple[int, int, int, int], int, int], str | None] | None = None,
+                 on_frame: Callable[[np.ndarray, float, ChangeEvent | None], None] | None = None
                  ) -> None:
         local = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
         self.root = (root or local / "AirPointer" / "replay").resolve()
@@ -99,6 +100,12 @@ class ScreenReplayBuffer:
         # injectable so tests can force the quadrant-label fallback path
         # deterministically instead of querying whatever's really on screen.
         self._element_label = element_label or _bbox_element_label
+        # Optional Screen Memory hook (see memory_ingest.ScreenMemoryIngestor.consider)
+        # -- called with every captured frame plus whatever ChangeEvent just
+        # closed (or None). Deciding whether a frame is actually "due" for
+        # ingestion is the callback's job, not this class's; ScreenReplayBuffer
+        # stays capture-only and has no SQLite/OCR knowledge of its own.
+        self._on_frame = on_frame
         self._segments: deque[Segment] = deque()
         # maxlen is a hard memory backstop, not the normal pruning path --
         # _prune() drops events past retention_seconds the same as segments,
@@ -295,6 +302,8 @@ class ScreenReplayBuffer:
                     self._scores.append((captured_at, self._change_tracker.last_score))
                     if event is not None:
                         self._events.append(event)
+                if self._on_frame is not None:
+                    self._on_frame(frame, captured_at, event)
                 next_frame += interval
                 if next_frame < deadline:
                     frame = self._grab()
