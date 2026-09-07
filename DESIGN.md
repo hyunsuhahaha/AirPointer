@@ -27,3 +27,21 @@ The authored motion is the orange NOW marker advancing as one-second segments en
 ## Responsive
 
 Desktop is an asymmetric 65/35 workspace. Tablet stacks command controls above the timeline. Mobile becomes a single live monitor followed by actions, timeline, and analysis; nothing requires hover.
+
+
+## Browser PiP workspace
+
+PiP uses the existing graphite/tangerine palette and the app's actual self-hosted Noto Sans KR
+and IBM Plex Mono fonts. Its stylesheet is `browser-capture-panel.module.css`; the separate PiP
+document receives the loaded app CSS with the existing CSP nonce and font-variable classes.
+
+The compact 380×240 view is a replay remote: one orange primary action, two quiet capture controls,
+a measured buffer track, and a low-emphasis privacy line. The expanded 380×640 view keeps its header,
+capture strip and question composer fixed while only conversation content scrolls. Width and height
+are requests; the browser controls the final window dimensions.
+
+User questions have compact right-aligned bubbles and capture-source labels. AI answers sit directly
+on the page with a small brand signature. Changes appear in a paired before/after disclosure; region
+selection dims only the area outside the selected rectangle. Preserve keyboard focus, disabled and
+pending states, Korean IME input, and reduced-motion preferences. Enter sends a text follow-up;
+Shift+Enter inserts a line break. New conversations and compact mode use labeled icon buttons.

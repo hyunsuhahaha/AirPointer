@@ -348,7 +348,9 @@
   .gestureSection { grid-template-columns: 1fr 1fr; }
 }
 @media (max-width: 640px) {
-  .nav { height: 62px; }.navMeta a, .localBadge { display: none; }
+  .nav { height: 62px; gap: 10px; padding-inline: 14px; }.navMeta a, .localBadge { display: none; }
+  .brand { white-space: nowrap; font-size: 13px; gap: 7px; }
+  .modeSwitch button { white-space: nowrap; padding: 7px 9px; font: 600 10px var(--font-sans), sans-serif; }
   .hero { min-height: auto; }.stageColumn { min-height: 475px; padding: 18px 14px; }.stageViewport { min-height: 330px; }
   .emptyStage strong { max-width: 13ch; }.commandDock { min-height: auto; padding: 62px 20px 72px; }
   .analysis { grid-template-columns: 1fr; gap: 22px; }.frames { grid-template-columns: repeat(3, 1fr); }

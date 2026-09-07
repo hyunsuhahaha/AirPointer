@@ -401,7 +401,18 @@ export function ReplayWorkspace() {
       const pipWindow = await window.documentPictureInPicture.requestWindow({ width: 380, height: 240 });
       pipWindowRef.current = pipWindow;
       pipWindow.document.title = "방금그거뭐였지 · 캡처와 대화";
-      pipWindow.document.body.style.cssText = "margin:0;background:#101110;color-scheme:dark";
+      pipWindow.document.documentElement.lang = "ko";
+      pipWindow.document.documentElement.className = document.documentElement.className;
+      pipWindow.document.body.style.cssText = "margin:0;background:#111210;color-scheme:dark";
+      // The portal shares React state, but PiP has its own document. Carry
+      // the app's compiled CSS and font definitions across without relaxing CSP.
+      for (const sheet of document.styleSheets) {
+        const style = pipWindow.document.createElement("style");
+        style.nonce = (sheet.ownerNode as HTMLElement | null)?.nonce ?? "";
+        style.textContent = Array.from(sheet.cssRules, (rule) => rule.cssText).join("\n");
+        pipWindow.document.head.append(style);
+      }
+      if (pipWindow.closed) return;
       setPipContainer(pipWindow.document.body);
       setPipOpen(true);
       pipWindow.addEventListener("pagehide", () => {
@@ -411,6 +422,9 @@ export function ReplayWorkspace() {
         setPipOpen(false);
       }, { once: true });
     } catch (reason) {
+      pipWindowRef.current?.close();
+      pipWindowRef.current = null;
+      setPipContainer(null);
       setPipMessage(reason instanceof Error ? reason.message : "떠 있는 캡처 창을 열지 못했습니다.");
       setPipOpen(false);
     }
