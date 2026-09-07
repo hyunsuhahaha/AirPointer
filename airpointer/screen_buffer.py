@@ -689,6 +689,29 @@ def _frame_to_screen_point(bbox: tuple[int, int, int, int], frame_width: int, fr
     return (monitor["left"] + round(cx / scale_x), monitor["top"] + round(cy / scale_y))
 
 
+def _frame_to_screen_rect(bbox: tuple[int, int, int, int], frame_width: int, frame_height: int
+                           ) -> tuple[int, int, int, int] | None:
+    """Same frame-to-screen mapping as _frame_to_screen_point, kept as a
+    separate function rather than deriving a rect from that one's point:
+    the OCR fallback below needs the actual rectangle to crop (see
+    ocr_fallback.text_label_at), not just its center. Returns None under
+    the exact same conditions as _frame_to_screen_point (degenerate frame
+    size or unreadable monitor geometry)."""
+    if frame_width <= 0 or frame_height <= 0:
+        return None
+    try:
+        monitor = _get_sct().monitors[0]
+    except Exception:
+        return None
+    mon_width, mon_height = monitor.get("width", 0), monitor.get("height", 0)
+    if mon_width <= 0 or mon_height <= 0:
+        return None
+    left, top, right, bottom = bbox
+    scale_x, scale_y = frame_width / mon_width, frame_height / mon_height
+    return (monitor["left"] + round(left / scale_x), monitor["top"] + round(top / scale_y),
+            monitor["left"] + round(right / scale_x), monitor["top"] + round(bottom / scale_y))
+
+
 _ELEMENT_LABEL_RETRY_DELAY = 0.25  # seconds -- see the retry comment below
 
 
@@ -697,9 +720,9 @@ def _bbox_element_label(bbox: tuple[int, int, int, int], width: int, height: int
     real UI element (e.g. "저장 버튼") via Windows UI Automation -- the same
     mechanism selection_context.py already uses to read selected text --
     instead of only a screen quadrant. Returns None on ANY failure (no
-    screen point, off-Windows, COM not ready, no element, unnamed element)
-    so callers always have _bbox_label() to fall back to; this must never
-    block a capture.
+    screen point, off-Windows, COM not ready, no element, unnamed element,
+    AND the OCR fallback below also finding nothing) so callers always have
+    _bbox_label() to fall back to; this must never block a capture.
 
     Retries ONCE, after a short fixed delay, if the first attempt finds
     nothing. Confirmed by hand against a freshly launched Notepad window:
@@ -709,7 +732,13 @@ def _bbox_element_label(bbox: tuple[int, int, int, int], width: int, height: int
     in the common case -- an element that was already on screen (a toast
     inside an existing app, a scroll, a text edit) resolves on the first
     try -- the delay only ever happens for the rarer "something brand new
-    just appeared" case that actually needs it."""
+    just appeared" case that actually needs it.
+
+    If UI Automation still finds nothing after that retry (some apps never
+    expose an accessibility tree at all -- games, custom-rendered/canvas
+    UI, remote desktop clients), falls back once more to reading the
+    region's pixels via OCR (ocr_fallback.text_label_at) before giving up
+    -- see docs/replay-change-detection.md's "OCR 폴백" section."""
     point = _frame_to_screen_point(bbox, width, height)
     if point is None:
         return None
@@ -719,7 +748,16 @@ def _bbox_element_label(bbox: tuple[int, int, int, int], width: int, height: int
         if label is None:
             time.sleep(_ELEMENT_LABEL_RETRY_DELAY)
             label = element_label_at(*point)
-        return label
+        if label is not None:
+            return label
+    except Exception:
+        pass
+    rect = _frame_to_screen_rect(bbox, width, height)
+    if rect is None:
+        return None
+    try:
+        from .ocr_fallback import text_label_at
+        return text_label_at(rect)
     except Exception:
         return None
 

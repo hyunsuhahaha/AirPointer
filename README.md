@@ -78,6 +78,9 @@ Vercel에서는 Root Directory를 `web`으로 지정하고 `OPENAI_API_KEY`를 �
 
 앱과 대상 프로그램의 권한 수준이 같아야 화면 캡처 오버레이의 클릭이 정상 동작합니다.
 
+브라우저만으로 되는 것과 AirPointer 설치 시 추가되는 것의 구체적인 경계는
+[docs/browser-vs-native-capabilities.md](docs/browser-vs-native-capabilities.md) 참고.
+
 ## 현재 범위
 
 - 주 모니터 한 대
@@ -116,7 +119,11 @@ Vercel에서는 Root Directory를 `web`으로 지정하고 `OPENAI_API_KEY`를 �
 화면 캡처와 리플레이 캡처 모두, 전송 직전 최근 30초 안의 창 전환·클릭 이력을 한 줄 컨텍스트로
 함께 보냅니다(사용자가 어떤 화면·버튼을 거쳐 지금 상태에 왔는지 Codex가 픽셀만 보고 짐작하지
 않도록). 리플레이 전송 중 실제로 화면 변화가 감지된 프레임이 있으면 "화면 변화 감지: N번째
-프레임, 오른쪽 아래 영역" 같은 위치 힌트도 같은 컨텍스트 줄에 덧붙습니다(자세한 설계는
+프레임, 오른쪽 아래 영역"처럼 위치를, 가능하면 "화면 변화 감지: N번째 프레임, 저장 버튼"처럼
+UI Automation으로 읽은 실제 요소 이름을 위치 힌트로 같은 컨텍스트 줄에 덧붙입니다. 접근성
+트리를 아예 노출하지 않는 앱(일부 게임, 커스텀 렌더링 UI)에서는 같은 화면 영역을 Windows
+자체 온디바이스 OCR로 다시 읽어 그 텍스트를 대신 씁니다 — 두 경로 모두 비전 모델 호출 없이
+로컬에서만 처리됩니다(자세한 설계와 실측치는
 [docs/replay-change-detection.md](docs/replay-change-detection.md) 참고). Codex Desktop 창을 처음 찾는 조회는 Electron의 접근성(UI Automation) 트리를 그 자리에서
 새로 구축하느라 20~30초까지 걸릴 수 있는데, 앱을 켤 때 백그라운드에서 미리 한 번 조회해 두므로
 (warmup) 실제 첫 전송에서는 이 지연이 거의 나타나지 않습니다. 이후 전송들도 찾아둔 창을

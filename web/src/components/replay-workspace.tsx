@@ -4,16 +4,40 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowClockwise, ArrowCounterClockwise, Camera, CaretDown, Check, CircleNotch, ClipboardText, Desktop, DotsSixVertical, Gear, HandPalm, LockKey, MagnifyingGlass, PaperPlaneTilt, Play, Sparkle, Stop, Target, WarningCircle, X } from "@phosphor-icons/react";
+import { ArrowClockwise, ArrowCounterClockwise, Camera, CaretDown, Check, CircleNotch, ClipboardText, Desktop, DotsSixVertical, Gear, HandPalm, LockKey, MagnifyingGlass, PaperPlaneTilt, PictureInPicture, Play, Sparkle, Stop, Target, WarningCircle, X } from "@phosphor-icons/react";
 import { useCompanionGesture } from "@/hooks/use-companion-gesture";
 import type { HotkeyBindings } from "@/hooks/use-companion-gesture";
-import { BrowserReplayBuffer, frameFromVideo } from "@/lib/replay-buffer";
-import type { OverviewFrame, ReplayCapsule } from "@/lib/replay-buffer";
+import { useBrowserHandGesture } from "@/hooks/use-browser-gesture";
+import type { GestureCommand } from "@/lib/gesture";
+import { BrowserReplayBuffer, cropRegion, frameFromVideo } from "@/lib/replay-buffer";
+import type { ChangeHighlight, OverviewFrame, ReplayCapsule } from "@/lib/replay-buffer";
 import type { PromptTemplate } from "@/lib/prompt-template";
 import styles from "./replay-workspace.module.css";
 
+// Document Picture-in-Picture (Chrome/Edge 116+) isn't in TS's DOM lib yet --
+// minimal ambient shape for the one method/property this file actually uses.
+// The window it hands back is a real same-origin Window (own document, same
+// JS realm as the opener), just chromeless and always-on-top -- close
+// enough to a global hotkey's "reachable no matter what else has focus"
+// without any native install, which is the whole point of pipWindow below.
+declare global {
+  interface Window {
+    documentPictureInPicture?: {
+      requestWindow(options?: { width?: number; height?: number }): Promise<Window>;
+      window: Window | null;
+    };
+  }
+}
+
 type Status = "idle" | "recording" | "preparing" | "analyzing" | "done" | "error";
 type Mode = "current" | "replay";
+// The PiP capture window's two shapes (see openCapturePip): "buttons" is the
+// always-floating minimal trigger pair, "conversation" is the fuller
+// Codex-Desktop-like thread view that opens only when there's something to
+// show -- Document PiP allows only one window per tab, so these are never
+// both open at once; switching between them closes one and opens the other.
+type PipVariant = "buttons" | "conversation";
+type ConversationTurn = { role: "user" | "assistant"; text: string };
 type AgentState = "loading" | "idle" | "preparing" | "drafting" | "sending" | "queued" | "done" | "error";
 type AgentThread = { id: string; title: string; status: string; cwd: string; updatedAt: number };
 type DeliveryTarget = "codex" | "claude";
@@ -35,6 +59,13 @@ type PendingAgentCapture =
   | { mode: "current"; threadId: string; seconds: number; frames: OverviewFrame[]; region?: boolean }
   | { mode: "replay"; threadId: string; seconds: number; capsule: ReplayCapsule };
 type GestureAction = "replay" | "screenshot" | "region";
+// Browser-tab-scoped equivalent of HotkeyBindings above -- deliberately a
+// separate type/state (see browserHotkeyBindings) rather than reusing
+// AirPointer's own combos: this listener only ever sees keys while the tab
+// itself has focus (window.keydown, no OS hook), so it needs its own
+// defaults that don't collide with AirPointer's global ones or the browser's
+// own shortcuts.
+type BrowserHotkeyBindings = { screenshot: string; replay: string };
 type StageBox = { left: number; top: number; width: number; height: number };
 type ResizeDir = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 
@@ -90,6 +121,13 @@ const RESIZE_DIRS: { dir: ResizeDir; label: string }[] = [
 
 const AIRPOINTER_PROTOCOL = "airpointer://";
 const AIRPOINTER_DOWNLOAD_URL = "/downloads/AirPointer.exe";
+// Appended to Codex Agent error messages that mean "this path is unusable
+// right now" (no local Codex Desktop/CLI bridge, send failed outright) --
+// not to per-field validation messages ("먼저 작업을 선택해 주세요") that
+// the user can already fix inline. Points at the always-available fallback
+// above so a judge without AirPointer/Codex installed isn't left at a dead
+// end.
+const AGENT_FALLBACK_HINT = ' 대신 위쪽 "설치 없이 · 화면 바로 확인"을 눌러보세요.';
 
 export function ReplayWorkspace() {
   const screenVideo = useRef<HTMLVideoElement>(null);
@@ -106,6 +144,29 @@ export function ReplayWorkspace() {
   const [status, setStatus] = useState<Status>("idle");
   const [frames, setFrames] = useState<OverviewFrame[]>([]);
   const [analysis, setAnalysis] = useState("");
+  // "방금 뭐가 바뀌었나" highlight card -- the single most notable detected
+  // change in the send window, as a before/after pair plus a zoomed crop.
+  // Recomputed on a timer (see the effect near `elapsed` below), not on
+  // every render, since it involves an async canvas crop.
+  const [highlight, setHighlight] = useState<ChangeHighlight | null>(null);
+  const [highlightZoomUrl, setHighlightZoomUrl] = useState("");
+  // Default on: screen sharing itself is already the explicit permission
+  // step (see PRODUCT.md's "명시적 허용 후에만 기록" principle) -- deciding
+  // whether a *detected* change also gets surfaced is a much smaller
+  // decision layered on top of that, so it doesn't need its own opt-in to
+  // stay consistent with it. Kept visible/toggleable so it's never a silent
+  // watcher -- see the switch next to the highlight panel below.
+  const [proactiveDetectionEnabled, setProactiveDetectionEnabled] = useState(true);
+  // Which half of the command dock is showing -- "browser" is every trigger
+  // that works from this tab alone (OpenAI quick-check, browser gesture/
+  // hotkey/PiP), "full" is today's original dock (AirPointer camera panel,
+  // native gesture/hotkey start mode, Agent delivery to Codex/Claude -- Codex
+  // needs a local Codex Desktop too, so it belongs here, not in "browser").
+  // Defaults to "browser" so a judge who never installs anything lands on
+  // the mode that's actually all they can use (see the AI Championship
+  // submission policy in the conversation this was added for: only a link a
+  // judge can open with zero install is accepted).
+  const [viewMode, setViewMode] = useState<"browser" | "full">("browser");
   const [message, setMessage] = useState("화면 공유를 시작하면 최근 장면이 이 기기에만 쌓입니다.");
   const [elapsed, setElapsed] = useState(0);
   const [gestureEnabled, setGestureEnabled] = useState(false);
@@ -139,6 +200,42 @@ export function ReplayWorkspace() {
   const [companionLaunchIssue, setCompanionLaunchIssue] = useState<"missing" | "error" | "">("");
   const [bootProgress, setBootProgress] = useState(0);
   const [promptSettingsOpen, setPromptSettingsOpen] = useState(false);
+  // Independent of AirPointer's own gesture mode above -- this runs hand
+  // tracking entirely in-browser (see useBrowserHandGesture) so it's the one
+  // gesture path someone without the native app installed can still use.
+  const [browserGestureEnabled, setBrowserGestureEnabled] = useState(false);
+  // Same "no install needed" spirit as browserGestureEnabled, but keyboard
+  // instead of the webcam -- only works while this tab has focus (see the
+  // window.keydown effect below), unlike AirPointer's OS-level global hotkeys.
+  const [browserHotkeyEnabled, setBrowserHotkeyEnabled] = useState(false);
+  const [browserHotkeyBindings, setBrowserHotkeyBindings] = useState<BrowserHotkeyBindings>({ screenshot: "alt+shift+s", replay: "alt+shift+d" });
+  // Third no-install trigger: an always-on-top floating window with its own
+  // two buttons. Unlike the keyboard/webcam triggers above, this one keeps
+  // working even while some other app has focus -- see openCapturePip.
+  const pipWindowRef = useRef<Window | null>(null);
+  const [pipSupported, setPipSupported] = useState(false);
+  const [pipOpen, setPipOpen] = useState(false);
+  const [pipMessage, setPipMessage] = useState("");
+  // Conversation memory for the PiP's "대화창" shape -- a ref, not React
+  // state: nothing in this component's JSX renders it, only the PiP
+  // window's own hand-built DOM does (imperatively, see openCapturePip), so
+  // there's no render to keep in sync and no risk of the stale-read race
+  // analyzeWithOpenAI's now-removed message ref used to hit. Cleared on a
+  // fresh screen share (see startSharing/stopSharing) -- a new share is a
+  // new session, not a follow-up to whatever was asked about the last one.
+  const pipHistory = useRef<ConversationTurn[]>([]);
+  // True only for the instant between closing one PiP shape and opening the
+  // other (buttons <-> conversation, see openCapturePip's switchTo) -- lets
+  // the pagehide listener tell that transition apart from the user actually
+  // closing the window, which should turn the whole feature off instead.
+  const pipSwitchingRef = useRef(false);
+  // Deliberately deferred to an effect (not a useState lazy initializer)
+  // so the first client render matches the SSR pass (window is undefined
+  // there too) before this flips post-mount -- an inline/lazy-initializer
+  // check would read `window` during the client's very first render and
+  // mismatch the server-rendered markup instead.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { setPipSupported(typeof window !== "undefined" && "documentPictureInPicture" in window); }, []);
   const [promptTemplate, setPromptTemplate] = useState<PromptTemplate | null>(null);
   const [promptSettingsState, setPromptSettingsState] = useState<"idle" | "loading" | "saving" | "error">("idle");
   const [promptSettingsMessage, setPromptSettingsMessage] = useState("");
@@ -229,6 +326,7 @@ export function ReplayWorkspace() {
     setElapsed(0);
     setStatus("idle");
     setMessage("버퍼를 비웠습니다. 화면 데이터는 남아 있지 않습니다.");
+    pipHistory.current = [];
   }, [stream]);
 
   const startSharing = useCallback(async () => {
@@ -238,6 +336,7 @@ export function ReplayWorkspace() {
     try {
       const nextStream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 15, max: 24 } }, audio: false });
       if (!screenVideo.current) return;
+      pipHistory.current = [];
       screenVideo.current.srcObject = nextStream;
       await screenVideo.current.play();
       buffer.current.setRetention(retention);
@@ -255,28 +354,250 @@ export function ReplayWorkspace() {
 
   const captureFrames = useCallback(async (mode: Mode) => {
     if (!stream || !screenVideo.current) throw new Error("먼저 화면 공유를 시작해 주세요.");
+    // Leave room for the zoomed change-region crop as an extra frame when a
+    // highlight is available -- it's the small/cut-off text the AI would
+    // otherwise squint at in the full-size frames, so it goes in alongside
+    // them rather than instead of one of them.
     const nextFrames = mode === "current"
       ? [{ url: frameFromVideo(screenVideo.current), atSeconds: 0 }]
-      : (await buffer.current.recentCapsule(sendSeconds, 6)).overviewFrames;
+      : (await buffer.current.recentCapsule(sendSeconds, highlightZoomUrl ? 5 : 6)).overviewFrames;
     if (!nextFrames.length) throw new Error("전송할 만큼 화면 버퍼가 아직 쌓이지 않았습니다.");
+    if (mode === "replay" && highlightZoomUrl) nextFrames.push({ url: highlightZoomUrl, atSeconds: 0 });
     setFrames(nextFrames);
     return nextFrames;
-  }, [sendSeconds, stream]);
+  }, [highlightZoomUrl, sendSeconds, stream]);
 
-  const analyzeWithOpenAI = useCallback(async (mode: Mode) => {
-    if (!stream || !screenVideo.current) { setStatus("error"); setMessage("먼저 화면 공유를 시작해 주세요."); return; }
+  // Returns the outcome directly -- not a ref-mirrored read of `message`
+  // afterward, which raced: setMessage() schedules a re-render, and the
+  // effect that would copy it into a ref doesn't necessarily run before a
+  // plain .then() callback on this same promise does, so a caller reading
+  // the ref right after await could still see the *previous* setMessage
+  // call's value (confirmed: the PiP window was showing the "분석하고
+  // 있습니다" progress text as if it were the error). `status`/`message`
+  // still carry the same info for the main tab's own UI (unchanged for
+  // every existing caller, which all ignore the return value) -- this
+  // return value exists only because the PiP window (see openCapturePip)
+  // has no access to this component's state and needs the outcome handed
+  // back directly to show inside itself.
+  const analyzeWithOpenAI = useCallback(async (mode: Mode, question?: string, history?: ConversationTurn[]): Promise<{ text: string } | { error: string }> => {
+    if (!stream || !screenVideo.current) {
+      const error = "먼저 화면 공유를 시작해 주세요.";
+      setStatus("error"); setMessage(error);
+      return { error };
+    }
     setStatus("preparing"); setAnalysis("");
     try {
       const nextFrames = await captureFrames(mode);
       setStatus("analyzing"); setMessage(`${mode === "current" ? "현재 화면" : `최근 ${sendSeconds}초`}을 OpenAI API가 분석하고 있습니다.`);
-      const response = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode, frames: nextFrames.map((frame) => frame.url) }) });
+      const response = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode, frames: nextFrames.map((frame) => frame.url), question, history }) });
       const data = await response.json() as { analysis?: string; error?: string };
       if (!response.ok || !data.analysis) throw new Error(data.error || "분석 결과를 받지 못했습니다.");
       setAnalysis(data.analysis); setStatus("done"); setMessage("분석이 끝났습니다. 전송한 프레임은 서버에 저장하지 않습니다.");
+      return { text: data.analysis };
     } catch (reason) {
-      setStatus("error"); setMessage(reason instanceof Error ? reason.message : "전송에 실패했습니다.");
+      const error = reason instanceof Error ? reason.message : "전송에 실패했습니다.";
+      setStatus("error"); setMessage(error);
+      return { error };
     }
   }, [captureFrames, sendSeconds, stream]);
+
+  // Ref so the plain DOM click handlers created once inside the PiP window
+  // (see openCapturePip) always call the *current* analyzeWithOpenAI closure
+  // -- same pattern as onCommandRef in use-browser-gesture.ts -- instead of
+  // whatever `stream`/`sendSeconds` happened to be in scope the moment the
+  // window was opened, which could be stale by the time a button is clicked.
+  const analyzeWithOpenAIRef = useRef(analyzeWithOpenAI);
+  useEffect(() => { analyzeWithOpenAIRef.current = analyzeWithOpenAI; }, [analyzeWithOpenAI]);
+
+  // Document Picture-in-Picture: a chromeless, always-on-top window that
+  // stays clickable even while some other app has focus -- the closest a
+  // browser tab can get to a true global hotkey without any native install.
+  // requestWindow() needs a live user gesture each time it's called, so
+  // every call site below (the checkbox, and switchTo's internal calls) is
+  // reached synchronously from a real click, with no awaited work in
+  // between -- an awaited fetch first would let the browser's transient
+  // activation expire before requestWindow() ever ran.
+  //
+  // `pendingTrigger` is only used when opening the "conversation" shape
+  // right after a "buttons"-shape click: that click's gesture is spent on
+  // *this* requestWindow() call, so the actual analyze request for it has
+  // to fire from in here (after the window exists, no gesture needed for a
+  // plain fetch) rather than back in the button's own onclick.
+  const openCapturePip = useCallback(async (variant: PipVariant, pendingTrigger?: { mode: Mode; question?: string }) => {
+    const pip = window.documentPictureInPicture;
+    if (!pip) return;
+    setPipMessage("");
+    try {
+      const pipWindow = await pip.requestWindow(
+        variant === "conversation" ? { width: 340, height: 440 } : { width: 240, height: 100 });
+      pipWindowRef.current = pipWindow;
+      pipWindow.document.title = variant === "conversation" ? "방금그거뭐였지 · 대화" : "방금그거뭐였지 · 빠른 캡처";
+      // Styled via the `style` attribute, not a <style> tag -- this app's CSP
+      // (see proxy.ts) only allows style-src-attr 'unsafe-inline', not plain
+      // style-src, so a <style> element here would render unstyled/blocked
+      // exactly like framer-motion's own dynamic <style> tags already do.
+      pipWindow.document.body.style.cssText = "margin:0;padding:10px;display:flex;flex-direction:column;"
+        + "gap:8px;background:#0c0c0b;font:600 13px/1.3 system-ui,sans-serif;color-scheme:dark;"
+        + "height:100%;box-sizing:border-box";
+      const BUTTON_BG = "#17130f";
+      const BUTTON_BG_PRESSED = "#3a2a1a";
+      const buttonStyle = `flex:1;padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,.16);`
+        + `background:${BUTTON_BG};color:#f5efe6;cursor:pointer;font:inherit`;
+      // No CSS :active available here (see the CSP note above -- a
+      // stylesheet is blocked, and :active can't be expressed as an inline
+      // style attribute), so press feedback is done by hand: a background
+      // flip on mousedown/mouseup for the instant "did this register at
+      // all" signal -- this window has no other way to show it, unlike the
+      // main tab's own status/analysis panel.
+      const withPressFeedback = (button: HTMLButtonElement) => {
+        button.onmousedown = () => { button.style.background = BUTTON_BG_PRESSED; };
+        const release = () => { button.style.background = BUTTON_BG; };
+        button.onmouseup = release;
+        button.onmouseleave = release;
+      };
+      // Closes THIS window first (rather than just requesting the next one,
+      // which would replace it implicitly per Document PiP's one-window-
+      // per-tab rule anyway) so pipSwitchingRef is guaranteed set before
+      // this window's own pagehide fires, not racing it.
+      const switchTo = (next: PipVariant, trigger?: { mode: Mode; question?: string }) => {
+        pipSwitchingRef.current = true;
+        pipWindow.close();
+        void openCapturePip(next, trigger).finally(() => { pipSwitchingRef.current = false; });
+      };
+
+      if (variant === "buttons") {
+        const row = pipWindow.document.createElement("div");
+        row.style.cssText = "display:flex;gap:8px;flex:1";
+        const wireButton = (label: string, mode: Mode) => {
+          const button = pipWindow.document.createElement("button");
+          button.textContent = label;
+          button.style.cssText = buttonStyle;
+          withPressFeedback(button);
+          button.onclick = () => {
+            if (button.disabled) return;
+            // A button-only trigger always starts a fresh conversation --
+            // any earlier thread is done once the user is back to just
+            // the floating buttons.
+            pipHistory.current = [];
+            switchTo("conversation", { mode });
+          };
+          return button;
+        };
+        row.append(wireButton("지금 화면", "current"), wireButton("최근 리플레이", "replay"));
+        pipWindow.document.body.append(row);
+      } else {
+        const transcript = pipWindow.document.createElement("div");
+        transcript.style.cssText = "flex:1;overflow-y:auto;padding:10px;border-radius:8px;box-sizing:border-box;"
+          + "background:#151310;display:flex;flex-direction:column;gap:8px";
+        const scrollToEnd = () => { transcript.scrollTop = transcript.scrollHeight; };
+        const renderTurn = (turn: ConversationTurn) => {
+          const bubble = pipWindow.document.createElement("div");
+          bubble.textContent = turn.text;
+          bubble.style.cssText = "padding:8px 10px;border-radius:8px;font:500 12px/1.5 system-ui,sans-serif;"
+            + "white-space:pre-wrap;max-width:92%;box-sizing:border-box;"
+            + (turn.role === "user" ? "align-self:flex-end;background:#3a2a1a;color:#ffd9b3;"
+              : "align-self:flex-start;background:#1d1c19;color:#f5efe6;");
+          transcript.append(bubble);
+          return bubble;
+        };
+        pipHistory.current.forEach(renderTurn);
+        scrollToEnd();
+
+        const promptInput = pipWindow.document.createElement("textarea");
+        promptInput.placeholder = "이어서 물어보기…";
+        promptInput.style.cssText = "resize:none;height:40px;padding:8px;border-radius:8px;box-sizing:border-box;"
+          + "border:1px solid rgba(255,255,255,.16);background:#151310;color:#f5efe6;font:500 12px/1.4 inherit";
+
+        const closeBtn = pipWindow.document.createElement("button");
+        closeBtn.textContent = "✕";
+        closeBtn.title = "닫고 버튼만 남기기";
+        closeBtn.style.cssText = "padding:0 12px;border-radius:8px;border:1px solid rgba(255,255,255,.16);"
+          + `background:${BUTTON_BG};color:#f5efe6;cursor:pointer;font:inherit`;
+        withPressFeedback(closeBtn);
+        closeBtn.onclick = () => switchTo("buttons");
+
+        const inputRow = pipWindow.document.createElement("div");
+        inputRow.style.cssText = "display:flex;gap:6px";
+        inputRow.append(promptInput, closeBtn);
+
+        const sendRow = pipWindow.document.createElement("div");
+        sendRow.style.cssText = "display:flex;gap:8px";
+        const wireSend = (label: string, mode: Mode) => {
+          const button = pipWindow.document.createElement("button");
+          button.textContent = label;
+          button.style.cssText = buttonStyle;
+          withPressFeedback(button);
+          button.onclick = () => {
+            if (button.disabled) return;
+            const question = promptInput.value.trim();
+            const historySoFar = pipHistory.current;
+            const userText = question || (mode === "current" ? "(지금 화면)" : "(최근 리플레이)");
+            sendRow.querySelectorAll("button").forEach((el) => { (el as HTMLButtonElement).disabled = true; });
+            promptInput.value = "";
+            renderTurn({ role: "user", text: userText });
+            const answerBubble = renderTurn({ role: "assistant", text: "분석 중…" });
+            scrollToEnd();
+            void analyzeWithOpenAIRef.current(mode, question || undefined, historySoFar).then((result) => {
+              sendRow.querySelectorAll("button").forEach((el) => { (el as HTMLButtonElement).disabled = false; });
+              const answer = "text" in result ? result.text : `오류: ${result.error}`;
+              answerBubble.textContent = answer;
+              pipHistory.current = [...historySoFar, { role: "user", text: userText }, { role: "assistant", text: answer }];
+              scrollToEnd();
+            });
+          };
+          return button;
+        };
+        sendRow.append(wireSend("지금 화면", "current"), wireSend("최근 리플레이", "replay"));
+        pipWindow.document.body.append(transcript, inputRow, sendRow);
+
+        // The button-only shape spent its click's user gesture opening
+        // *this* window, so the trigger it wanted to fire happens here
+        // instead -- a plain fetch afterward needs no gesture of its own.
+        if (pendingTrigger) {
+          const userText = pendingTrigger.question || (pendingTrigger.mode === "current" ? "(지금 화면)" : "(최근 리플레이)");
+          renderTurn({ role: "user", text: userText });
+          const answerBubble = renderTurn({ role: "assistant", text: "분석 중…" });
+          scrollToEnd();
+          void analyzeWithOpenAIRef.current(pendingTrigger.mode, pendingTrigger.question, []).then((result) => {
+            const answer = "text" in result ? result.text : `오류: ${result.error}`;
+            answerBubble.textContent = answer;
+            pipHistory.current = [{ role: "user", text: userText }, { role: "assistant", text: answer }];
+            scrollToEnd();
+          });
+        }
+      }
+
+      // Fires whether the user closes the PiP window from its own chrome or
+      // the tab/page goes away -- the one signal that reliably means "this
+      // window is gone" regardless of which side closed it. Skipped during
+      // an intentional buttons<->conversation swap (see switchTo) since
+      // that's not really "closed", just changing shape.
+      pipWindow.addEventListener("pagehide", () => {
+        if (pipSwitchingRef.current) return;
+        pipWindowRef.current = null;
+        setPipOpen(false);
+      }, { once: true });
+      setPipOpen(true);
+    } catch (reason) {
+      setPipMessage(reason instanceof Error ? reason.message : "떠 있는 캡처 창을 열지 못했습니다.");
+      setPipOpen(false);
+    }
+  }, []);
+
+  const closeCapturePip = useCallback(() => {
+    pipSwitchingRef.current = false; // a real close always wins over a stray in-flight swap
+    pipWindowRef.current?.close();
+    pipWindowRef.current = null;
+    pipHistory.current = [];
+    setPipOpen(false);
+  }, []);
+
+  useEffect(() => () => { pipWindowRef.current?.close(); }, []);
+
+  const handleBrowserGestureCommand = useCallback((command: GestureCommand) => {
+    if (command === "send-replay") void analyzeWithOpenAI("replay");
+  }, [analyzeWithOpenAI]);
+  const { pose: browserGesturePose, progress: browserGestureProgress, preview: browserGesturePreview, ready: browserGestureReady, error: browserGestureError } = useBrowserHandGesture({ enabled: browserGestureEnabled, onCommand: handleBrowserGestureCommand });
 
   const loadAgentThreads = useCallback(async () => {
     setAgentState("loading"); setAgentMessage("Codex 작업을 불러오는 중입니다.");
@@ -295,7 +616,7 @@ export function ReplayWorkspace() {
       setAgentMessage(nextThreads.length ? "전송할 Codex 작업을 선택해 주세요." : "전송 가능한 Codex 작업이 없습니다.");
     } catch (reason) {
       setAgentThreads([]); setAgentState("error");
-      setAgentMessage(reason instanceof Error ? reason.message : "Codex Agent 연결에 실패했습니다.");
+      setAgentMessage((reason instanceof Error ? reason.message : "Codex Agent 연결에 실패했습니다.") + AGENT_FALLBACK_HINT);
     }
   }, []);
 
@@ -489,8 +810,13 @@ export function ReplayWorkspace() {
         : `${label}과 질문을 Codex 작업에 보냈습니다. (${data.turnId})`);
     } catch (reason) {
       setAgentState("error");
-      setAgentMessage(reason instanceof Error ? reason.message
-        : deliveryTarget === "claude" ? "Claude Desktop 전송에 실패했습니다." : "Codex Agent 전송에 실패했습니다.");
+      const base = reason instanceof Error ? reason.message
+        : deliveryTarget === "claude" ? "Claude Desktop 전송에 실패했습니다." : "Codex Agent 전송에 실패했습니다.";
+      // Claude Desktop failures here mean AirPointer is already running (its
+      // token gates the whole "claude" path -- see prepareAgentCapture above)
+      // and something else went wrong, so the fallback hint would be noise;
+      // Codex failures can mean no local bridge exists at all.
+      setAgentMessage(deliveryTarget === "codex" ? base + AGENT_FALLBACK_HINT : base);
     }
   }, [agentPrompt, agentState, deliveryTarget, pendingCapture, postCapsuleToAgent, postToAgent, postToCompanion]);
 
@@ -610,6 +936,26 @@ export function ReplayWorkspace() {
     const timer = window.setInterval(() => setElapsed(buffer.current.status().durationMs), 1_000);
     return () => window.clearInterval(timer);
   }, [stream]);
+  useEffect(() => {
+    // Masked at render (`stream &&` on the highlight card below), not reset
+    // here, so this effect never needs a setState-in-effect just to zero
+    // things out on stop -- same pattern as useCompanionGesture/
+    // useBrowserHandGesture. Disabling the toggle stops the polling outright
+    // (not just the render) so an unwatched tab isn't still cropping images
+    // every second for a panel nobody sees.
+    if (!stream || !proactiveDetectionEnabled) return;
+    let cancelled = false;
+    let lastAfterUrl = "";
+    const timer = window.setInterval(() => {
+      const next = buffer.current.recentHighlight(sendSeconds);
+      if ((next?.afterUrl ?? "") === lastAfterUrl) return;
+      lastAfterUrl = next?.afterUrl ?? "";
+      setHighlight(next);
+      if (next) void cropRegion(next.afterUrl, next.bbox).then((zoomUrl) => { if (!cancelled) setHighlightZoomUrl(zoomUrl); });
+      else setHighlightZoomUrl("");
+    }, 1_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [stream, sendSeconds, proactiveDetectionEnabled]);
   useEffect(() => { buffer.current.setRetention(retention); }, [retention]);
   useEffect(() => () => buffer.current.stop(), []);
   useEffect(() => {
@@ -627,6 +973,31 @@ export function ReplayWorkspace() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [cancelPendingCapture, pendingCapture]);
+  // Browser-tab-scoped hotkeys: only ever sees keydown while this tab has
+  // focus (no OS hook, unlike AirPointer's global ones), so alt-tabbing away
+  // silently drops it -- that trade is the whole point of this being the
+  // no-install path. `status` is a dep (not a ref) purely so a stray repeat
+  // keydown during an in-flight analyze doesn't fire a second overlapping
+  // request; the listener itself is cheap to re-attach.
+  useEffect(() => {
+    if (!browserHotkeyEnabled) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      // Only bail for actual text-entry targets -- a checkbox/radio is also
+      // an <input> but typing a shortcut while one happens to hold focus
+      // (e.g. right after clicking this very toggle) should still fire.
+      const target = event.target as HTMLElement | null;
+      const isTextEntry = target && (target.tagName === "TEXTAREA" || target.isContentEditable
+        || (target.tagName === "INPUT" && !["checkbox", "radio"].includes((target as HTMLInputElement).type)));
+      if (isTextEntry) return;
+      if (status === "analyzing" || status === "preparing") return;
+      const combo = comboFromKeyEvent(event);
+      if (!combo) return;
+      if (combo === browserHotkeyBindings.screenshot) { event.preventDefault(); void analyzeWithOpenAI("current"); }
+      else if (combo === browserHotkeyBindings.replay) { event.preventDefault(); void analyzeWithOpenAI("replay"); }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [analyzeWithOpenAI, browserHotkeyBindings, browserHotkeyEnabled, status]);
 
   const bufferPercent = Math.min(100, (elapsed / (retention * 60_000)) * 100);
   const timeLabel = formatDuration(elapsed);
@@ -658,8 +1029,16 @@ export function ReplayWorkspace() {
     <main className={styles.shell}>
       <header className={styles.nav}>
         <a className={styles.brand} href="#top" aria-label="방금그거뭐였지 홈"><span className={styles.brandMark} aria-hidden="true">↺</span><span>방금그거뭐였지</span></a>
+        <div className={styles.modeSwitch} role="tablist" aria-label="기능 범위 선택">
+          <button type="button" role="tab" aria-selected={viewMode === "browser"} data-active={viewMode === "browser"} onClick={() => setViewMode("browser")}>브라우저 모드</button>
+          <button type="button" role="tab" aria-selected={viewMode === "full"} data-active={viewMode === "full"} onClick={() => setViewMode("full")}>Full Access</button>
+        </div>
         <div className={styles.navMeta}><span className={styles.localBadge}><LockKey size={14} weight="bold" /> LOCAL BUFFER</span><a href="#how">작동 원리</a><a href="#privacy">개인정보</a><a href="#pipeline">파이프라인</a></div>
       </header>
+      {viewMode === "full" && !gestureEnabled && <div className={styles.modeNotice}>
+        <span>Full Access는 별도 프로그램(AirPointer) 설치가 필요합니다 — 설치 전에도 아래에서 미리 둘러볼 수 있어요.</span>
+        <a href={AIRPOINTER_DOWNLOAD_URL}>AirPointer 다운로드</a>
+      </div>}
 
       <section className={styles.hero} id="top">
         <div className={styles.stageColumn}>
@@ -699,56 +1078,98 @@ export function ReplayWorkspace() {
 
         <aside className={styles.commandDock}>
           <div className={styles.eyebrowRow}><p className={styles.eyebrow}>REPLAY TO AGENT</p><button type="button" className={styles.settingsButton} onClick={() => void openPromptSettings()} aria-label="프롬프트 설정"><Gear size={15} /></button></div>
-          <div className={`${styles.cameraPanel} ${styles.commandCamera}`} data-connected={gestureEnabled && companionReady}>
-            {!hotkeyMode && companionPreview && <img src={companionPreview} alt="AirPointer 카메라 미리보기" />}
-            {gestureEnabled && !companionReady && <div className={styles.cameraLoading} role="status">{companionStatus ? <><WarningCircle size={26} /><p>{companionStatus.text}</p>{companionStatus.showDownload && <a href={AIRPOINTER_DOWNLOAD_URL}>AirPointer 다운로드</a>}</> : <><CircleNotch className={styles.spin} size={26} /><p>{dockLoadingLabel}… {bootProgress}%</p><div className={styles.cameraLoadingBar} aria-hidden="true"><span style={{ width: `${bootProgress}%` }} /></div></>}</div>}
-            <div className={styles.cameraHud}><span><HandPalm size={16} /> {dockHudLabel}</span><span>{dockBadgeLabel}</span></div>
-            {!hotkeyMode && gestureEnabled && gestureProgress.phase !== "idle" && gestureSelection.phase === "idle" && <div className={styles.gestureTimer} data-active role="progressbar" aria-label="제스처 유지 시간" aria-valuemin={0} aria-valuemax={1} aria-valuenow={gestureProgress.value}><div className={styles.gestureTimerRing} style={{ background: `conic-gradient(var(--accent) ${gestureProgress.value * 360}deg, rgba(255,255,255,.14) 0deg)` }}><span><b>{Math.round(gestureProgress.value * 100)}</b></span></div><p>손바닥 2초</p></div>}
-          </div>
-          <p className={styles.settingsGroupLabel}>시작 모드 · AirPointer를 켜기 전에 선택하세요</p>
-          <div className={styles.gestureActions} aria-label="시작 모드 선택">
-            <LaunchModeOption label="제스처 모드" detail="카메라로 손동작 인식" active={launchMode === "gesture"} disabled={gestureEnabled} onSelect={() => setLaunchMode("gesture")} />
-            <LaunchModeOption label="단축키 모드" detail="카메라 없이 키보드로" active={launchMode === "hotkey"} disabled={gestureEnabled} onSelect={() => setLaunchMode("hotkey")} />
-          </div>
-          <div className={styles.gestureControls}><label className={styles.switch}><input type="checkbox" checked={gestureEnabled} onChange={(event) => changeGestureEnabled(event.target.checked)} /><span /><b>{launchMode === "hotkey" ? "단축키" : "제스처"} + AirPointer {gestureEnabled ? "켜짐" : "켜기"}</b></label><a className={styles.downloadLink} href={AIRPOINTER_DOWNLOAD_URL}>AirPointer 처음이신가요? 다운로드</a></div>
-          {launchMode === "gesture" && <div className={styles.gestureActions} aria-label="제스처별 설정">
-            <GestureActionToggle label="손바닥 2초" detail="15초 REPLAY" checked={gestureActions.replay} disabled={!gestureEnabled} onChange={(value) => setGestureAction("replay", value)} />
-            <GestureActionToggle label="손바닥 → 주먹" detail="현재 화면" checked={gestureActions.screenshot} disabled={!gestureEnabled} onChange={(value) => setGestureAction("screenshot", value)} />
-            <GestureActionToggle label="주먹 → 손바닥" detail="영역 선택" checked={gestureActions.region} disabled={!gestureEnabled} onChange={(value) => setGestureAction("region", value)} />
-          </div>}
-          {launchMode === "hotkey" && <>
-            <p className={styles.settingsGroupLabel}>단축키 · 꺼진 상태에서도 미리 정할 수 있습니다</p>
-            <div className={styles.gestureActions} aria-label="단축키 설정">
-              <HotkeyRecorder label="현재 화면" combo={hotkeyBindings.screenshot} disabled={false} onChange={(value) => setHotkeyBinding("screenshot", value)} />
-              <HotkeyRecorder label="최근 리플레이" combo={hotkeyBindings.replay} disabled={false} onChange={(value) => setHotkeyBinding("replay", value)} />
-              <HotkeyRecorder label="영역 선택" combo={hotkeyBindings.region} disabled={false} onChange={(value) => setHotkeyBinding("region", value)} />
+          {viewMode === "full" && <>
+            <div className={`${styles.cameraPanel} ${styles.commandCamera}`} data-connected={gestureEnabled && companionReady}>
+              {!hotkeyMode && companionPreview && <img src={companionPreview} alt="AirPointer 카메라 미리보기" />}
+              {gestureEnabled && !companionReady && <div className={styles.cameraLoading} role="status">{companionStatus ? <><WarningCircle size={26} /><p>{companionStatus.text}</p>{companionStatus.showDownload && <a href={AIRPOINTER_DOWNLOAD_URL}>AirPointer 다운로드</a>}</> : <><CircleNotch className={styles.spin} size={26} /><p>{dockLoadingLabel}… {bootProgress}%</p><div className={styles.cameraLoadingBar} aria-hidden="true"><span style={{ width: `${bootProgress}%` }} /></div></>}</div>}
+              <div className={styles.cameraHud}><span><HandPalm size={16} /> {dockHudLabel}</span><span>{dockBadgeLabel}</span></div>
+              {!hotkeyMode && gestureEnabled && gestureProgress.phase !== "idle" && gestureSelection.phase === "idle" && <div className={styles.gestureTimer} data-active role="progressbar" aria-label="제스처 유지 시간" aria-valuemin={0} aria-valuemax={1} aria-valuenow={gestureProgress.value}><div className={styles.gestureTimerRing} style={{ background: `conic-gradient(var(--accent) ${gestureProgress.value * 360}deg, rgba(255,255,255,.14) 0deg)` }}><span><b>{Math.round(gestureProgress.value * 100)}</b></span></div><p>손바닥 2초</p></div>}
             </div>
+            <p className={styles.settingsGroupLabel}>시작 모드 · AirPointer를 켜기 전에 선택하세요</p>
+            <div className={styles.gestureActions} aria-label="시작 모드 선택">
+              <LaunchModeOption label="제스처 모드" detail="카메라로 손동작 인식" active={launchMode === "gesture"} disabled={gestureEnabled} onSelect={() => setLaunchMode("gesture")} />
+              <LaunchModeOption label="단축키 모드" detail="카메라 없이 키보드로" active={launchMode === "hotkey"} disabled={gestureEnabled} onSelect={() => setLaunchMode("hotkey")} />
+            </div>
+            <div className={styles.gestureControls}><label className={styles.switch}><input type="checkbox" checked={gestureEnabled} onChange={(event) => changeGestureEnabled(event.target.checked)} /><span /><b>{launchMode === "hotkey" ? "단축키" : "제스처"} + AirPointer {gestureEnabled ? "켜짐" : "켜기"}</b></label><a className={styles.downloadLink} href={AIRPOINTER_DOWNLOAD_URL}>AirPointer 처음이신가요? 다운로드</a></div>
+            {launchMode === "gesture" && <div className={styles.gestureActions} aria-label="제스처별 설정">
+              <GestureActionToggle label="손바닥 2초" detail="15초 REPLAY" checked={gestureActions.replay} disabled={!gestureEnabled} onChange={(value) => setGestureAction("replay", value)} />
+              <GestureActionToggle label="손바닥 → 주먹" detail="현재 화면" checked={gestureActions.screenshot} disabled={!gestureEnabled} onChange={(value) => setGestureAction("screenshot", value)} />
+              <GestureActionToggle label="주먹 → 손바닥" detail="영역 선택" checked={gestureActions.region} disabled={!gestureEnabled} onChange={(value) => setGestureAction("region", value)} />
+            </div>}
+            {launchMode === "hotkey" && <>
+              <p className={styles.settingsGroupLabel}>단축키 · 꺼진 상태에서도 미리 정할 수 있습니다</p>
+              <div className={styles.gestureActions} aria-label="단축키 설정">
+                <HotkeyRecorder label="현재 화면" combo={hotkeyBindings.screenshot} disabled={false} onChange={(value) => setHotkeyBinding("screenshot", value)} />
+                <HotkeyRecorder label="최근 리플레이" combo={hotkeyBindings.replay} disabled={false} onChange={(value) => setHotkeyBinding("replay", value)} />
+                <HotkeyRecorder label="영역 선택" combo={hotkeyBindings.region} disabled={false} onChange={(value) => setHotkeyBinding("region", value)} />
+              </div>
+            </>}
+            {(companionStatus || (!companionReady && companionMessage)) && <small className={styles.gestureError}>{companionStatus ? companionStatus.text : companionMessage}{companionStatus?.showDownload && <> <a href={AIRPOINTER_DOWNLOAD_URL}>AirPointer 다운로드</a></>}</small>}
+            <div className={styles.rule} />
           </>}
-          {(companionStatus || (!companionReady && companionMessage)) && <small className={styles.gestureError}>{companionStatus ? companionStatus.text : companionMessage}{companionStatus?.showDownload && <> <a href={AIRPOINTER_DOWNLOAD_URL}>AirPointer 다운로드</a></>}</small>}
-          <div className={styles.rule} />
           <label className={styles.field}><span>로컬 버퍼</span><select value={retention} onChange={(event) => setRetention(Number(event.target.value))} disabled={Boolean(stream)}><option value={1}>최근 1분</option><option value={3}>최근 3분</option><option value={5}>최근 5분</option></select></label>
           <label className={styles.field}><span>전송 구간</span><select value={sendSeconds} onChange={(event) => setSendSeconds(Number(event.target.value))}><option value={5}>최근 5초</option><option value={15}>최근 15초</option><option value={30}>최근 30초</option><option value={60}>최근 1분</option></select></label>
-          <p className={styles.settingsGroupLabel}>보낼 곳</p>
-          <div className={styles.gestureActions} aria-label="보낼 곳 선택">
-            <LaunchModeOption label="Codex" detail="Codex 작업 선택 후 전송" active={deliveryTarget === "codex"} disabled={false} onSelect={() => setDeliveryTarget("codex")} />
-            <LaunchModeOption label="Claude Code" detail={companionToken ? "Claude Desktop 세션 선택 후 전송" : "AirPointer 연결 필요"} active={deliveryTarget === "claude"} disabled={false} onSelect={() => setDeliveryTarget("claude")} />
-          </div>
-          {deliveryTarget === "codex"
-            ? <label className={styles.field}><span>Codex Agent</span><span className={styles.agentPicker}><SessionPicker threads={codexPickerThreads} value={agentThreadId} onChange={handleAgentThreadChange} loading={agentState === "loading"} blankLabel="작업 선택" ariaLabel="전송할 Codex 작업" /><button type="button" className={styles.agentPickerRefresh} onClick={() => void loadAgentThreads()} aria-label="Codex 작업 새로고침"><ArrowClockwise size={15} /></button></span></label>
-            : companionToken
-              ? <label className={styles.field}><span>Claude Session</span><span className={styles.agentPicker}><SessionPicker threads={claudeThreads} value={claudeThreadId} onChange={setClaudeThreadId} loading={claudeThreadsLoading} blankLabel="현재 열려 있는 대화" ariaLabel="전송할 Claude 세션" /><button type="button" className={styles.agentPickerRefresh} onClick={() => void loadClaudeThreads()} aria-label="Claude 세션 새로고침"><ArrowClockwise size={15} /></button></span></label>
-              : <small className={styles.gestureError}>Claude Desktop으로 보내려면 위에서 AirPointer를 먼저 켜주세요.</small>}
-          <button className={styles.action} onClick={() => void prepareAgentCapture("replay")} disabled={!stream || (deliveryTarget === "codex" ? !agentThreadId : !companionToken) || agentState === "preparing" || agentState === "sending" || agentState === "queued"}><PaperPlaneTilt size={20} weight="bold" /> 최근 {sendSeconds}초 Agent에 묻기</button>
-          <button className={styles.secondary} onClick={() => void prepareAgentCapture("current")} disabled={!stream || (deliveryTarget === "codex" ? !agentThreadId : !companionToken) || agentState === "preparing" || agentState === "sending" || agentState === "queued"}><Camera size={18} /> 지금 화면 Agent에 묻기</button>
-          <div className={styles.status} data-tone={agentState === "error" ? "error" : agentState === "done" ? "done" : "normal"}>{agentState === "loading" || agentState === "preparing" || agentState === "sending" || agentState === "queued" ? <CircleNotch className={styles.spin} size={16} /> : agentState === "error" ? <WarningCircle size={16} /> : agentState === "done" ? <Check size={16} /> : <span className={styles.statusDot} />}<div><strong>{agentStateLabel}</strong><span>{agentMessage}</span></div></div>
-          <div className={styles.apiDivider}><span>별도 기능</span><b>OPENAI IMAGE ANALYSIS</b></div>
-          <button className={styles.secondary} onClick={() => void analyzeWithOpenAI("replay")} disabled={!stream || status === "analyzing"}><ArrowCounterClockwise size={18} /> 최근 {sendSeconds}초 OpenAI 분석</button>
-          <button className={styles.secondary} onClick={() => void analyzeWithOpenAI("current")} disabled={!stream || status === "analyzing"}><Camera size={18} /> 현재 화면 OpenAI 분석</button>
+          <div className={styles.apiDivider}><span>설치 없이</span><b>화면 바로 확인</b></div>
+          <button className={styles.secondary} onClick={() => void analyzeWithOpenAI("replay")} disabled={!stream || status === "analyzing"}><ArrowCounterClockwise size={18} /> 최근 {sendSeconds}초 확인하기</button>
+          <button className={styles.secondary} onClick={() => void analyzeWithOpenAI("current")} disabled={!stream || status === "analyzing"}><Camera size={18} /> 지금 화면 확인하기</button>
           <div className={styles.status} data-tone={status === "error" ? "error" : status === "done" ? "done" : "normal"}>{status === "analyzing" || status === "preparing" ? <CircleNotch className={styles.spin} size={16} /> : status === "error" ? <WarningCircle size={16} /> : status === "done" ? <Check size={16} /> : <span className={styles.statusDot} />}<div><strong>{stateLabel}</strong><span>{message}</span></div></div>
+          <label className={styles.switch}><input type="checkbox" checked={browserGestureEnabled} onChange={(event) => setBrowserGestureEnabled(event.target.checked)} /><span /><b>카메라로 제스처 켜기 (브라우저, 설치 불필요)</b></label>
+          {browserGestureEnabled && <div className={`${styles.cameraPanel} ${styles.commandCamera}`} data-connected={browserGestureReady}>
+            {browserGesturePreview && <img src={browserGesturePreview} alt="브라우저 카메라 미리보기" />}
+            {!browserGestureReady && <div className={styles.cameraLoading} role="status">{browserGestureError ? <><WarningCircle size={26} /><p>{browserGestureError}</p></> : <><CircleNotch className={styles.spin} size={26} /><p>카메라 준비 중…</p></>}</div>}
+            <div className={styles.cameraHud}><span><HandPalm size={16} /> {!browserGestureReady ? "연결 대기" : browserGesturePose === "palm" ? "손바닥 인식" : browserGesturePose === "fist" ? "주먹 인식" : browserGesturePose === "point" ? "검지 인식" : browserGesturePose === "none" ? "손 찾는 중" : "동작 대기"}</span></div>
+            {browserGestureProgress.phase !== "idle" && <div className={styles.gestureTimer} data-active role="progressbar" aria-label="제스처 유지 시간" aria-valuemin={0} aria-valuemax={1} aria-valuenow={browserGestureProgress.value}><div className={styles.gestureTimerRing} style={{ background: `conic-gradient(var(--accent) ${browserGestureProgress.value * 360}deg, rgba(255,255,255,.14) 0deg)` }}><span><b>{Math.round(browserGestureProgress.value * 100)}</b></span></div><p>손바닥 2초</p></div>}
+          </div>}
+          <label className={styles.switch}><input type="checkbox" checked={browserHotkeyEnabled} onChange={(event) => setBrowserHotkeyEnabled(event.target.checked)} /><span /><b>키보드 단축키 켜기 (브라우저, 설치 불필요)</b></label>
+          {browserHotkeyEnabled && <>
+            <div className={styles.gestureActions} aria-label="브라우저 단축키 설정">
+              <HotkeyRecorder label="현재 화면" combo={browserHotkeyBindings.screenshot} disabled={false} onChange={(value) => setBrowserHotkeyBindings((current) => ({ ...current, screenshot: value }))} />
+              <HotkeyRecorder label="최근 리플레이" combo={browserHotkeyBindings.replay} disabled={false} onChange={(value) => setBrowserHotkeyBindings((current) => ({ ...current, replay: value }))} />
+            </div>
+            <small className={styles.gestureError}>탭에 포커스가 있을 때만 동작합니다 — 다른 창으로 전환하면 받지 못합니다. 전역 단축키가 필요하면 AirPointer를 설치해 주세요.</small>
+          </>}
+          <label className={styles.switch}><input type="checkbox" checked={pipOpen} disabled={!pipSupported} onChange={(event) => { if (event.target.checked) void openCapturePip("buttons"); else closeCapturePip(); }} /><span /><b><PictureInPicture size={16} /> 항상 위 캡처 버튼 켜기 (브라우저, 설치 불필요)</b></label>
+          {!pipSupported && <small className={styles.gestureError}>이 브라우저는 지원하지 않습니다. Chrome 또는 Edge 116 이상에서 사용해 주세요.</small>}
+          {pipSupported && !pipMessage && <small className={styles.gestureError}>다른 창에 포커스가 가 있어도 이 작은 창의 버튼은 눌립니다 — 설치 없이 쓸 수 있는 전역 단축키 대안입니다.</small>}
+          {pipMessage && <small className={styles.gestureError}>{pipMessage}</small>}
+          {viewMode === "full" && <>
+            <div className={styles.rule} />
+            <p className={styles.settingsGroupLabel}>보낼 곳</p>
+            <div className={styles.gestureActions} aria-label="보낼 곳 선택">
+              <LaunchModeOption label="Codex" detail="Codex 작업 선택 후 전송" active={deliveryTarget === "codex"} disabled={false} onSelect={() => setDeliveryTarget("codex")} />
+              <LaunchModeOption label="Claude Code" detail={companionToken ? "Claude Desktop 세션 선택 후 전송" : "AirPointer 연결 필요"} active={deliveryTarget === "claude"} disabled={false} onSelect={() => setDeliveryTarget("claude")} />
+            </div>
+            {deliveryTarget === "codex"
+              ? <label className={styles.field}><span>Codex Agent</span><span className={styles.agentPicker}><SessionPicker threads={codexPickerThreads} value={agentThreadId} onChange={handleAgentThreadChange} loading={agentState === "loading"} blankLabel="작업 선택" ariaLabel="전송할 Codex 작업" /><button type="button" className={styles.agentPickerRefresh} onClick={() => void loadAgentThreads()} aria-label="Codex 작업 새로고침"><ArrowClockwise size={15} /></button></span></label>
+              : companionToken
+                ? <label className={styles.field}><span>Claude Session</span><span className={styles.agentPicker}><SessionPicker threads={claudeThreads} value={claudeThreadId} onChange={setClaudeThreadId} loading={claudeThreadsLoading} blankLabel="현재 열려 있는 대화" ariaLabel="전송할 Claude 세션" /><button type="button" className={styles.agentPickerRefresh} onClick={() => void loadClaudeThreads()} aria-label="Claude 세션 새로고침"><ArrowClockwise size={15} /></button></span></label>
+                : <small className={styles.gestureError}>Claude Desktop으로 보내려면 위에서 AirPointer를 먼저 켜주세요.</small>}
+            <button className={styles.action} onClick={() => void prepareAgentCapture("replay")} disabled={!stream || (deliveryTarget === "codex" ? !agentThreadId : !companionToken) || agentState === "preparing" || agentState === "sending" || agentState === "queued"}><PaperPlaneTilt size={20} weight="bold" /> 최근 {sendSeconds}초 Agent에 묻기</button>
+            <button className={styles.secondary} onClick={() => void prepareAgentCapture("current")} disabled={!stream || (deliveryTarget === "codex" ? !agentThreadId : !companionToken) || agentState === "preparing" || agentState === "sending" || agentState === "queued"}><Camera size={18} /> 지금 화면 Agent에 묻기</button>
+            <div className={styles.status} data-tone={agentState === "error" ? "error" : agentState === "done" ? "done" : "normal"}>{agentState === "loading" || agentState === "preparing" || agentState === "sending" || agentState === "queued" ? <CircleNotch className={styles.spin} size={16} /> : agentState === "error" ? <WarningCircle size={16} /> : agentState === "done" ? <Check size={16} /> : <span className={styles.statusDot} />}<div><strong>{agentStateLabel}</strong><span>{agentMessage}</span></div></div>
+          </>}
         </aside>
       </section>
 
       <section className={styles.replaySection} id="how">
+        {stream && <label className={styles.switch}>
+          <input type="checkbox" checked={proactiveDetectionEnabled}
+                 onChange={(event) => setProactiveDetectionEnabled(event.target.checked)} />
+          <span />
+          <b>화면 변화 자동 감지 {proactiveDetectionEnabled ? "켜짐" : "꺼짐"}</b>
+        </label>}
+        {stream && proactiveDetectionEnabled && highlight && <div className={styles.highlightPanel}>
+          <div className={styles.timelineHead}><span>방금 뭐가 바뀌었나</span><span>변화 감지 기반</span></div>
+          <div className={styles.highlightPair}>
+            <figure><img src={highlight.beforeUrl} alt="변화 이전 화면" /><figcaption>이전</figcaption></figure>
+            <figure className={styles.highlightAfter}>
+              <img src={highlight.afterUrl} alt="변화 이후 화면" />
+              <span className={styles.highlightBox} style={{ left: `${highlight.bbox[0] * 100}%`, top: `${highlight.bbox[1] * 100}%`, width: `${(highlight.bbox[2] - highlight.bbox[0]) * 100}%`, height: `${(highlight.bbox[3] - highlight.bbox[1]) * 100}%` }} />
+              <figcaption>이후</figcaption>
+            </figure>
+            {highlightZoomUrl && <figure><img src={highlightZoomUrl} alt="변화 영역 확대" /><figcaption>확대</figcaption></figure>}
+          </div>
+        </div>}
         <div className={styles.timelinePanel}>
           <div className={styles.timelineHead}><span>{frames.length ? `${frames.length} FRAMES SENT` : "LOCAL RING BUFFER"}</span><span>오래된 장면 자동 삭제</span></div>
           <div className={styles.frames}>
@@ -1064,10 +1485,28 @@ function SessionPicker({ threads, value, onChange, loading, blankLabel, ariaLabe
 
 const HOTKEY_MODIFIER_KEYS = new Set(["Control", "Alt", "Shift", "Meta"]);
 
-// A recorded combo is sent to AirPointer verbatim as e.g. "ctrl+alt+s" and
-// parsed by airpointer/hotkeys.py's parse_binding -- keep the vocabulary
-// (modifier names, and JS's own event.key spelling for named keys like
-// "ArrowUp"/"Escape") in sync with that function if either side changes.
+// Shared by HotkeyRecorder (recording a combo to send to AirPointer) and the
+// browserHotkeyEnabled window.keydown listener above (matching a live
+// keypress against browserHotkeyBindings) -- same "ctrl+alt+s"-style
+// vocabulary either way. A recorded combo destined for AirPointer is sent
+// verbatim and parsed by airpointer/hotkeys.py's parse_binding -- keep the
+// vocabulary (modifier names, JS's own event.key spelling for named keys
+// like "ArrowUp"/"Escape") in sync with that function if either side changes.
+// Takes a structural subset (not KeyboardEvent itself) so it works for both
+// React's synthetic event (HotkeyRecorder) and the native one (the
+// window-level listener).
+function comboFromKeyEvent(event: { key: string; ctrlKey: boolean; altKey: boolean; shiftKey: boolean; metaKey: boolean }): string | null {
+  if (HOTKEY_MODIFIER_KEYS.has(event.key)) return null;
+  const parts: string[] = [];
+  if (event.ctrlKey) parts.push("ctrl");
+  if (event.altKey) parts.push("alt");
+  if (event.shiftKey) parts.push("shift");
+  if (event.metaKey) parts.push("win");
+  if (!parts.length) return null; // a bare key would register as a global hotkey -- reject, keep waiting
+  parts.push(event.key === " " ? "space" : event.key.toLowerCase());
+  return parts.join("+");
+}
+
 function HotkeyRecorder({ label, combo, disabled, onChange }: { label: string; combo: string; disabled: boolean; onChange: (combo: string) => void }) {
   const [recording, setRecording] = useState(false);
 
@@ -1075,15 +1514,9 @@ function HotkeyRecorder({ label, combo, disabled, onChange }: { label: string; c
     if (!recording) return;
     event.preventDefault();
     if (event.key === "Escape") { setRecording(false); return; }
-    if (HOTKEY_MODIFIER_KEYS.has(event.key)) return;
-    const parts: string[] = [];
-    if (event.ctrlKey) parts.push("ctrl");
-    if (event.altKey) parts.push("alt");
-    if (event.shiftKey) parts.push("shift");
-    if (event.metaKey) parts.push("win");
-    if (!parts.length) return; // a bare key would register as a global hotkey -- reject, keep waiting
-    parts.push(event.key === " " ? "space" : event.key.toLowerCase());
-    onChange(parts.join("+"));
+    const combo = comboFromKeyEvent(event);
+    if (!combo) return;
+    onChange(combo);
     setRecording(false);
   };
 

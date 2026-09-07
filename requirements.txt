@@ -4,3 +4,4 @@ Pillow
 pywin32
 pywinauto
 mss
+winsdk

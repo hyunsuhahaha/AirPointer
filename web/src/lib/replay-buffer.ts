@@ -8,6 +8,10 @@ export type ReplayCapsule = {
 };
 type TimedFrame = { canvas: HTMLCanvasElement; capturedAt: number };
 type PreviewFrame = { dataUrl: string; capturedAt: number };
+// The single most notable detected change in a window, for the "방금 뭐가
+// 바뀌었나" before/after UI -- bbox is normalized [0,1] (left, top, right,
+// bottom), see the comment on ChangeTracker.observe's call site below.
+export type ChangeHighlight = { beforeUrl: string; afterUrl: string; bbox: [number, number, number, number] };
 
 const SEGMENT_MS = 1_000;
 const PREVIEW_INTERVAL_MS = 250;
@@ -28,10 +32,24 @@ const GLOBAL_MIN_SCORE = 0.02;
 const TILE_MIN_SCORE = 0.15;
 const QUIET_FRAMES_TO_CLOSE = 2;
 const MAX_CHANGE_EVENTS = 512;
+// How hard an overlapping-bbox event gets penalized in selectEventsDiverse
+// (1.0 = a fully-overlapping repeat scores 0; 0.0 = pure top-score, no
+// diversity) and the extent below which an event counts as "localized" (a
+// toast/dialog, not a scroll) for that function's guaranteed-slot floor --
+// see airpointer/screen_buffer.py's _REDUNDANCY_LAMBDA/_LOCALIZED_EXTENT_MAX.
+const REDUNDANCY_LAMBDA = 0.7;
+const LOCALIZED_EXTENT_MAX = 0.05;
 
 type ChangeEvent = {
   startedAt: number; peakAt: number; endedAt: number; peakScore: number;
   bbox: [number, number, number, number]; // left, top, right, bottom in source pixel coords
+  // Fraction of the WHOLE thumbnail that differed (mask mean), never clamped
+  // up by the tile floor the way peakScore can be -- see scoreAndBbox. A
+  // toast can score high via the tile threshold while its extent stays tiny
+  // (a scroll's is the opposite: high on both). Used by selectEventsDiverse
+  // to guarantee small/localized changes a slot even when broader changes
+  // would otherwise out-rank them every time on peakScore alone.
+  extent: number;
 };
 
 function grayscaleThumbnail(source: CanvasImageSource, sourceWidth: number, sourceHeight: number,
@@ -54,7 +72,7 @@ function grayscaleThumbnail(source: CanvasImageSource, sourceWidth: number, sour
 // a tight box around just that corner, not the whole-mask bounding box,
 // which balloons out to cover unrelated noise elsewhere on screen.
 function scoreAndBbox(prev: Uint8Array, curr: Uint8Array, width: number, height: number
-                       ): { score: number; bbox: [number, number, number, number] } | null {
+                       ): { score: number; bbox: [number, number, number, number]; extent: number } | null {
   const mask = new Uint8Array(prev.length);
   let changed = 0;
   for (let i = 0; i < prev.length; i += 1) {
@@ -83,7 +101,7 @@ function scoreAndBbox(prev: Uint8Array, curr: Uint8Array, width: number, height:
       Math.round(Math.min(...cols) * tileW * scaleX), Math.round(Math.min(...rows) * tileH * scaleY),
       Math.round((Math.max(...cols) + 1) * tileW * scaleX), Math.round((Math.max(...rows) + 1) * tileH * scaleY),
     ];
-    return { score: Math.max(globalScore, TILE_MIN_SCORE), bbox };
+    return { score: Math.max(globalScore, TILE_MIN_SCORE), bbox, extent: globalScore };
   }
   let minX = THUMB_WIDTH, minY = THUMB_HEIGHT, maxX = 0, maxY = 0;
   for (let y = 0; y < THUMB_HEIGHT; y += 1) {
@@ -96,6 +114,7 @@ function scoreAndBbox(prev: Uint8Array, curr: Uint8Array, width: number, height:
   return {
     score: globalScore,
     bbox: [Math.round(minX * scaleX), Math.round(minY * scaleY), Math.round((maxX + 1) * scaleX), Math.round((maxY + 1) * scaleY)],
+    extent: globalScore,
   };
 }
 
@@ -110,6 +129,7 @@ class ChangeTracker {
   private peakAt = 0;
   private peakScore = 0;
   private peakBbox: [number, number, number, number] = [0, 0, 0, 0];
+  private peakExtent = 0;
   // Lazy, not a field initializer: BrowserReplayBuffer (and so this class)
   // is constructed during Next.js's server-side render too, where
   // `document` doesn't exist -- observe() itself only ever actually runs
@@ -126,9 +146,9 @@ class ChangeTracker {
     const result = scoreAndBbox(prev, curr, width, height);
     if (result) {
       if (!this.active) {
-        this.active = true; this.startedAt = at; this.peakAt = at; this.peakScore = result.score; this.peakBbox = result.bbox;
+        this.active = true; this.startedAt = at; this.peakAt = at; this.peakScore = result.score; this.peakBbox = result.bbox; this.peakExtent = result.extent;
       } else if (result.score > this.peakScore) {
-        this.peakAt = at; this.peakScore = result.score; this.peakBbox = result.bbox;
+        this.peakAt = at; this.peakScore = result.score; this.peakBbox = result.bbox; this.peakExtent = result.extent;
       }
       this.quietRun = 0;
       return null;
@@ -136,13 +156,82 @@ class ChangeTracker {
     if (this.active) {
       this.quietRun += 1;
       if (this.quietRun >= QUIET_FRAMES_TO_CLOSE) {
-        const event: ChangeEvent = { startedAt: this.startedAt, peakAt: this.peakAt, endedAt: at, peakScore: this.peakScore, bbox: this.peakBbox };
+        const event: ChangeEvent = { startedAt: this.startedAt, peakAt: this.peakAt, endedAt: at, peakScore: this.peakScore, bbox: this.peakBbox, extent: this.peakExtent };
         this.active = false;
         return event;
       }
     }
     return null;
   }
+}
+
+// Intersection-over-union of two (left, top, right, bottom) boxes, 0 if they
+// don't overlap at all -- a cheap, already-available proxy for "are these
+// two events actually the same ongoing thing" used by selectEventsDiverse.
+// Port of airpointer/screen_buffer.py's _bbox_iou.
+function bboxIou(a: [number, number, number, number], b: [number, number, number, number]): number {
+  const left = Math.max(a[0], b[0]);
+  const top = Math.max(a[1], b[1]);
+  const right = Math.min(a[2], b[2]);
+  const bottom = Math.min(a[3], b[3]);
+  if (right <= left || bottom <= top) return 0;
+  const intersection = (right - left) * (bottom - top);
+  const areaA = Math.max(0, a[2] - a[0]) * Math.max(0, a[3] - a[1]);
+  const areaB = Math.max(0, b[2] - b[0]) * Math.max(0, b[3] - b[1]);
+  const union = areaA + areaB - intersection;
+  return union > 0 ? intersection / union : 0;
+}
+
+// Greedy MMR (Maximal Marginal Relevance) selection: at each step, picks the
+// event maximizing peakScore * (1 - REDUNDANCY_LAMBDA * overlap with
+// whatever's already been picked). Plain top-K-by-score lets several
+// near-duplicate large events (three segments of the same long scroll, say)
+// dominate every slot just because each one individually outscores a
+// smaller, differently-located event -- once the first is picked, later ones
+// that overlap its bbox get penalized, leaving room for the rest.
+//
+// Then applies a floor: if nothing picked so far is "localized" (extent <
+// LOCALIZED_EXTENT_MAX -- a toast/dialog, not a scroll/window-switch) but at
+// least one such event exists among the candidates, the weakest current pick
+// is swapped out for the best localized one (or just appended, if there's
+// still room in the budget). Without this, a busy window full of several
+// distinct broad changes could still MMR its way through the whole budget on
+// score alone, with a low-scoring toast never winning a slot on its own
+// merits. Port of airpointer/screen_buffer.py's _select_events_diverse; see
+// docs/replay-change-detection.md for the full design writeup.
+function selectEventsDiverse(events: ChangeEvent[], budget: number): ChangeEvent[] {
+  const remaining = [...events];
+  const picked: ChangeEvent[] = [];
+  while (remaining.length && picked.length < budget) {
+    const effective = (event: ChangeEvent) => {
+      const redundancy = picked.reduce((max, other) => Math.max(max, bboxIou(event.bbox, other.bbox)), 0);
+      return event.peakScore * (1 - REDUNDANCY_LAMBDA * redundancy);
+    };
+    let best = remaining[0];
+    let bestScore = effective(best);
+    for (const event of remaining.slice(1)) {
+      const score = effective(event);
+      if (score > bestScore) { best = event; bestScore = score; }
+    }
+    picked.push(best);
+    remaining.splice(remaining.indexOf(best), 1);
+  }
+
+  if (budget > 0 && !picked.some((event) => event.extent < LOCALIZED_EXTENT_MAX)) {
+    const localized = events.filter((event) => event.extent < LOCALIZED_EXTENT_MAX && !picked.includes(event));
+    if (localized.length) {
+      const bestLocalized = localized.reduce((best, event) => (event.peakScore > best.peakScore ? event : best));
+      if (picked.length < budget) {
+        picked.push(bestLocalized);
+      } else {
+        let weakestIndex = 0;
+        for (let i = 1; i < picked.length; i += 1) if (picked[i].peakScore < picked[weakestIndex].peakScore) weakestIndex = i;
+        picked[weakestIndex] = bestLocalized;
+      }
+    }
+  }
+
+  return picked;
 }
 
 // A JS port of screen_buffer.py's _select_notable_moments, generalized to
@@ -163,14 +252,27 @@ function selectNotable<T extends { capturedAt: number }>(candidates: T[], events
     }
     return best;
   };
+  // Same-instant dedup ahead of MMR: multiple change events can round-trip
+  // to the same nearest candidate frame (coarse preview sampling), so keep
+  // only the highest-scoring event per candidate -- mirrors the Python
+  // side's dedup-by-segment step ahead of _select_events_diverse.
+  const eventByCandidate = new Map<T, ChangeEvent>();
+  for (const event of events) {
+    const candidate = nearest(event.peakAt);
+    if (!candidate) continue;
+    const existing = eventByCandidate.get(candidate);
+    if (!existing || event.peakScore > existing.peakScore) eventByCandidate.set(candidate, event);
+  }
+  const candidateByEvent = new Map<ChangeEvent, T>();
+  for (const [candidate, event] of eventByCandidate) candidateByEvent.set(event, candidate);
+
   const seen = new Set<T>();
   const picks: T[] = [];
-  for (const event of [...events].sort((a, b) => b.peakScore - a.peakScore)) {
-    const candidate = nearest(event.peakAt);
-    if (!candidate || seen.has(candidate)) continue;
+  for (const event of selectEventsDiverse([...candidateByEvent.keys()], Math.max(1, count - 2))) {
+    const candidate = candidateByEvent.get(event)!;
+    if (seen.has(candidate)) continue;
     seen.add(candidate);
     picks.push(candidate);
-    if (picks.length >= Math.max(0, count - 2)) break;
   }
   const result = [...picks];
   for (const boundary of [byTime[0], byTime[byTime.length - 1]]) {
@@ -273,6 +375,24 @@ export class BrowserReplayBuffer {
     return { overviewFrames: makeContactSheets(frames, now, count), segments: [...recent], startedAt: cutoff, triggeredAt: now };
   }
 
+  // The single highest-scoring detected change in the window, as a
+  // before/after pair of already-captured preview thumbnails (250ms
+  // cadence, so no extra decode work) plus its normalized bbox -- powers the
+  // "방금 뭐가 바뀌었나" highlight card. Simplest-possible pick (max
+  // peakScore, not the MMR diversity used for frame selection) since this is
+  // a single headline pick, not a budget to fill.
+  recentHighlight(seconds: number): ChangeHighlight | null {
+    const now = Date.now();
+    const cutoff = now - seconds * 1_000;
+    const windowEvents = this.changeEvents.filter((event) => event.peakAt >= cutoff && event.peakAt <= now);
+    if (!windowEvents.length || !this.previewFrames.length) return null;
+    const top = windowEvents.reduce((best, event) => (event.peakScore > best.peakScore ? event : best));
+    const byTime = [...this.previewFrames].sort((a, b) => a.capturedAt - b.capturedAt);
+    const nearest = (at: number) => byTime.reduce((best, frame) =>
+      Math.abs(frame.capturedAt - at) < Math.abs(best.capturedAt - at) ? frame : best);
+    return { beforeUrl: nearest(top.startedAt).dataUrl, afterUrl: nearest(top.peakAt).dataUrl, bbox: top.bbox };
+  }
+
   private startPreviewCapture(stream: MediaStream, generation: number) {
     const video = document.createElement("video");
     video.muted = true;
@@ -284,7 +404,13 @@ export class BrowserReplayBuffer {
       const canvas = thumbnailFromVideo(video);
       const capturedAt = Date.now();
       this.previewFrames.push({ dataUrl: canvas.toDataURL("image/jpeg", 0.48), capturedAt });
-      const event = this.changeTracker.observe(video, video.videoWidth, video.videoHeight, capturedAt);
+      // 1,1 (not video.videoWidth/videoHeight) so scoreAndBbox's scale-up
+      // yields a bbox already normalized to [0,1] -- resolution-independent,
+      // so it can be drawn or cropped against any rendering of this frame
+      // (the 640px-wide preview thumbnail, a contact sheet cell, etc.)
+      // without carrying the capture resolution around separately. Safe:
+      // bbox's only other consumer, bboxIou, is scale-invariant.
+      const event = this.changeTracker.observe(video, 1, 1, capturedAt);
       if (event) {
         this.changeEvents.push(event);
         if (this.changeEvents.length > MAX_CHANGE_EVENTS) this.changeEvents.shift();
@@ -377,6 +503,29 @@ export function frameFromVideoRegion(video: HTMLVideoElement,
   canvas.height = sh;
   canvas.getContext("2d")!.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
   return canvas.toDataURL("image/jpeg", quality);
+}
+
+// Crops a normalized [0,1] bbox out of an already-captured image (a preview
+// thumbnail, not a live video -- see ChangeHighlight), with a little padding
+// so the zoom doesn't hug the edges of whatever actually changed. Used both
+// for the highlight card's "확대" view and as an extra frame sent to the
+// analyze API so small/cut-off text in the changed region reads clearly.
+export async function cropRegion(dataUrl: string, bbox: [number, number, number, number], padding = 0.12): Promise<string> {
+  const image = new Image();
+  image.src = dataUrl;
+  await image.decode();
+  const [left, top, right, bottom] = bbox;
+  const padX = (right - left) * padding;
+  const padY = (bottom - top) * padding;
+  const sx = Math.max(0, Math.round((left - padX) * image.naturalWidth));
+  const sy = Math.max(0, Math.round((top - padY) * image.naturalHeight));
+  const sw = Math.max(1, Math.min(image.naturalWidth - sx, Math.round((right - left + padX * 2) * image.naturalWidth)));
+  const sh = Math.max(1, Math.min(image.naturalHeight - sy, Math.round((bottom - top + padY * 2) * image.naturalHeight)));
+  const canvas = document.createElement("canvas");
+  canvas.width = sw;
+  canvas.height = sh;
+  canvas.getContext("2d")!.drawImage(image, sx, sy, sw, sh, 0, 0, sw, sh);
+  return canvas.toDataURL("image/jpeg", 0.82);
 }
 
 function sampleSegmentPoints(segments: ReplaySegment[], cutoff: number, now: number, intervalMs: number) {

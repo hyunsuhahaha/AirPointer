@@ -18,6 +18,7 @@ from airpointer.screen_buffer import (
     _bbox_label,
     _ChangeTracker,
     _frame_to_screen_point,
+    _frame_to_screen_rect,
     _select_notable_moments,
     read_and_clear_region_hint,
 )
@@ -210,6 +211,25 @@ def test_frame_to_screen_point_returns_none_without_monitor_geometry(monkeypatch
     assert _frame_to_screen_point((0, 0, 10, 10), 0, 0) is None
 
 
+def test_frame_to_screen_rect_maps_using_current_monitor_geometry(monkeypatch) -> None:
+    # Same geometry as test_frame_to_screen_point_maps_using_current_monitor_geometry,
+    # but keeping all four corners (needed to crop the region for OCR) instead
+    # of collapsing to the bbox center.
+    monitor = {"left": 100, "top": 50, "width": 2560, "height": 1440}
+    monkeypatch.setattr(screen_buffer, "_get_sct", lambda: _FakeSct(monitor))
+
+    rect = _frame_to_screen_rect((600, 300, 700, 400), 1280, 720)
+
+    assert rect == (1300, 650, 1500, 850)
+
+
+def test_frame_to_screen_rect_returns_none_without_monitor_geometry(monkeypatch) -> None:
+    monkeypatch.setattr(screen_buffer, "_get_sct", lambda: _FakeSct(
+        {"left": 0, "top": 0, "width": 0, "height": 0}))
+    assert _frame_to_screen_rect((0, 0, 10, 10), 1280, 720) is None
+    assert _frame_to_screen_rect((0, 0, 10, 10), 0, 0) is None
+
+
 def test_bbox_element_label_delegates_to_selection_context_lookup(monkeypatch) -> None:
     monkeypatch.setattr(screen_buffer, "_frame_to_screen_point", lambda *args: (500, 400))
     monkeypatch.setattr("airpointer.selection_context.element_label_at", lambda x, y: "저장 버튼")
@@ -261,12 +281,55 @@ def test_bbox_element_label_does_not_retry_when_the_first_attempt_already_succee
     assert sleeps == []
 
 
-def test_bbox_element_label_returns_none_when_the_retry_also_finds_nothing(monkeypatch) -> None:
+def test_bbox_element_label_falls_back_to_ocr_when_ui_automation_finds_nothing(monkeypatch) -> None:
+    # Some apps (games, custom-rendered/canvas UI, remote desktop clients)
+    # never expose an accessibility tree at all -- UI Automation legitimately
+    # finds nothing there no matter how long you wait, so this reads the
+    # region's pixels via OCR instead of giving up straight to the quadrant
+    # label. See docs/replay-change-detection.md's "OCR 폴백" section.
     monkeypatch.setattr(screen_buffer, "_frame_to_screen_point", lambda *args: (500, 400))
     monkeypatch.setattr("airpointer.selection_context.element_label_at", lambda x, y: None)
     monkeypatch.setattr(screen_buffer.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(screen_buffer, "_frame_to_screen_rect", lambda *args: (490, 390, 510, 410))
+    monkeypatch.setattr("airpointer.ocr_fallback.text_label_at", lambda rect: "SAVE")
+
+    assert _bbox_element_label((0, 0, 10, 10), 100, 100) == "SAVE"
+
+
+def test_bbox_element_label_returns_none_when_ui_automation_and_ocr_both_find_nothing(monkeypatch) -> None:
+    monkeypatch.setattr(screen_buffer, "_frame_to_screen_point", lambda *args: (500, 400))
+    monkeypatch.setattr("airpointer.selection_context.element_label_at", lambda x, y: None)
+    monkeypatch.setattr(screen_buffer.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(screen_buffer, "_frame_to_screen_rect", lambda *args: (490, 390, 510, 410))
+    monkeypatch.setattr("airpointer.ocr_fallback.text_label_at", lambda rect: None)
 
     assert _bbox_element_label((0, 0, 10, 10), 100, 100) is None
+
+
+def test_bbox_element_label_returns_none_when_ui_automation_fails_and_no_screen_rect_is_available(monkeypatch) -> None:
+    # A screen point resolved but the rect didn't (same underlying monitor
+    # query, asked twice) -- must still fail closed to None, never raise.
+    monkeypatch.setattr(screen_buffer, "_frame_to_screen_point", lambda *args: (500, 400))
+    monkeypatch.setattr("airpointer.selection_context.element_label_at", lambda x, y: None)
+    monkeypatch.setattr(screen_buffer.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(screen_buffer, "_frame_to_screen_rect", lambda *args: None)
+
+    assert _bbox_element_label((0, 0, 10, 10), 100, 100) is None
+
+
+def test_bbox_element_label_tries_ocr_even_when_ui_automation_itself_raises(monkeypatch) -> None:
+    # An exception from element_label_at (COM not ready, off-Windows, ...)
+    # must not skip the OCR tier -- it's an independent mechanism, not
+    # dependent on UI Automation's own COM state.
+    monkeypatch.setattr(screen_buffer, "_frame_to_screen_point", lambda *args: (500, 400))
+
+    def _raise(x, y):
+        raise RuntimeError("COM not ready")
+    monkeypatch.setattr("airpointer.selection_context.element_label_at", _raise)
+    monkeypatch.setattr(screen_buffer, "_frame_to_screen_rect", lambda *args: (490, 390, 510, 410))
+    monkeypatch.setattr("airpointer.ocr_fallback.text_label_at", lambda rect: "SAVE")
+
+    assert _bbox_element_label((0, 0, 10, 10), 100, 100) == "SAVE"
 
 
 def test_export_recent_surfaces_the_element_label_the_change_event_already_resolved() -> None:

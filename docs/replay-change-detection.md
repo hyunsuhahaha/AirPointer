@@ -429,6 +429,109 @@ UIA에 이미 등록된 요소)에도 매번 불필요한 지연을 강제한다
 숨김/보임(`_set_own_overlay_visible`)과 재시도 지연(`time.sleep`) 둘 다 스텁으로
 바꿔 결정론적으로 검증한다(`tests/test_region_hint.py`, `tests/test_selection_context.py`).
 
+## OCR 폴백: UI Automation이 아예 안 통하는 앱을 위한 마지막 단계
+
+위 절에서 이미 인정한 한계 그대로다 — "접근성 정보를 제대로 노출하지 않는 앱(일부
+게임, 커스텀 렌더링 UI)에서는 이름이 안 잡혀 조용히 격자 라벨로 폴백한다." UI
+Automation은 재시도해도 안 되는 게 아니라 애초에 그 앱이 접근성 트리 자체를 절대
+채우지 않는 경우라, `_ELEMENT_LABEL_RETRY_DELAY` 재시도로는 못 고치는 별개의 문제다.
+
+그래서 UIA가 (재시도까지 포함해서) 완전히 실패했을 때만 한 단계 더: 같은 bbox
+영역을 실제로 화면에서 다시 캡처해서 Windows 자체 온디바이스 OCR(`Windows.Media.Ocr`,
+`winsdk` 패키지로 접근)에 통과시킨다(`airpointer/ocr_fallback.py`의
+`text_label_at`). UIA가 "버튼 이름" 같은 구조화된 정보를 읽는 거라면, 이건 그냥
+화면에 그려진 글자를 픽셀에서 억지로 읽어내는 최후 수단이다 — 그래서 우선순위도
+UIA 다음이다: 접근성 트리가 있는 앱에서는 여전히 더 정확한 UIA 결과를 그대로 쓰고,
+OCR은 UIA가 아무것도 못 찾았을 때만 관여한다.
+
+### 왜 `Windows.Media.Ocr`인가
+
+후보는 세 갈래였다: (1) Windows에 이미 내장된 `Windows.Media.Ocr`, (2) Tesseract,
+(3) PaddleOCR/EasyOCR류 딥러닝 OCR. (2), (3)은 정확도가 더 좋을 수 있지만 엔진
+바이너리나 모델 파일(수십MB~1GB+)을 포터블 EXE에 직접 번들링해야 한다 — 이
+프로젝트가 이미 지키고 있는 "OS가 이미 아는 것만 쓴다" 원칙(UI Automation도 같은
+이유로 선택됨, 위 "관련 연구" 절 참고)과 배포 크기 양쪽에 안 맞는다. `Windows.Media.Ocr`은
+OS에 이미 설치된 언어팩을 그대로 호출하는 방식이라 추가 바이너리가 없고, 완전히
+온디바이스로 동작해 클라우드 OCR API(스크린샷을 외부로 보내야 함)처럼 프라이버시
+원칙을 깨지도 않는다.
+
+### 실측: 메모리·지연 (이 개발 머신, Windows 11)
+
+`OcrEngine`은 프로세스당 한 번만 만들어 모듈 레벨에 캐싱한다(`ocr_fallback._get_engine`)
+— 그 첫 호출 이후로는 재사용만 한다. 독립 스크립트로 직접 측정한 수치(`win32process.GetProcessMemoryInfo`로
+실측, `Process.memory_info()` 같은 추정치가 아님):
+
+- **메모리**: 첫 OCR 호출 전 28.7MB → 첫 호출 직후 52.3MB (+23.6MB, 일회성). 이후
+  4번을 더 호출해도 52.4~52.6MB 사이에서 그대로 — 호출당 추가 증가는 사실상 0.
+- **지연**: 같은 프로세스에서 `winsdk` 모듈을 이미 한 번 건드린 뒤의 첫 실제 인식
+  호출은 0.09~0.1초, 이후 워밍업된 호출은 평균 0.044초(5회 평균). 완전히 새
+  프로세스에서 `winsdk` 임포트부터 시작하는 진짜 첫 호출은 모듈 로딩 비용까지
+  포함해 최대 ~1.5초까지 걸릴 수 있다(측정됨) — 다만 이건 프로세스 생애주기에 딱
+  한 번뿐이고, 이미 `_ELEMENT_LABEL_RETRY_DELAY`(0.25초) 재시도까지 실패한
+  뒤에만 도달하는 경로라 캡처 자체의 체감 지연에는 거의 영향이 없다.
+- **정확도**: 합성 이미지에 맑은 고딕 28pt로 그린 "저장", "삭제 버튼", "OK Cancel",
+  "Error 404"를 전부 오차 없이 인식했다. 이 개발 머신은 한국어 Windows라
+  `OcrEngine.available_recognizer_languages`가 `["ko"]` 하나만 보고하는데도
+  영문 텍스트("SAVE", "OK Cancel")까지 정확히 읽었다 — 로마자는 언어팩과 무관하게
+  기본적으로 인식되는 것으로 보인다(실측, 문서화된 보장은 아님).
+- **COM 스레드 충돌 여부**: `_bbox_element_label`은 UI Automation(comtypes 기반)을
+  먼저 시도하고 실패하면 같은 스레드에서 바로 OCR(winsdk 기반)로 넘어가는데, 서로
+  다른 COM 프로젝션이 한 스레드에서 부딪히면(APTTHREADED vs MTA) `RPC_E_CHANGED_MODE`
+  류 예외가 날 수 있다는 게 유일한 진짜 위험이었다. 같은 스레드에서 `selection_context`
+  경유 UIA 조회 → 곧바로 winsdk OCR 호출 순서를 실제로 재현해 확인한 결과 예외 없이
+  둘 다 정상 동작했다(pywinauto가 내는 "Revert to STA COM threading mode" 경고는
+  이 변경과 무관하게 원래도 뜨는 것). 다만 `text_label_at`은 어차피 모든 예외를
+  삼키고 `None`을 반환하므로, 혹시 다른 앱/타이밍 조합에서 이 충돌이 재현되더라도
+  캡처 자체가 막히는 일은 없다.
+
+### 포터블 빌드 + 실제 exe 종단 검증 (완료)
+
+`winsdk`는 WinRT 네임스페이스별로 컴파일된 확장 모듈을 런타임에 찾아 로드하는
+구조라, 정적 분석만으로는 놓칠 수 있어 `AirPointer.spec`에
+`collect_submodules("winsdk")`를 추가했다. `build-portable.ps1`로 실제 재빌드한
+뒤 `PyInstaller.utils.cliutils.archive_viewer`로 exe 내부를 직접 열어
+`winsdk\_winrt.pyd`(네이티브 바이너리)와, 내장 PYZ의 목차(`PYZ-00.toc`)에
+`winsdk.windows.media.ocr`/`windows.graphics.imaging`/`windows.storage.streams`
+세 모듈이 전부 포함된 것을 확인했다(`warn-AirPointer.txt`에도 이 셋에 대한
+missing-module 경고는 없었다 — 안 쓰는 optional 서브모듈 하나만 경고됨).
+
+여기서 그치지 않고, 빌드된 `portable/AirPointer.exe`를 실제로 실행해서
+종단간(end-to-end)으로도 검증했다: 접근성 트리를 전혀 노출하지 않는 화면(일반
+Tkinter `Canvas`에 직접 그린 텍스트 — 게임/커스텀 렌더링 UI와 같은 부류, UI
+Automation의 `ElementFromPoint`가 이름을 찾을 수 없는 지점)을 하나 띄워두고,
+`AirPointer.exe start_hotkey`(브라우저의 `airpointer://start_hotkey`와 동일한
+진입점, GUI 조작 없이 카메라 없는 단축키 모드로 바로 트래킹 시작)로 실제
+빌드를 구동한 뒤, 캔버스에 "SAVE COMPLETE" 텍스트가 나타나는 순간을 실제 화면
+변화로 감지시키고, 실제 전역 단축키(`Ctrl+Alt+D`)를 보내 리플레이 캡처를
+트리거했다. `export_recent()`가 남기는 실제 사이드카 파일
+(`%LOCALAPPDATA%\AirPointer\dispatch\<uuid>\frame-regions.json`)을 직접 읽어
+확인한 결과:
+
+```json
+{ "frame-06.png": "SAVE COi" }
+```
+
+UI Automation은 이 지점에서 예상대로 아무것도 찾지 못했고(Tkinter Canvas는
+이름 있는 접근성 요소를 노출하지 않음), 격자 라벨("가운데" 등)로 조용히
+폴백하는 대신 OCR 폴백이 실제로 개입해 화면에 그려진 텍스트를 읽어냈다 — 3단
+폴백 체인(UIA → OCR → 격자 라벨)이 실제 빌드에서, 실제 스크린샷을 대상으로,
+의도한 순서대로 동작함을 확인. 다만 인식 결과가 "SAVE COMPLETE"가 아니라
+"SAVE COi"로 일부 잘렸다/틀렸다 — 앞서 "실측: 메모리·지연" 절의 합성 이미지
+테스트(맑은 고딕 28pt, 100% 정확)와 달리 이번엔 실제 화면 캡처·크롭 타이밍,
+어두운 배경 위 흰 텍스트, 캔버스 좌표 매핑(1280x720 다운스케일 프레임 →
+1920x1080 실 화면, 125% DPI 스케일링 환경)이 전부 실전 조건으로 개입했기
+때문으로 보인다 — **OCR 폴백이 "작동은 하지만 완벽한 정확도까지는 보장하지
+않는다"는 걸 보여주는 실측 증거**로 남겨둔다. 이 프롬프트 힌트는 애초에
+"오른쪽 아래 영역"보다 나은 위치 단서를 주는 게 목적이라, 일부 문자가
+깨져도 여전히 "이 근처에 SAVE 관련 텍스트가 있었다"는 신호로는 유효하다.
+
+### 아직 실측하지 않은 것
+
+- **실제 게임/원격 데스크톱에서의 인식률**: 위 종단 검증은 Tkinter Canvas
+  텍스트(접근성 트리 없음이라는 조건은 동일)를 대상으로 했지, 실제 3D 게임
+  렌더링이나 압축 손실이 있는 원격 데스크톱 스트림은 아니다. 배경이 훨씬
+  복잡하거나 폰트가 더 작은 실제 게임 HUD에서의 인식률은 별도 확인이 필요하다.
+
 ## 관련 연구 / 유사 프로젝트와의 관계
 
 이 파일이 다루는 두 가지 문제 — "리플레이에서 어느 순간이 중요한가"와 "화면의 어느
@@ -457,7 +560,9 @@ UIA에 이미 등록된 요소)에도 매번 불필요한 지연을 강제한다
   트리(UI Automation, 화면 읽기 프로그램이 쓰는 바로 그 API)를 조회한다. 비전 모델 호출
   없이 로컬에서 즉시 답이 나오고, 컨트롤 이름이 존재하는 한 픽셀을 보고 추측하는 것보다
   정확하다는 게 장점이지만, 접근성 정보를 제대로 노출하지 않는 앱(일부 게임, 커스텀
-  렌더링 UI)에서는 이름이 안 잡혀 조용히 격자 라벨로 폴백한다는 한계가 있다.
+  렌더링 UI)에서는 이름이 안 잡혀 조용히 격자 라벨로 폴백한다는 한계가 있다(위 "OCR
+  폴백" 절에서 이 한계의 일부를 — 여전히 비전 모델 호출 없이, 이번에도 로컬 OS
+  기능만으로 — 메운다).
 - **"항상 켜진 화면 기록"과의 포지셔닝**: 이 프로젝트가 속한 더 큰 카테고리(로컬 AI가
   화면 맥락을 이해해서 돕는 도구)에는 Microsoft의 Windows Recall과, 그 오픈소스
   대안인 [Screenpipe](https://github.com/screenpipe/screenpipe)가 있다. Recall은 출시

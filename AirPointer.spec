@@ -1,5 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
+
+# winsdk (used by ocr_fallback.py) ships one compiled extension module per
+# WinRT namespace, discovered at runtime rather than via a plain top-level
+# import PyInstaller's static analysis can trace -- collect_submodules walks
+# the package so the three namespaces we actually import
+# (windows.graphics.imaging, windows.media.ocr, windows.storage.streams)
+# aren't silently dropped from the build. NOT yet verified against a real
+# portable-EXE build in this pass -- only unit-tested and exercised via a
+# standalone script so far (see docs/replay-change-detection.md's "OCR
+# 폴백" section).
+winsdk_hidden = collect_submodules("winsdk")
 
 # AirPointer only ever instantiates mp.solutions.hands.Hands(), but importing
 # mediapipe.python.solutions eagerly imports every solution's Python module
@@ -20,7 +31,7 @@ a = Analysis(
     pathex=[],
     binaries=mediapipe_binaries,
     datas=mediapipe_data,
-    hiddenimports=mediapipe_hidden,
+    hiddenimports=mediapipe_hidden + winsdk_hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
