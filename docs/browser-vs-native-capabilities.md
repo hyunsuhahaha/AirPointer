@@ -24,7 +24,7 @@
 | 모드 | 주 화면 | 사용하는 브라우저 API/엔진 | 사용하지 않는 것 | 목적 |
 |---|---|---|---|---|
 | 교육 모드 | 카메라 미리보기와 손 인식 피드백 | `getUserMedia`, MediaPipe HandLandmarker | 화면 공유·리플레이·작업 PiP | 손짓을 배우고 직접 성공시켜 보는 교육·체험 |
-| 작업 모드 | 공유 화면과 Document PiP | `getDisplayMedia`, 리플레이 버퍼, PiP 버튼, 포커스 상태 단축키 | 카메라 권한·카메라 스트림·MediaPipe 손 인식 | 개발·문서·운영 중 놓친 상황을 복원해 Agent에 전달 |
+| 작업 모드 | 공유 화면과 Document PiP | `getDisplayMedia`, 리플레이 버퍼, 자동으로 열리는 PiP와 그 버튼 | 카메라 권한·카메라 스트림·MediaPipe 손 인식·브라우저 단축키 | 개발·문서·운영 중 놓친 상황을 복원해 Agent에 전달 |
 
 작업 모드에서 카메라는 숨겨진 채 유지되는 보조 입력이 아니다. 아예 요청하거나 실행하지 않는다.
 교육 모드에서 작업 모드로 전환할 때는 카메라 트랙 종료, `video.srcObject` 해제, HandLandmarker와
@@ -32,8 +32,8 @@
 전환이 아니라 메모리와 연산 자원을 분리하는 **서로 다른 런타임 프로필**이다.
 
 작업 모드의 개발·문서·운영은 별도 최상위 모드가 아니라 같은 캡처/PiP 흐름 안의 작업 프로필로
-취급한다. 설치 없는 작업 모드의 트리거는 PiP 버튼과 포커스 상태의 브라우저 단축키다. OS 전역
-단축키는 AirPointer.exe가 있을 때만 제공한다.
+취급한다. 설치 없는 작업 모드의 트리거는 화면 공유와 함께 자동으로 열리는 PiP 버튼이다. 순수
+브라우저 단축키 모드는 제공하지 않으며 OS 전역 단축키는 AirPointer.exe가 있을 때만 제공한다.
 
 > **구현 상태:** 위 분리는 확정된 제품 방향이며 아직 코드에 완전히 적용되지 않았다. 현재
 > `use-browser-gesture.ts`의 브라우저 손바닥 트리거는 작업 화면과 연결되어 있다. 아래 표는
@@ -54,8 +54,7 @@
 | 브라우저 내장 손 제스처: **손바닥 2초 유지 → 최근 구간 전송**만 지원 (MediaPipe WASM, CDN 로드, 웹캠). 현재 구현이며, 목표 구조에서는 교육 모드 전용으로 이동 | `use-browser-gesture.ts` |
 | 프롬프트 템플릿 조회/저장/초기화 | `web/src/app/api/prompt-settings/route.ts` |
 | 프리뷰 스테이지 드래그 이동/리사이즈, 버퍼 상태 HUD, 실시간 변화 스코어 차트 | `replay-workspace.tsx` UI 상태 (스테이지 박스, HUD 관련 부분) |
-| 탭 포커스 시 키보드 단축키 (`Alt+Shift+S`/`Alt+Shift+D`, 커스텀 가능) — 알트탭하면 못 받음 | `replay-workspace.tsx`의 `browserHotkeyEnabled` 이펙트, `comboFromKeyEvent` |
-| **Document PiP 캡처·대화 창** — 기록 상태와 변화 전후 이미지, 현재/리플레이/영역 분석, 접기·펼치기, 새 대화 | `replay-workspace.tsx`의 portal + `browser-capture-panel.tsx` |
+| **Document PiP 캡처·대화 창** — 화면 공유 성공 직후 자동으로 열림. 기록 상태와 변화 전후 이미지, 현재/리플레이/영역 분석, 접기·펼치기, 새 대화 | `replay-workspace.tsx`의 `startSharing` + portal + `browser-capture-panel.tsx` |
 | 고정한 공유 화면에서 드래그 영역 선택, 방향키 이동·Shift 크기 조절, 취소·확정 후 잘라낸 이미지만 분석 | `RegionCapture`, `cropRegion(..., 0)` — 메인 화면과 PiP 양쪽 |
 | 새 화면을 보내지 않는 텍스트 후속 질문 | `mode: text`, 빈 `frames`, 최근 대화 최대 8개 메시지/6,000자, 질문 500자 |
 | 모든 브라우저 트리거의 중복 분석 방지 | `analysisInFlight` + PiP 입력/버튼 잠금 |

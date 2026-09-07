@@ -80,7 +80,7 @@ export async function POST(request: Request) {
       model: body.model || process.env.OPENAI_MODEL || "gpt-5.4-mini",
       instructions: ANALYSIS_RESPONSE_INSTRUCTIONS,
       store: false,
-      max_output_tokens: 700,
+      max_output_tokens: 1400,
       text: { format: {
         type: "json_schema",
         name: "screen_analysis_with_evidence",
@@ -89,6 +89,12 @@ export async function POST(request: Request) {
           type: "object",
           properties: {
             answer: { type: "string", description: "사용자 질문에 대한 직접적이고 간결한 한국어 답변" },
+            incident: { type: "object", additionalProperties: false, properties: {
+              title: { type: "string", description: "문제 상황의 짧은 제목" },
+              facts: { type: "array", maxItems: 3, items: { type: "string" }, description: "이미지에서 직접 확인한 사실만. 근거가 없으면 빈 배열" },
+              possibleCause: { type: "string", description: "추정임을 명시한 가능한 원인. 화면만으로 알 수 없으면 확인 불가라고 표시. 외부 앱 클릭이나 내부 상태를 지어내지 말 것" },
+              nextChecks: { type: "array", maxItems: 3, items: { type: "string" }, description: "사용자가 다음에 확인할 구체적인 항목" },
+            }, required: ["title", "facts", "possibleCause", "nextChecks"] },
             evidence: { type: "array", maxItems: 12, description: "답을 실제로 뒷받침하는 첨부 화면 근거. 새 화면이 없는 후속 질문이면 빈 배열", items: {
               type: "object",
               properties: {
@@ -99,7 +105,7 @@ export async function POST(request: Request) {
               additionalProperties: false,
             } },
           },
-          required: ["answer", "evidence"],
+          required: ["answer", "evidence", "incident"],
           additionalProperties: false,
         },
       } },

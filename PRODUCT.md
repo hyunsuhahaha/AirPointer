@@ -37,8 +37,8 @@ views that keep the same capture engines alive in the background:
 - **Work mode:** shared-screen replay and Document Picture-in-Picture are the primary experience for
   development and general work. It does not request camera permission and must not initialize or
   retain a camera stream, MediaPipe hand recognizer, camera worker, sampling timer, or camera-frame
-  canvas. Work-mode actions come from the PiP controls and focus-bound browser shortcuts; native
-  global shortcuts remain an optional installed-app capability.
+  canvas. Work-mode actions come from the PiP controls; native global shortcuts remain an optional
+  installed-app capability.
 
 Changing from Education mode to Work mode must release the camera runtime rather than merely hide
 its preview. Development, document, and operations use cases are profiles inside Work mode, not
@@ -53,7 +53,7 @@ share an in-flight request guard.
 ## Operating Context
 
 In Work mode, the user explicitly starts browser screen sharing. One-second recording segments form
-a bounded local ring buffer, and PiP buttons or focus-bound browser shortcuts trigger analysis. The
+a bounded local ring buffer, and PiP buttons trigger analysis. The
 camera is not part of this runtime. In Education mode, the user explicitly grants camera access and
 uses the visible preview to learn and demonstrate gestures without keeping the work-mode screen
 capture stack active. Manual controls remain available for accessibility and demonstrations.

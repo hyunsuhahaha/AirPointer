@@ -1,7 +1,7 @@
 import { chromium, expect, test } from "@playwright/test";
 
 const CHROME_PATH = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
-const APP_URL = process.env.AIRPOINTER_E2E_URL || "http://127.0.0.1:3000";
+const APP_URL = process.env.AIRPOINTER_E2E_URL || "http://localhost:3000";
 
 test("real Chrome tab capture keeps a transient event in the adaptive replay", async () => {
   test.skip(process.env.AIRPOINTER_REAL_SCREEN_SHARE !== "1", "Set AIRPOINTER_REAL_SCREEN_SHARE=1 and choose the AirPointer tab in Chrome's share picker.");
@@ -34,9 +34,12 @@ test("real Chrome tab capture keeps a transient event in the adaptive replay", a
     });
     await app.goto(APP_URL);
     await app.evaluate(() => { document.title = "AirPointer E2E Source"; });
+    await expect(app.getByLabel("항상 위 캡처 버튼 켜기 (브라우저, 설치 불필요)")).toBeEnabled({ timeout: 10_000 });
     await app.getByLabel("전송 전 개인정보 자동 가림").setChecked(false, { force: true, timeout: 5_000 });
+    await expect(app.getByText("키보드 단축키 켜기 (브라우저, 설치 불필요)")).toHaveCount(0);
     await app.getByRole("button", { name: "화면 공유 시작" }).first().click({ timeout: 5_000 });
     await expect(app.getByText("로컬 기록 중")).toBeVisible({ timeout: 15_000 });
+    await expect.poll(() => app.evaluate(() => Boolean(window.documentPictureInPicture?.window))).toBe(true);
 
     await app.evaluate(() => {
       const event = document.createElement("div");

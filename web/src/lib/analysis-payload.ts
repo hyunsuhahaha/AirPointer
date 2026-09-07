@@ -1,3 +1,5 @@
+import { parseIncident } from "./incident-report.ts";
+
 export type AnalysisPayload = {
   mode: "current" | "replay" | "text";
   model?: AnalysisModelId;
@@ -92,9 +94,9 @@ export const ANALYSIS_RESPONSE_INSTRUCTIONS = "사용자가 질문을 제공한 
 
 export type AnalysisEvidence = { frameIndex: number; claim: string };
 
-export function parseAnalysisResult(raw: string, frameCount: number): { analysis: string; evidence: AnalysisEvidence[] } {
+export function parseAnalysisResult(raw: string, frameCount: number): { analysis: string; evidence: AnalysisEvidence[]; incident?: import("./incident-report").Incident } {
   try {
-    const value = JSON.parse(raw) as { answer?: unknown; evidence?: unknown };
+    const value = JSON.parse(raw) as { answer?: unknown; evidence?: unknown; incident?: unknown };
     if (typeof value.answer !== "string" || !value.answer.trim() || !Array.isArray(value.evidence)) throw new Error("invalid analysis result");
     const seen = new Set<number>();
     const evidence = value.evidence.flatMap((item) => {
@@ -105,7 +107,8 @@ export function parseAnalysisResult(raw: string, frameCount: number): { analysis
       seen.add(frameIndex);
       return [{ frameIndex, claim: claim.trim().slice(0, 240) }];
     });
-    return { analysis: value.answer.trim(), evidence };
+    const incident = parseIncident(value.incident);
+    return { analysis: value.answer.trim(), evidence, ...(incident ? { incident } : {}) };
   } catch {
     return { analysis: raw.trim(), evidence: [] };
   }
