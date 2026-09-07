@@ -16,11 +16,8 @@ const IDLE_PROGRESS: GestureProgress = { phase: "idle", value: 0, command: null 
 
 type Options = { enabled: boolean; onCommand: (command: GestureCommand) => void };
 
-// Only the "손바닥 2초" replay-send gesture is wired up (see
-// GestureCommandDetector) -- region selection is a separate, much larger
-// feature (native lets the REAL mouse drag the region after the gesture
-// arms it) that nothing in the web app implements yet, browser-tracked hand
-// or not.
+// Only the palm-hold replay command is wired to analysis. Manual region
+// selection lives in RegionCapture; hand-driven region selection is not wired.
 export function useBrowserHandGesture({ enabled, onCommand }: Options) {
   const [pose, setPose] = useState<GesturePose>("none");
   const [progress, setProgress] = useState<GestureProgress>(IDLE_PROGRESS);

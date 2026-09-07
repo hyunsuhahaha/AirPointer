@@ -390,7 +390,8 @@ export class BrowserReplayBuffer {
     const byTime = [...this.previewFrames].sort((a, b) => a.capturedAt - b.capturedAt);
     const nearest = (at: number) => byTime.reduce((best, frame) =>
       Math.abs(frame.capturedAt - at) < Math.abs(best.capturedAt - at) ? frame : best);
-    return { beforeUrl: nearest(top.startedAt).dataUrl, afterUrl: nearest(top.peakAt).dataUrl, bbox: top.bbox };
+    const before = byTime.filter((frame) => frame.capturedAt < top.startedAt).at(-1) ?? nearest(top.startedAt);
+    return { beforeUrl: before.dataUrl, afterUrl: nearest(top.peakAt).dataUrl, bbox: top.bbox };
   }
 
   private startPreviewCapture(stream: MediaStream, generation: number) {
@@ -404,14 +405,12 @@ export class BrowserReplayBuffer {
       const canvas = thumbnailFromVideo(video);
       const capturedAt = Date.now();
       this.previewFrames.push({ dataUrl: canvas.toDataURL("image/jpeg", 0.48), capturedAt });
-      // 1,1 (not video.videoWidth/videoHeight) so scoreAndBbox's scale-up
-      // yields a bbox already normalized to [0,1] -- resolution-independent,
-      // so it can be drawn or cropped against any rendering of this frame
-      // (the 640px-wide preview thumbnail, a contact sheet cell, etc.)
-      // without carrying the capture resolution around separately. Safe:
-      // bbox's only other consumer, bboxIou, is scale-invariant.
-      const event = this.changeTracker.observe(video, 1, 1, capturedAt);
+      // Observe the entire source. Passing 1x1 here crops the input to its
+      // top-left pixel; normalize only the resulting screen coordinates.
+      const event = this.changeTracker.observe(video, video.videoWidth, video.videoHeight, capturedAt);
       if (event) {
+        event.bbox = [event.bbox[0] / video.videoWidth, event.bbox[1] / video.videoHeight,
+          event.bbox[2] / video.videoWidth, event.bbox[3] / video.videoHeight];
         this.changeEvents.push(event);
         if (this.changeEvents.length > MAX_CHANGE_EVENTS) this.changeEvents.shift();
       }

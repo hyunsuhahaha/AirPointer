@@ -13,6 +13,8 @@ import { BrowserReplayBuffer, cropRegion, frameFromVideo } from "@/lib/replay-bu
 import type { ChangeHighlight, OverviewFrame, ReplayCapsule } from "@/lib/replay-buffer";
 import type { PromptTemplate } from "@/lib/prompt-template";
 import styles from "./replay-workspace.module.css";
+import { BrowserCapturePanel, RegionCapture } from "./browser-capture-panel";
+import type { AnalysisMode } from "./browser-capture-panel";
 
 // Document Picture-in-Picture (Chrome/Edge 116+) isn't in TS's DOM lib yet --
 // minimal ambient shape for the one method/property this file actually uses.
@@ -36,7 +38,6 @@ type Mode = "current" | "replay";
 // Codex-Desktop-like thread view that opens only when there's something to
 // show -- Document PiP allows only one window per tab, so these are never
 // both open at once; switching between them closes one and opens the other.
-type PipVariant = "buttons" | "conversation";
 type ConversationTurn = { role: "user" | "assistant"; text: string };
 type AgentState = "loading" | "idle" | "preparing" | "drafting" | "sending" | "queued" | "done" | "error";
 type AgentThread = { id: string; title: string; status: string; cwd: string; updatedAt: number };
@@ -216,19 +217,9 @@ export function ReplayWorkspace() {
   const [pipSupported, setPipSupported] = useState(false);
   const [pipOpen, setPipOpen] = useState(false);
   const [pipMessage, setPipMessage] = useState("");
-  // Conversation memory for the PiP's "대화창" shape -- a ref, not React
-  // state: nothing in this component's JSX renders it, only the PiP
-  // window's own hand-built DOM does (imperatively, see openCapturePip), so
-  // there's no render to keep in sync and no risk of the stale-read race
-  // analyzeWithOpenAI's now-removed message ref used to hit. Cleared on a
-  // fresh screen share (see startSharing/stopSharing) -- a new share is a
-  // new session, not a follow-up to whatever was asked about the last one.
-  const pipHistory = useRef<ConversationTurn[]>([]);
-  // True only for the instant between closing one PiP shape and opening the
-  // other (buttons <-> conversation, see openCapturePip's switchTo) -- lets
-  // the pagehide listener tell that transition apart from the user actually
-  // closing the window, which should turn the whole feature off instead.
-  const pipSwitchingRef = useRef(false);
+  const [pipContainer, setPipContainer] = useState<HTMLElement | null>(null);
+  const [regionImage, setRegionImage] = useState("");
+  const analysisInFlight = useRef(false);
   // Deliberately deferred to an effect (not a useState lazy initializer)
   // so the first client render matches the SSR pass (window is undefined
   // there too) before this flips post-mount -- an inline/lazy-initializer
@@ -323,10 +314,11 @@ export function ReplayWorkspace() {
     stream?.getTracks().forEach((track) => track.stop());
     buffer.current.stop();
     setStream(null);
+    setHighlight(null); setHighlightZoomUrl("");
     setElapsed(0);
     setStatus("idle");
     setMessage("버퍼를 비웠습니다. 화면 데이터는 남아 있지 않습니다.");
-    pipHistory.current = [];
+    setRegionImage("");
   }, [stream]);
 
   const startSharing = useCallback(async () => {
@@ -336,13 +328,15 @@ export function ReplayWorkspace() {
     try {
       const nextStream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 15, max: 24 } }, audio: false });
       if (!screenVideo.current) return;
-      pipHistory.current = [];
+      setRegionImage("");
+      setHighlight(null); setHighlightZoomUrl("");
       screenVideo.current.srcObject = nextStream;
       await screenVideo.current.play();
       buffer.current.setRetention(retention);
       buffer.current.start(nextStream);
       nextStream.getVideoTracks()[0].addEventListener("ended", () => {
         buffer.current.stop(); setStream(null); setElapsed(0); setStatus("idle"); setMessage("화면 공유가 종료되어 버퍼를 비웠습니다.");
+        setHighlight(null); setHighlightZoomUrl(""); setRegionImage("");
       }, { once: true });
       setStream(nextStream);
       setFrames([]); setAnalysis(""); setStatus("recording"); setMessage("기록 중입니다. 트리거 전에는 어떤 화면도 서버로 보내지 않습니다.");
@@ -367,28 +361,20 @@ export function ReplayWorkspace() {
     return nextFrames;
   }, [highlightZoomUrl, sendSeconds, stream]);
 
-  // Returns the outcome directly -- not a ref-mirrored read of `message`
-  // afterward, which raced: setMessage() schedules a re-render, and the
-  // effect that would copy it into a ref doesn't necessarily run before a
-  // plain .then() callback on this same promise does, so a caller reading
-  // the ref right after await could still see the *previous* setMessage
-  // call's value (confirmed: the PiP window was showing the "분석하고
-  // 있습니다" progress text as if it were the error). `status`/`message`
-  // still carry the same info for the main tab's own UI (unchanged for
-  // every existing caller, which all ignore the return value) -- this
-  // return value exists only because the PiP window (see openCapturePip)
-  // has no access to this component's state and needs the outcome handed
-  // back directly to show inside itself.
-  const analyzeWithOpenAI = useCallback(async (mode: Mode, question?: string, history?: ConversationTurn[]): Promise<{ text: string } | { error: string }> => {
-    if (!stream || !screenVideo.current) {
+  // All browser triggers share one request guard, including the PiP portal.
+  const analyzeWithOpenAI = useCallback(async (mode: AnalysisMode, question?: string, history?: ConversationTurn[], image?: string): Promise<{ text: string } | { error: string }> => {
+    if (mode !== "text" && !image && (!stream || !screenVideo.current)) {
       const error = "먼저 화면 공유를 시작해 주세요.";
       setStatus("error"); setMessage(error);
       return { error };
     }
+    if (analysisInFlight.current) return { error: "이전 분석이 끝난 뒤 다시 보내주세요." };
+    analysisInFlight.current = true;
     setStatus("preparing"); setAnalysis("");
     try {
-      const nextFrames = await captureFrames(mode);
-      setStatus("analyzing"); setMessage(`${mode === "current" ? "현재 화면" : `최근 ${sendSeconds}초`}을 OpenAI API가 분석하고 있습니다.`);
+      const nextFrames = mode === "text" ? [] : image ? [{ url: image, atSeconds: 0 }] : await captureFrames(mode);
+      if (image) setFrames(nextFrames);
+      setStatus("analyzing"); setMessage(`${mode === "text" ? "질문" : image ? "선택 영역" : mode === "current" ? "현재 화면" : `최근 ${sendSeconds}초`}을 OpenAI API가 분석하고 있습니다.`);
       const response = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode, frames: nextFrames.map((frame) => frame.url), question, history }) });
       const data = await response.json() as { analysis?: string; error?: string };
       if (!response.ok || !data.analysis) throw new Error(data.error || "분석 결과를 받지 못했습니다.");
@@ -398,186 +384,32 @@ export function ReplayWorkspace() {
       const error = reason instanceof Error ? reason.message : "전송에 실패했습니다.";
       setStatus("error"); setMessage(error);
       return { error };
+    } finally {
+      analysisInFlight.current = false;
     }
   }, [captureFrames, sendSeconds, stream]);
 
-  // Ref so the plain DOM click handlers created once inside the PiP window
-  // (see openCapturePip) always call the *current* analyzeWithOpenAI closure
-  // -- same pattern as onCommandRef in use-browser-gesture.ts -- instead of
-  // whatever `stream`/`sendSeconds` happened to be in scope the moment the
-  // window was opened, which could be stale by the time a button is clicked.
-  const analyzeWithOpenAIRef = useRef(analyzeWithOpenAI);
-  useEffect(() => { analyzeWithOpenAIRef.current = analyzeWithOpenAI; }, [analyzeWithOpenAI]);
+  const snapshot = useCallback(() => {
+    if (!stream || !screenVideo.current) throw new Error("먼저 화면 공유를 시작해 주세요.");
+    return frameFromVideo(screenVideo.current);
+  }, [stream]);
 
-  // Document Picture-in-Picture: a chromeless, always-on-top window that
-  // stays clickable even while some other app has focus -- the closest a
-  // browser tab can get to a true global hotkey without any native install.
-  // requestWindow() needs a live user gesture each time it's called, so
-  // every call site below (the checkbox, and switchTo's internal calls) is
-  // reached synchronously from a real click, with no awaited work in
-  // between -- an awaited fetch first would let the browser's transient
-  // activation expire before requestWindow() ever ran.
-  //
-  // `pendingTrigger` is only used when opening the "conversation" shape
-  // right after a "buttons"-shape click: that click's gesture is spent on
-  // *this* requestWindow() call, so the actual analyze request for it has
-  // to fire from in here (after the window exists, no gesture needed for a
-  // plain fetch) rather than back in the button's own onclick.
-  const openCapturePip = useCallback(async (variant: PipVariant, pendingTrigger?: { mode: Mode; question?: string }) => {
-    const pip = window.documentPictureInPicture;
-    if (!pip) return;
+  const openCapturePip = useCallback(async () => {
+    if (!window.documentPictureInPicture) return;
     setPipMessage("");
     try {
-      const pipWindow = await pip.requestWindow(
-        variant === "conversation" ? { width: 340, height: 440 } : { width: 240, height: 100 });
+      const pipWindow = await window.documentPictureInPicture.requestWindow({ width: 380, height: 240 });
       pipWindowRef.current = pipWindow;
-      pipWindow.document.title = variant === "conversation" ? "방금그거뭐였지 · 대화" : "방금그거뭐였지 · 빠른 캡처";
-      // Styled via the `style` attribute, not a <style> tag -- this app's CSP
-      // (see proxy.ts) only allows style-src-attr 'unsafe-inline', not plain
-      // style-src, so a <style> element here would render unstyled/blocked
-      // exactly like framer-motion's own dynamic <style> tags already do.
-      pipWindow.document.body.style.cssText = "margin:0;padding:10px;display:flex;flex-direction:column;"
-        + "gap:8px;background:#0c0c0b;font:600 13px/1.3 system-ui,sans-serif;color-scheme:dark;"
-        + "height:100%;box-sizing:border-box";
-      const BUTTON_BG = "#17130f";
-      const BUTTON_BG_PRESSED = "#3a2a1a";
-      const buttonStyle = `flex:1;padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,.16);`
-        + `background:${BUTTON_BG};color:#f5efe6;cursor:pointer;font:inherit`;
-      // No CSS :active available here (see the CSP note above -- a
-      // stylesheet is blocked, and :active can't be expressed as an inline
-      // style attribute), so press feedback is done by hand: a background
-      // flip on mousedown/mouseup for the instant "did this register at
-      // all" signal -- this window has no other way to show it, unlike the
-      // main tab's own status/analysis panel.
-      const withPressFeedback = (button: HTMLButtonElement) => {
-        button.onmousedown = () => { button.style.background = BUTTON_BG_PRESSED; };
-        const release = () => { button.style.background = BUTTON_BG; };
-        button.onmouseup = release;
-        button.onmouseleave = release;
-      };
-      // Closes THIS window first (rather than just requesting the next one,
-      // which would replace it implicitly per Document PiP's one-window-
-      // per-tab rule anyway) so pipSwitchingRef is guaranteed set before
-      // this window's own pagehide fires, not racing it.
-      const switchTo = (next: PipVariant, trigger?: { mode: Mode; question?: string }) => {
-        pipSwitchingRef.current = true;
-        pipWindow.close();
-        void openCapturePip(next, trigger).finally(() => { pipSwitchingRef.current = false; });
-      };
-
-      if (variant === "buttons") {
-        const row = pipWindow.document.createElement("div");
-        row.style.cssText = "display:flex;gap:8px;flex:1";
-        const wireButton = (label: string, mode: Mode) => {
-          const button = pipWindow.document.createElement("button");
-          button.textContent = label;
-          button.style.cssText = buttonStyle;
-          withPressFeedback(button);
-          button.onclick = () => {
-            if (button.disabled) return;
-            // A button-only trigger always starts a fresh conversation --
-            // any earlier thread is done once the user is back to just
-            // the floating buttons.
-            pipHistory.current = [];
-            switchTo("conversation", { mode });
-          };
-          return button;
-        };
-        row.append(wireButton("지금 화면", "current"), wireButton("최근 리플레이", "replay"));
-        pipWindow.document.body.append(row);
-      } else {
-        const transcript = pipWindow.document.createElement("div");
-        transcript.style.cssText = "flex:1;overflow-y:auto;padding:10px;border-radius:8px;box-sizing:border-box;"
-          + "background:#151310;display:flex;flex-direction:column;gap:8px";
-        const scrollToEnd = () => { transcript.scrollTop = transcript.scrollHeight; };
-        const renderTurn = (turn: ConversationTurn) => {
-          const bubble = pipWindow.document.createElement("div");
-          bubble.textContent = turn.text;
-          bubble.style.cssText = "padding:8px 10px;border-radius:8px;font:500 12px/1.5 system-ui,sans-serif;"
-            + "white-space:pre-wrap;max-width:92%;box-sizing:border-box;"
-            + (turn.role === "user" ? "align-self:flex-end;background:#3a2a1a;color:#ffd9b3;"
-              : "align-self:flex-start;background:#1d1c19;color:#f5efe6;");
-          transcript.append(bubble);
-          return bubble;
-        };
-        pipHistory.current.forEach(renderTurn);
-        scrollToEnd();
-
-        const promptInput = pipWindow.document.createElement("textarea");
-        promptInput.placeholder = "이어서 물어보기…";
-        promptInput.style.cssText = "resize:none;height:40px;padding:8px;border-radius:8px;box-sizing:border-box;"
-          + "border:1px solid rgba(255,255,255,.16);background:#151310;color:#f5efe6;font:500 12px/1.4 inherit";
-
-        const closeBtn = pipWindow.document.createElement("button");
-        closeBtn.textContent = "✕";
-        closeBtn.title = "닫고 버튼만 남기기";
-        closeBtn.style.cssText = "padding:0 12px;border-radius:8px;border:1px solid rgba(255,255,255,.16);"
-          + `background:${BUTTON_BG};color:#f5efe6;cursor:pointer;font:inherit`;
-        withPressFeedback(closeBtn);
-        closeBtn.onclick = () => switchTo("buttons");
-
-        const inputRow = pipWindow.document.createElement("div");
-        inputRow.style.cssText = "display:flex;gap:6px";
-        inputRow.append(promptInput, closeBtn);
-
-        const sendRow = pipWindow.document.createElement("div");
-        sendRow.style.cssText = "display:flex;gap:8px";
-        const wireSend = (label: string, mode: Mode) => {
-          const button = pipWindow.document.createElement("button");
-          button.textContent = label;
-          button.style.cssText = buttonStyle;
-          withPressFeedback(button);
-          button.onclick = () => {
-            if (button.disabled) return;
-            const question = promptInput.value.trim();
-            const historySoFar = pipHistory.current;
-            const userText = question || (mode === "current" ? "(지금 화면)" : "(최근 리플레이)");
-            sendRow.querySelectorAll("button").forEach((el) => { (el as HTMLButtonElement).disabled = true; });
-            promptInput.value = "";
-            renderTurn({ role: "user", text: userText });
-            const answerBubble = renderTurn({ role: "assistant", text: "분석 중…" });
-            scrollToEnd();
-            void analyzeWithOpenAIRef.current(mode, question || undefined, historySoFar).then((result) => {
-              sendRow.querySelectorAll("button").forEach((el) => { (el as HTMLButtonElement).disabled = false; });
-              const answer = "text" in result ? result.text : `오류: ${result.error}`;
-              answerBubble.textContent = answer;
-              pipHistory.current = [...historySoFar, { role: "user", text: userText }, { role: "assistant", text: answer }];
-              scrollToEnd();
-            });
-          };
-          return button;
-        };
-        sendRow.append(wireSend("지금 화면", "current"), wireSend("최근 리플레이", "replay"));
-        pipWindow.document.body.append(transcript, inputRow, sendRow);
-
-        // The button-only shape spent its click's user gesture opening
-        // *this* window, so the trigger it wanted to fire happens here
-        // instead -- a plain fetch afterward needs no gesture of its own.
-        if (pendingTrigger) {
-          const userText = pendingTrigger.question || (pendingTrigger.mode === "current" ? "(지금 화면)" : "(최근 리플레이)");
-          renderTurn({ role: "user", text: userText });
-          const answerBubble = renderTurn({ role: "assistant", text: "분석 중…" });
-          scrollToEnd();
-          void analyzeWithOpenAIRef.current(pendingTrigger.mode, pendingTrigger.question, []).then((result) => {
-            const answer = "text" in result ? result.text : `오류: ${result.error}`;
-            answerBubble.textContent = answer;
-            pipHistory.current = [{ role: "user", text: userText }, { role: "assistant", text: answer }];
-            scrollToEnd();
-          });
-        }
-      }
-
-      // Fires whether the user closes the PiP window from its own chrome or
-      // the tab/page goes away -- the one signal that reliably means "this
-      // window is gone" regardless of which side closed it. Skipped during
-      // an intentional buttons<->conversation swap (see switchTo) since
-      // that's not really "closed", just changing shape.
+      pipWindow.document.title = "방금그거뭐였지 · 캡처와 대화";
+      pipWindow.document.body.style.cssText = "margin:0;background:#101110;color-scheme:dark";
+      setPipContainer(pipWindow.document.body);
+      setPipOpen(true);
       pipWindow.addEventListener("pagehide", () => {
-        if (pipSwitchingRef.current) return;
+        if (pipWindowRef.current !== pipWindow) return;
         pipWindowRef.current = null;
+        setPipContainer(null);
         setPipOpen(false);
       }, { once: true });
-      setPipOpen(true);
     } catch (reason) {
       setPipMessage(reason instanceof Error ? reason.message : "떠 있는 캡처 창을 열지 못했습니다.");
       setPipOpen(false);
@@ -585,10 +417,9 @@ export function ReplayWorkspace() {
   }, []);
 
   const closeCapturePip = useCallback(() => {
-    pipSwitchingRef.current = false; // a real close always wins over a stray in-flight swap
     pipWindowRef.current?.close();
     pipWindowRef.current = null;
-    pipHistory.current = [];
+    setPipContainer(null);
     setPipOpen(false);
   }, []);
 
@@ -904,6 +735,8 @@ export function ReplayWorkspace() {
     // App._publish_sent_frames, which reads screen_buffer.py's
     // export_recent() sidecar) -- 0 for a screenshot/region send is
     // genuinely "just now", not a placeholder.
+    // Mirror an external companion event into the shared capture preview.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (companionSentFrames.length) setFrames(companionSentFrames);
   }, [companionSentFrames]);
 
@@ -1027,6 +860,7 @@ export function ReplayWorkspace() {
 
   return (
     <main className={styles.shell}>
+      {pipContainer && createPortal(<BrowserCapturePanel key={stream?.id ?? "idle"} active={Boolean(stream)} busy={status === "preparing" || status === "analyzing"} elapsed={elapsed} retention={retention} seconds={sendSeconds} highlight={proactiveDetectionEnabled ? highlight : null} snapshot={snapshot} analyze={analyzeWithOpenAI} />, pipContainer)}
       <header className={styles.nav}>
         <a className={styles.brand} href="#top" aria-label="방금그거뭐였지 홈"><span className={styles.brandMark} aria-hidden="true">↺</span><span>방금그거뭐였지</span></a>
         <div className={styles.modeSwitch} role="tablist" aria-label="기능 범위 선택">
@@ -1112,6 +946,11 @@ export function ReplayWorkspace() {
           <div className={styles.apiDivider}><span>설치 없이</span><b>화면 바로 확인</b></div>
           <button className={styles.secondary} onClick={() => void analyzeWithOpenAI("replay")} disabled={!stream || status === "analyzing"}><ArrowCounterClockwise size={18} /> 최근 {sendSeconds}초 확인하기</button>
           <button className={styles.secondary} onClick={() => void analyzeWithOpenAI("current")} disabled={!stream || status === "analyzing"}><Camera size={18} /> 지금 화면 확인하기</button>
+          <button className={styles.secondary} disabled={!stream || status === "preparing" || status === "analyzing"} onClick={() => { try { setRegionImage(snapshot()); } catch { setMessage("먼저 화면 공유를 시작해 주세요."); } }}><Target size={18} /> 영역 선택해서 확인하기</button>
+          {regionImage && stream && <RegionCapture image={regionImage} busy={status === "preparing" || status === "analyzing"} onCancel={() => setRegionImage("")} onSend={async (image, question) => {
+            const result = await analyzeWithOpenAI("current", question, [], image);
+            if ("text" in result) setRegionImage("");
+          }} />}
           <div className={styles.status} data-tone={status === "error" ? "error" : status === "done" ? "done" : "normal"}>{status === "analyzing" || status === "preparing" ? <CircleNotch className={styles.spin} size={16} /> : status === "error" ? <WarningCircle size={16} /> : status === "done" ? <Check size={16} /> : <span className={styles.statusDot} />}<div><strong>{stateLabel}</strong><span>{message}</span></div></div>
           <label className={styles.switch}><input type="checkbox" checked={browserGestureEnabled} onChange={(event) => setBrowserGestureEnabled(event.target.checked)} /><span /><b>카메라로 제스처 켜기 (브라우저, 설치 불필요)</b></label>
           {browserGestureEnabled && <div className={`${styles.cameraPanel} ${styles.commandCamera}`} data-connected={browserGestureReady}>
@@ -1128,7 +967,7 @@ export function ReplayWorkspace() {
             </div>
             <small className={styles.gestureError}>탭에 포커스가 있을 때만 동작합니다 — 다른 창으로 전환하면 받지 못합니다. 전역 단축키가 필요하면 AirPointer를 설치해 주세요.</small>
           </>}
-          <label className={styles.switch}><input type="checkbox" checked={pipOpen} disabled={!pipSupported} onChange={(event) => { if (event.target.checked) void openCapturePip("buttons"); else closeCapturePip(); }} /><span /><b><PictureInPicture size={16} /> 항상 위 캡처 버튼 켜기 (브라우저, 설치 불필요)</b></label>
+          <label className={styles.switch}><input type="checkbox" checked={pipOpen} disabled={!pipSupported} onChange={(event) => { if (event.target.checked) void openCapturePip(); else closeCapturePip(); }} /><span /><b><PictureInPicture size={16} /> 항상 위 캡처 버튼 켜기 (브라우저, 설치 불필요)</b></label>
           {!pipSupported && <small className={styles.gestureError}>이 브라우저는 지원하지 않습니다. Chrome 또는 Edge 116 이상에서 사용해 주세요.</small>}
           {pipSupported && !pipMessage && <small className={styles.gestureError}>다른 창에 포커스가 가 있어도 이 작은 창의 버튼은 눌립니다 — 설치 없이 쓸 수 있는 전역 단축키 대안입니다.</small>}
           {pipMessage && <small className={styles.gestureError}>{pipMessage}</small>}

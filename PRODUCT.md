@@ -22,9 +22,22 @@ People working on a PC who see an error, popup, or unexpected screen change and 
 
 Unlike a screenshot shortcut, the product gives an AI the moments immediately before the user asked for help. The core mechanism is disposable local replay, not permanent recording.
 
+## Current Delivery Priority
+
+The competition requires an installation-free core demo. The default public experience is the
+browser workspace plus Document Picture-in-Picture, with no executable, extension, or local agent
+required. Native AirPointer is an optional Windows expansion. Hosted AI analysis still requires
+internet access and a server-side API key.
+
+The PiP workspace shows buffer status and detected before/after images, supports current/replay
+capture and a frozen-preview region picker, and supports text-only follow-up questions. Region
+selection works with pointer dragging or arrow keys (Shift resizes). No images are sent for a
+text-only follow-up; only bounded recent conversation text is included. All browser triggers
+share an in-flight request guard.
+
 ## Operating Context
 
-The user explicitly starts browser screen sharing. One-second recording segments form a bounded local ring buffer. A palm-to-fist gesture shares the current screen; holding an open palm shares recent context. Manual controls provide the same actions for accessibility and demonstrations.
+The user explicitly starts browser screen sharing. One-second recording segments form a bounded local ring buffer. The wired browser gesture is holding an open palm for two seconds to analyze recent context. Manual controls provide the same actions for accessibility and demonstrations.
 
 ## Capabilities and Constraints
 
@@ -44,7 +57,7 @@ The public product name is “방금그거뭐였지”. The Korean voice should 
 
 ## Evidence on Hand
 
-- A working Python AirPointer prototype with hand, wink, gaze, cursor, screen-buffer, and Codex App Server modules exists in this repository.
+- A Python AirPointer companion with hand tracking, hotkeys, screen buffering, and Desktop paste delivery exists in this repository; the active native delivery path uses Desktop paste.
 - Automated tests cover the native interaction and replay logic.
 - No customer testimonials, usage metrics, awards, partner logos, or performance claims exist and must not be fabricated.
 

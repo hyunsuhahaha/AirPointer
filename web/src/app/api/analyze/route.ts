@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
+import { isAnalysisPayload } from "@/lib/analysis-payload";
 
 export const runtime = "nodejs";
 const attempts = new Map<string, number[]>();
@@ -33,13 +34,13 @@ export async function POST(request: Request) {
   if (!process.env.OPENAI_API_KEY) return NextResponse.json({ error: "서버에 OPENAI_API_KEY가 설정되지 않았습니다." }, { status: 503 });
   try {
     const body: unknown = await request.json();
-    if (!isPayload(body)) return NextResponse.json({ error: "전송할 화면 프레임이 올바르지 않습니다." }, { status: 400 });
+    if (!isAnalysisPayload(body)) return NextResponse.json({ error: "화면 또는 후속 질문이 올바르지 않습니다." }, { status: 400 });
     const total = body.frames.reduce((sum, frame) => sum + frame.length, 0);
     if (body.frames.length > 6 || total > MAX_TOTAL_CHARS || body.frames.some((frame) => frame.length > MAX_IMAGE_CHARS)) {
       return NextResponse.json({ error: "프레임 용량이 너무 큽니다." }, { status: 413 });
     }
     const question = body.question?.trim().slice(0, MAX_QUESTION_CHARS);
-    const baseInstruction = body.mode === "replay" ? "시간순으로 캡처된 화면입니다. 방금 어떤 변화가 있었는지, 문제가 보이면 가능한 원인과 바로 할 다음 행동을 한국어로 간결하게 설명하세요." : "현재 화면입니다. 무엇이 보이는지, 문제가 있다면 가능한 원인과 바로 할 다음 행동을 한국어로 간결하게 설명하세요.";
+    const baseInstruction = body.mode === "text" ? "새 화면은 첨부되지 않았습니다. 이전 대화 텍스트를 바탕으로 후속 질문에 한국어로 간결하게 답하세요. 현재 화면이나 이전 이미지를 직접 보고 있다고 말하지 마세요." : body.mode === "replay" ? "시간순으로 캡처된 화면입니다. 방금 어떤 변화가 있었는지, 문제가 보이면 가능한 원인과 바로 할 다음 행동을 한국어로 간결하게 설명하세요." : "현재 화면입니다. 무엇이 보이는지, 문제가 있다면 가능한 원인과 바로 할 다음 행동을 한국어로 간결하게 설명하세요.";
     // The question (if any) is appended to baseInstruction below, not
     // substituted for it -- the base instruction still anchors the model on
     // "describe what happened" even when the user's own question is
@@ -85,18 +86,6 @@ export async function POST(request: Request) {
     console.error("analysis_failed", error instanceof Error ? error.message : "unknown");
     return NextResponse.json({ error: "AI 분석에 실패했습니다. 잠시 후 다시 시도해 주세요." }, { status: 500 });
   }
-}
-
-function isPayload(value: unknown): value is {
-  mode: "current" | "replay"; frames: string[]; question?: string; history?: { role: "user" | "assistant"; text: string }[];
-} {
-  if (!value || typeof value !== "object") return false;
-  const body = value as Record<string, unknown>;
-  return (body.mode === "current" || body.mode === "replay") && Array.isArray(body.frames) && body.frames.length > 0
-    && body.frames.every((frame) => typeof frame === "string" && /^data:image\/(jpeg|png);base64,/.test(frame))
-    && (body.question === undefined || typeof body.question === "string")
-    && (body.history === undefined || (Array.isArray(body.history) && body.history.every((turn) =>
-      turn && typeof turn === "object" && (turn.role === "user" || turn.role === "assistant") && typeof turn.text === "string")));
 }
 
 function allow(ip: string) {
