@@ -97,7 +97,7 @@ export function ScreenMemoryWorkbench({ recording, companionConnected, companion
     ];
     for (let index = 0; index < samples.length; index += 1) {
       const sample = samples[index];
-      const image = demoFrameAtOffset(index % 2 ? "runtime" : "payment", index % 2 ? -6 : -5.5, "queried-frame", now + sample.offset * 1_000);
+      const image = demoFrameAtOffset(index % 2 ? "worktree" : "migration", index % 2 ? -6 : -5.5, "queried-frame", now + sample.offset * 1_000);
       await saveScreenMemoryFrame({ capturedAt: now + sample.offset * 1_000, imageUrl: image.url, text: sample.text, source: "demo", surface: "browser", width: 1440, height: 900, bookmarked: index === 1 || index === 2, note: sample.note, tags: sample.tags });
     }
     setMessage("샘플 기록을 넣었습니다. 검색과 시간여행을 바로 눌러보세요.");

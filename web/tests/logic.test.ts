@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { GestureCommandDetector, RegionSelectionDetector } from "../src/lib/gesture.ts";
-import { evenlySpaced, replayPointsAtOffsets, selectNotable, surroundingReplayOffsets, withReplayBookmarks } from "../src/lib/replay-buffer.ts";
+import { evenlySpaced, replayGapOffsets, replayPointsAtOffsets, selectNotable, surroundingReplayOffsets, withReplayBookmarks } from "../src/lib/replay-buffer.ts";
 import { DEMO_SCENARIOS, demoFrameState } from "../src/lib/demo-replay.ts";
 import { formatReplayRange, replayExplorationRequestsFrom } from "../src/lib/replay-frame-request.ts";
 import { sensitiveCategory } from "../src/lib/privacy-redaction.ts";
@@ -129,6 +129,11 @@ test("AI가 대표 프레임 사이의 시점을 요청하면 브라우저 로�
   assert.deepEqual(replayPointsAtOffsets(segments, 3_000, [-1.5]), [{ segmentIndex: 0, ratio: 0.5, capturedAt: 1_500, offsetSeconds: -1.5 }]);
 });
 
+test("AI가 기존 프레임만 다시 요청하면 가장 큰 미탐색 간격을 보완한다", () => {
+  const frames = [5.46, 5.21, 3.16, 1.4, 0.39, 0.14].map((atSeconds) => ({ url: "", atSeconds }));
+  assert.deepEqual(replayGapOffsets(frames, 3), [-4.185, -2.28, -0.895]);
+});
+
 test("60초 체험 리플레이의 오류는 0.5초 동안만 존재한다", () => {
   assert.equal(demoFrameState(-6.26), "building");
   assert.equal(demoFrameState(-6.24), "error");
@@ -136,8 +141,8 @@ test("60초 체험 리플레이의 오류는 0.5초 동안만 존재한다", () 
   assert.equal(demoFrameState(-5.74), "failed");
 });
 
-test("모든 체험 시나리오는 같은 0.5초 탐색 창과 사용자 질문을 사용한다", () => {
-  assert.deepEqual(DEMO_SCENARIOS.map(({ id }) => id), ["runtime", "payment", "inventory", "meeting"]);
-  assert.ok(DEMO_SCENARIOS.every(({ question, focusBox }) => question.length > 10 && focusBox.every((value) => value >= 0 && value <= 1)));
+test("모든 체험 시나리오는 재현 가능한 실제 실행 녹화와 사용자 질문을 사용한다", () => {
+  assert.deepEqual(DEMO_SCENARIOS.map(({ id }) => id), ["worktree", "migration", "test"]);
+  assert.ok(DEMO_SCENARIOS.every(({ question, focusBox, video, proof }) => question.length > 10 && focusBox.every((value) => value >= 0 && value <= 1) && video.endsWith(".webm") && proof.includes("실제")));
   assert.equal(new Set(DEMO_SCENARIOS.map(({ question }) => question)).size, DEMO_SCENARIOS.length);
 });

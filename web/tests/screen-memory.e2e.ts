@@ -11,6 +11,8 @@ for (const viewport of [
   test(`screen memory's six features are usable at ${viewport.name} width`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await page.goto(APP_URL);
+    await page.getByRole("tab", { name: "확장 기능" }).click();
+    await page.getByText("화면 기록을 이 브라우저에 영구 보관 (선택)", { exact: true }).click();
     const workbench = page.getByRole("region", { name: "화면을 찾고, 되감고, 기록합니다." });
     await workbench.scrollIntoViewIfNeeded();
     await expect(workbench.getByRole("button", { name: /화면 검색/ })).toBeVisible();

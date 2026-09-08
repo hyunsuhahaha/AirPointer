@@ -464,6 +464,12 @@ export function evenlySpaced<T>(items: T[], count: number): T[] {
   return Array.from({ length: count }, (_, index) => items[Math.round((index * (items.length - 1)) / (count - 1))]);
 }
 
+export function replayGapOffsets(frames: Pick<OverviewFrame, "atSeconds">[], count = 3): number[] {
+  const ages = [...new Set(frames.map((frame) => frame.atSeconds).filter((age) => Number.isFinite(age) && age >= 0))].sort((a, b) => a - b);
+  return ages.slice(1).map((age, index) => ({ gap: age - ages[index], offset: -Number(((age + ages[index]) / 2).toFixed(3)) }))
+    .sort((a, b) => b.gap - a.gap).slice(0, Math.max(0, count)).map(({ offset }) => offset);
+}
+
 export function frameFromVideo(video: HTMLVideoElement, quality = 0.76): string {
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(1, video.videoWidth);

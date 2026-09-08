@@ -17,10 +17,10 @@ export type EvidenceItem = { claim: string; frame: OverviewFrame; timeline?: Ove
 export type AnalysisTiming = { totalMs: number; captureMs: number; privacyMs: number; apiMs: number; replayMs: number; evidenceMs: number };
 export type ExplorationProgress = { active: boolean; usedFrames: number; frameBudget: number; round: number; maxRounds: number; steps: { label: string; detail: string; added: number; status?: "working" | "done" }[]; timing?: AnalysisTiming };
 export type Analyze = (mode: AnalysisMode, question?: string, history?: ConversationTurn[], image?: CaptureSnapshot, model?: AnalysisModelId) => Promise<{ text: string; captureContext?: string; evidence?: EvidenceItem[]; exploration?: ExplorationProgress; privacy?: PrivacyReport } | { error: string }>;
-export function RegionCapture({ image, busy, onSend, onCancel }: {
-  image: CaptureSnapshot; busy: boolean; onSend: (image: CaptureSnapshot, question: string) => Promise<void>; onCancel: () => void;
+export function RegionCapture({ image, busy, fullScreenByDefault = false, onSend, onCancel }: {
+  image: CaptureSnapshot; busy: boolean; fullScreenByDefault?: boolean; onSend: (image: CaptureSnapshot, question: string) => Promise<void>; onCancel: () => void;
 }) {
-  const [box, setBox] = useState<[number, number, number, number]>([0.25, 0.25, 0.75, 0.75]);
+  const [box, setBox] = useState<[number, number, number, number]>(fullScreenByDefault ? [0, 0, 1, 1] : [0.25, 0.25, 0.75, 0.75]);
   const drag = useRef<
     | { mode: "draw"; anchor: [number, number] }
     | { mode: "move"; anchor: [number, number]; box: [number, number, number, number] }
@@ -30,12 +30,13 @@ export function RegionCapture({ image, busy, onSend, onCancel }: {
   const [error, setError] = useState("");
   const [preparing, setPreparing] = useState(false);
   const locked = busy || preparing;
+  const fullScreen = box[0] === 0 && box[1] === 0 && box[2] === 1 && box[3] === 1;
   const position = (event: React.PointerEvent<HTMLDivElement>): [number, number] => {
     const rect = event.currentTarget.getBoundingClientRect();
     return [Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)), Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height))];
   };
-  return <section aria-label="캡처 영역 선택" className={styles.region}>
-    <div className={styles.regionHeading}><strong>영역 선택</strong><span>드래그로 영역 선택</span></div>
+  return <section aria-label={fullScreenByDefault ? "분석할 화면 선택" : "캡처 영역 선택"} className={styles.region}>
+    <div className={styles.regionHeading}><strong>{fullScreenByDefault ? "화면 선택" : "영역 선택"}</strong><span>{fullScreen ? "전체 화면 선택됨" : "드래그로 영역 선택"}</span></div>
     <div tabIndex={0} role="group" aria-label="선택 영역: 경계선을 드래그하거나 방향키로 이동, Shift와 방향키로 크기 조절" className={styles.regionCanvas}
       onPointerDown={(event) => {
         if (locked || event.button !== 0) return;
@@ -81,15 +82,15 @@ export function RegionCapture({ image, busy, onSend, onCancel }: {
         <i aria-hidden="true" data-selection-move="true" className={`${styles.selectionMoveEdge} ${styles.selectionMoveLeft}`} />
       </span>
     </div>
-    <p className={styles.regionHint}>경계선을 드래그해 이동 · 방향키로 이동 · Shift + 방향키로 크기 조절</p>
-    <input aria-label="선택 영역에 대한 질문" aria-required="true" placeholder="무엇을 확인할까요?" value={question} maxLength={500} disabled={locked} onChange={(event) => setQuestion(event.target.value)} className={styles.regionInput} />
+    <p className={styles.regionHint}>{fullScreenByDefault ? "전체 화면이 기본 선택됩니다 · 드래그로 새 영역 선택 · 방향키로 이동" : "경계선을 드래그해 이동 · 방향키로 이동 · Shift + 방향키로 크기 조절"}</p>
+    <input aria-label="선택 화면에 대한 질문" aria-required="true" placeholder="무엇을 확인할까요?" value={question} maxLength={500} disabled={locked} onChange={(event) => setQuestion(event.target.value)} className={styles.regionInput} />
     <div className={styles.regionActions}>
       <button className={styles.regionSubmit} disabled={locked || !question.trim() || box[2] - box[0] < 0.01 || box[3] - box[1] < 0.01} onClick={async () => {
         setPreparing(true); setError("");
-        try { await onSend({ ...image, url: await cropRegion(image.url, box, 0), selection: box }, question); }
+        try { await onSend(fullScreen ? image : { ...image, url: await cropRegion(image.url, box, 0), selection: box }, question); }
         catch { setError("영역을 준비하지 못했습니다. 다시 선택해 주세요."); }
         finally { setPreparing(false); }
-      }}>{locked ? <CircleNotch className={styles.spinner} size={15} /> : <FrameCorners size={15} />}{locked ? "처리 중…" : "선택 영역 분석"}</button>
+      }}>{locked ? <CircleNotch className={styles.spinner} size={15} /> : fullScreen ? <Camera size={15} /> : <FrameCorners size={15} />}{locked ? "처리 중…" : fullScreen ? "전체 화면 분석" : "선택 영역 분석"}</button>
       <button className={styles.secondary} disabled={locked} onClick={onCancel}>취소</button>
     </div>
     {error && <p role="alert" className={styles.error}>{error}</p>}
@@ -153,21 +154,21 @@ export function EvidenceTimeMachine({ evidence, onClose }: { evidence: EvidenceI
 
 type DisplayTurn = ConversationTurn & { source?: string; captureContext?: string; evidence?: EvidenceItem[]; exploration?: ExplorationProgress };
 
-export function BrowserCapturePanel({ active, busy, elapsed, retention, seconds, onSecondsChange, bookmarkCount, bookmarkEnabled, onBookmark, frames, highlight, exploration, snapshot, analyze, initialExpanded = false, demoMode = "idle", demoQuestion = "", privacyEnabled, onPrivacyEnabledChange, privacyZone, onPrivacyZoneChange, privacyReport }: {
+export function BrowserCapturePanel({ active, busy, elapsed, retention, seconds, onSecondsChange, bookmarkCount, bookmarkEnabled, onBookmark, frames, highlight, exploration, snapshot, analyze, initialExpanded = false, demoMode = "idle", demoQuestion = "", demoAnswer = "", demoEvidence = [], demoCaptureContext = "", privacyEnabled, onPrivacyEnabledChange, privacyZone, onPrivacyZoneChange, privacyReport }: {
   active: boolean; busy: boolean; elapsed: number; retention: number; seconds: number;
   onSecondsChange: (seconds: number) => void;
   bookmarkCount: number; bookmarkEnabled: boolean; onBookmark: () => void;
   frames: OverviewFrame[]; highlight: ChangeHighlight | null; exploration?: ExplorationProgress; snapshot: () => CaptureSnapshot; analyze: Analyze;
-  initialExpanded?: boolean; demoMode?: "idle" | "playing" | "ready"; demoQuestion?: string;
+  initialExpanded?: boolean; demoMode?: "idle" | "playing" | "ready"; demoQuestion?: string; demoAnswer?: string; demoEvidence?: EvidenceItem[]; demoCaptureContext?: string;
   privacyEnabled: boolean; onPrivacyEnabledChange: (enabled: boolean) => void; privacyZone?: NormalizedBox; onPrivacyZoneChange: (box?: NormalizedBox) => void; privacyReport?: PrivacyReport;
 }) {
   const [history, setHistory] = useState<DisplayTurn[]>([]);
-  const [question, setQuestion] = useState(demoMode === "ready" ? demoQuestion : "");
+  const [question, setQuestion] = useState("");
   const [region, setRegion] = useState<CaptureSnapshot | null>(null);
   const [error, setError] = useState("");
   const [pending, setPending] = useState<DisplayTurn | null>(null);
   const [expanded, setExpanded] = useState(initialExpanded);
-  const [captureMode, setCaptureMode] = useState<"current" | "replay" | null>(demoMode === "ready" ? "replay" : null);
+  const [captureMode, setCaptureMode] = useState<"replay" | null>(demoMode === "ready" ? "replay" : null);
   const [model, setModel] = useState<AnalysisModelId>(() => {
     const saved = typeof window === "undefined" ? null : window.localStorage.getItem("airpointer-analysis-model");
     return ANALYSIS_MODELS.some((option) => option.id === saved) ? saved as AnalysisModelId : "gpt-5.4-mini";
@@ -184,8 +185,8 @@ export function BrowserCapturePanel({ active, busy, elapsed, retention, seconds,
     setExpanded(open);
     try { panel.current?.ownerDocument.defaultView?.resizeTo(open ? 380 : 320, open ? 560 : 120); } catch { /* The browser owns PiP window placement. */ }
   };
-  const selectCapture = (mode: "current" | "replay") => {
-    setCaptureMode((selected) => selected === mode ? null : mode);
+  const selectReplay = () => {
+    setCaptureMode((selected) => selected === "replay" ? null : "replay");
     setRegion(null); setError(""); resize(true);
     panel.current?.ownerDocument.defaultView?.requestAnimationFrame(() => composer.current?.focus());
   };
@@ -203,7 +204,7 @@ export function BrowserCapturePanel({ active, busy, elapsed, retention, seconds,
     if (!prompt || (mode === "text" && !history.length)) return;
     resize(true);
     inFlight.current = true; setError("");
-    const source = image ? "선택 영역" : mode === "current" ? "현재 화면" : mode === "replay" ? `최근 ${seconds}초 리플레이` : undefined;
+    const source = image?.selection ? "선택 영역" : mode === "current" ? "현재 화면" : mode === "replay" ? `최근 ${seconds}초 리플레이` : undefined;
     const turn: DisplayTurn = { role: "user", text: prompt, source };
     setPending(turn);
     try {
@@ -218,11 +219,15 @@ export function BrowserCapturePanel({ active, busy, elapsed, retention, seconds,
       inFlight.current = false; setPending(null);
     }
   };
-  const captureRegion = () => {
+  const captureScreen = () => {
     try { setCaptureMode(null); setRegion(snapshot()); setError(""); resize(true); }
     catch { setError("화면을 준비하지 못했어요. 화면 공유 상태를 확인해 주세요."); }
   };
-  const turns = pending ? [...history, pending] : history;
+  const demoTurns: DisplayTurn[] = demoMode !== "idle" && demoQuestion && !history.length ? [
+    { role: "user", text: demoQuestion, source: `오류 감지 후 자동 질문 · 최근 ${seconds}초 리플레이` },
+    ...(demoAnswer ? [{ role: "assistant" as const, text: demoAnswer, evidence: demoEvidence, exploration, captureContext: demoCaptureContext }] : []),
+  ] : [];
+  const turns = pending ? [...history, pending] : history.length ? history : demoTurns;
   return <main ref={panel} className={styles.panel} data-expanded={expanded}>
     <header className={styles.header}>
       <div className={styles.headerContext}>
@@ -254,9 +259,8 @@ export function BrowserCapturePanel({ active, busy, elapsed, retention, seconds,
       </div>
     </header>
     <div className={styles.actions} aria-label="화면 캡처">
-      <button className={styles.replay} disabled={!active || locked} aria-label="최근 리플레이 첨부" aria-pressed={captureMode === "replay"} title={`최근 ${seconds}초 첨부`} onClick={() => selectCapture("replay")}><span className={styles.replayLabel}><ArrowCounterClockwise size={17} weight="bold" />리플레이</span></button>
-      <button className={styles.secondary} disabled={!active || locked} aria-pressed={captureMode === "current"} onClick={() => selectCapture("current")}><Camera size={15} />화면</button>
-      <button className={styles.secondary} disabled={!active || locked} onClick={captureRegion}><FrameCorners size={15} />영역</button>
+      <button className={styles.replay} disabled={!active || locked} aria-label="최근 리플레이 첨부" aria-pressed={captureMode === "replay"} title={`최근 ${seconds}초 첨부`} onClick={selectReplay}><span className={styles.replayLabel}><ArrowCounterClockwise size={17} weight="bold" />리플레이</span></button>
+      <button className={styles.secondary} disabled={!active || locked} aria-label="현재 화면 선택" onClick={captureScreen}><Camera size={15} />화면</button>
       <button className={`${styles.secondary} ${styles.bookmarkAction}`} disabled={!bookmarkEnabled} aria-label={`현재 시점 북마크${bookmarkCount ? ` · ${bookmarkCount}개 저장됨` : ""}`} title="현재 화면을 별도 저장해 다음 리플레이에 추가" onClick={onBookmark}><BookmarkSimple size={15} weight={bookmarkCount ? "fill" : "regular"} />북마크{bookmarkCount ? <span>{bookmarkCount}</span> : null}</button>
     </div>
     {expanded && <>
@@ -285,8 +289,8 @@ export function BrowserCapturePanel({ active, busy, elapsed, retention, seconds,
           </div>
         </details>}
         {exploration?.active && !region && <ExplorationMeter value={exploration} />}
-        {privacyImage ? <PrivacyZoneEditor image={privacyImage} value={privacyZone} onCancel={() => setPrivacyImage(null)} onSave={(box) => { onPrivacyZoneChange(box); setPrivacyImage(null); }} /> : region && active ? <RegionCapture image={region} busy={locked} onCancel={() => setRegion(null)} onSend={(image, prompt) => send("current", image, prompt)} /> : <>
-          {!turns.length && demoMode === "playing" && <div className={`${styles.empty} ${styles.demoEmpty}`} role="status"><CircleNotch className={styles.spinner} size={20} /><strong>60초 샘플 재생 중</strong><p>0.5초짜리 핵심 단서가 지나가면 질문이 자동으로 준비됩니다.</p></div>}
+        {privacyImage ? <PrivacyZoneEditor image={privacyImage} value={privacyZone} onCancel={() => setPrivacyImage(null)} onSave={(box) => { onPrivacyZoneChange(box); setPrivacyImage(null); }} /> : region && active ? <RegionCapture image={region} busy={locked} fullScreenByDefault onCancel={() => setRegion(null)} onSend={(image, prompt) => send("current", image, prompt)} /> : <>
+          {!turns.length && demoMode === "playing" && <div className={`${styles.empty} ${styles.demoEmpty}`} role="status"><CircleNotch className={styles.spinner} size={20} /><strong>실행 결과 녹화 재생 중</strong><p>재생이 끝나면 화면 기록만으로 원인을 탐색합니다.</p></div>}
           {!turns.length && !locked && demoMode !== "playing" && <div className={styles.empty}><p>{active ? "화면을 선택하면 분석 결과가 표시됩니다." : "메인 탭에서 화면 공유를 시작하세요."}</p></div>}
           <div className={styles.conversation} role="log" aria-label="AI 대화" aria-live="polite" aria-busy={locked}>
             {turns.map((turn, index) => <article key={index} className={`${styles.turn} ${turn.role === "user" ? styles.userTurn : styles.answer}`} aria-label={turn.role === "user" ? "내 질문" : "AI 답변"}>
@@ -312,10 +316,10 @@ export function BrowserCapturePanel({ active, busy, elapsed, retention, seconds,
       </div>
       {!region && !privacyImage && <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(captureMode ?? "text"); }}>
         <div className={styles.inputBox}>
-          <textarea ref={composer} aria-label="AI에게 질문" placeholder={captureMode === "replay" ? `최근 ${seconds}초에서 무엇을 확인할까요?` : captureMode === "current" ? "현재 화면에서 무엇을 확인할까요?" : history.length ? "후속 질문" : "먼저 화면을 선택하세요"} maxLength={500} value={question} disabled={locked} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && question.trim() && (captureMode || history.length)) { event.preventDefault(); void send(captureMode ?? "text"); } }} />
-          <button className={styles.send} disabled={locked || !question.trim() || (!captureMode && !history.length)} type="submit" aria-label={captureMode ? `${captureMode === "replay" ? `최근 ${seconds}초 리플레이와` : "현재 화면과"} 질문 보내기` : "질문만 보내기 · 화면 첨부 없음"} title="보내기"><ArrowUp size={17} weight="bold" /></button>
+          <textarea ref={composer} aria-label="AI에게 질문" placeholder={captureMode === "replay" ? `최근 ${seconds}초에서 무엇을 확인할까요?` : history.length ? "후속 질문" : "먼저 화면을 선택하세요"} maxLength={500} value={question} disabled={locked} onChange={(event) => setQuestion(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && question.trim() && (captureMode || history.length)) { event.preventDefault(); void send(captureMode ?? "text"); } }} />
+          <button className={styles.send} disabled={locked || !question.trim() || (!captureMode && !history.length)} type="submit" aria-label={captureMode ? `최근 ${seconds}초 리플레이와 질문 보내기` : "질문만 보내기 · 화면 첨부 없음"} title="보내기"><ArrowUp size={17} weight="bold" /></button>
         </div>
-        <div className={styles.composerHint}><span className={styles.privacy}><LockSimple size={10} />{captureMode === "replay" ? `최근 ${seconds}초 리플레이 선택됨` : captureMode === "current" ? "현재 화면 선택됨" : history.length ? "텍스트만 전송" : "화면 선택 후 질문 입력"}</span><span>Shift ↵ 줄바꿈</span></div>
+        <div className={styles.composerHint}><span className={styles.privacy}><LockSimple size={10} />{captureMode === "replay" ? `최근 ${seconds}초 리플레이 선택됨` : history.length ? "텍스트만 전송" : "화면 선택 후 질문 입력"}</span><span>Shift ↵ 줄바꿈</span></div>
       </form>}
     </>}
     {previewImage && <div className={styles.lightbox} role="dialog" aria-modal="true" aria-label="화면 크게 보기" onClick={() => setPreviewImage(null)}>

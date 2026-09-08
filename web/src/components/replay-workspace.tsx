@@ -9,9 +9,9 @@ import { useCompanionGesture } from "@/hooks/use-companion-gesture";
 import type { HotkeyBindings } from "@/hooks/use-companion-gesture";
 import { useBrowserHandGesture } from "@/hooks/use-browser-gesture";
 import type { GestureCommand } from "@/lib/gesture";
-import { BrowserReplayBuffer, cropRegion, frameFromVideo, surroundingReplayOffsets, withReplayBookmarks } from "@/lib/replay-buffer";
+import { BrowserReplayBuffer, cropRegion, frameFromVideo, replayGapOffsets, surroundingReplayOffsets, withReplayBookmarks } from "@/lib/replay-buffer";
 import type { ChangeHighlight, NormalizedBox, OverviewFrame, ReplayCapsule } from "@/lib/replay-buffer";
-import { DEMO_OVERVIEW_OFFSETS, demoFrameAtOffset, demoFrameState, demoFramesAtOffsets, demoScenario } from "@/lib/demo-replay";
+import { DEMO_INCIDENT_CUE_SECONDS, DEMO_OVERVIEW_OFFSETS, DEMO_SCENARIOS, demoFrameAtOffset, demoFramesAtOffsets, demoScenario } from "@/lib/demo-replay";
 import type { DemoScenarioId } from "@/lib/demo-replay";
 import { createPrivacyRedactor } from "@/lib/privacy-redaction";
 import type { PrivacyReport } from "@/lib/privacy-redaction";
@@ -23,8 +23,8 @@ import type { ReplayExplorationRequest } from "@/lib/replay-frame-request";
 import type { PromptTemplate } from "@/lib/prompt-template";
 import styles from "./replay-workspace.module.css";
 import { BrowserCapturePanel, EvidenceTimeMachine, PrivacyZoneEditor, RegionCapture } from "./browser-capture-panel";
-import { InteractiveCase } from "./interactive-case";
 import type { InteractiveReplay } from "@/lib/interactive-replay";
+import { RecordedDemoPlayer } from "./recorded-demo-player";
 import { IncidentReview } from "./incident-review";
 import type { Incident } from "@/lib/incident-report";
 import { ScreenMemoryWorkbench } from "./screen-memory-workbench";
@@ -127,7 +127,6 @@ const STAGE_MIN_HEIGHT = 220;
 const REPLAY_FRAME_BUDGET = 18;
 const MAX_REPLAY_BOOKMARKS = 6;
 const REPLAY_MAX_ROUNDS = 6;
-const DEMO_PLAYBACK_MS = 8_000;
 
 const RESIZE_DIRS: { dir: ResizeDir; label: string }[] = [
   { dir: "n", label: "위쪽" },
@@ -199,8 +198,9 @@ export function ReplayWorkspace() {
   const [privacyImage, setPrivacyImage] = useState<CaptureSnapshot | null>(null);
   const [demoMode, setDemoMode] = useState<"idle" | "playing" | "ready">("idle");
   const [demoElapsed, setDemoElapsed] = useState(0);
-  const [demoScenarioId, setDemoScenarioId] = useState<DemoScenarioId>("runtime");
-  const [demoQuestion, setDemoQuestion] = useState(demoScenario("runtime").question);
+  const [demoPipVisible, setDemoPipVisible] = useState(false);
+  const [demoScenarioId, setDemoScenarioId] = useState<DemoScenarioId>("worktree");
+  const [demoQuestion, setDemoQuestion] = useState(demoScenario("worktree").question);
   // "방금 뭐가 바뀌었나" highlight card -- the single most notable detected
   // change in the send window, as a before/after pair plus a zoomed crop.
   // Recomputed on a timer (see the effect near `elapsed` below), not on
@@ -266,6 +266,7 @@ export function ReplayWorkspace() {
   // the visible switch remains only as a close/retry control.
   const pipWindowRef = useRef<Window | null>(null);
   const openCapturePipRef = useRef<(expanded?: boolean) => Promise<boolean>>(async () => false);
+  const demoPipRequested = useRef(false);
   const [pipSupported, setPipSupported] = useState(false);
   const [pipOpen, setPipOpen] = useState(false);
   const [pipMessage, setPipMessage] = useState("");
@@ -380,26 +381,11 @@ export function ReplayWorkspace() {
 
   const stopDemo = useCallback(() => {
     analysisController.current?.abort(); retryCapture.current = null; replayCapsuleRef.current = null;
-    setInteractiveReplay(null); setAutoAnalyze(false); setDemoArmed(false); setDemoMode("idle"); setDemoElapsed(0); setFrames([]); setAnalysis(""); setIncident(undefined); setCaptureContext("");
+    demoPipRequested.current = false;
+    setInteractiveReplay(null); setAutoAnalyze(false); setDemoArmed(false); setDemoMode("idle"); setDemoElapsed(0); setDemoPipVisible(false); setFrames([]); setAnalysis(""); setIncident(undefined); setCaptureContext("");
     setAnalysisEvidence([]); setAnalysisEvidencePreview(null); setExploration(undefined); setPrivacyReport(undefined);
     setStatus("idle"); setMessage("화면 공유를 시작하면 최근 장면이 이 기기에만 쌓입니다.");
   }, []);
-
-  useEffect(() => {
-    if (demoMode !== "playing") return;
-    const startedAt = performance.now();
-    let animationFrame = 0;
-    const tick = (now: number) => {
-      const next = Math.min(DEMO_PLAYBACK_MS, now - startedAt);
-      setDemoElapsed(next);
-      if (next >= DEMO_PLAYBACK_MS) {
-        setDemoMode("ready"); setStatus("recording"); setMessage("샘플 리플레이가 준비됐습니다. 방금 사라진 오류를 AI에게 물어보세요."); return;
-      }
-      animationFrame = window.requestAnimationFrame(tick);
-    };
-    animationFrame = window.requestAnimationFrame(tick);
-    return () => window.cancelAnimationFrame(animationFrame);
-  }, [demoMode]);
 
   const startSharing = useCallback(async () => {
     analysisController.current?.abort(); retryCapture.current = null;
@@ -407,7 +393,7 @@ export function ReplayWorkspace() {
       setStatus("error"); setMessage("이 브라우저는 화면 공유를 지원하지 않습니다. 최신 Chrome 또는 Edge를 사용해 주세요."); return;
     }
     try {
-      setInteractiveReplay(null); setAutoAnalyze(false); setDemoArmed(false); setDemoMode("idle"); setDemoElapsed(0);
+      setInteractiveReplay(null); setAutoAnalyze(false); setDemoArmed(false); setDemoMode("idle"); setDemoElapsed(0); setDemoPipVisible(false);
       const nextStream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 15, max: 24 } }, audio: false });
       if (!screenVideo.current) return;
       // Chrome restores transient activation after the display picker closes.
@@ -573,11 +559,16 @@ export function ReplayWorkspace() {
         for (const request of data.explorationRequests) {
           if (additions.length >= remaining) break;
           if (request.type === "frames") {
-            const offsets = request.offsetsSeconds.filter((offset) => {
+            let offsets = request.offsetsSeconds.filter((offset) => {
               const signature = `frame:${offset.toFixed(3)}`;
               if (requestSignatures.has(signature) || analyzedFrames.some((frame) => Math.abs(frame.atSeconds - Math.abs(offset)) < 0.04)) return false;
               requestSignatures.add(signature); return true;
             }).slice(0, remaining - additions.length);
+            if (!offsets.length) offsets = replayGapOffsets(analyzedFrames, Math.min(3, remaining - additions.length)).filter((offset) => {
+              const signature = `frame:${offset.toFixed(3)}`;
+              if (requestSignatures.has(signature)) return false;
+              requestSignatures.add(signature); return true;
+            });
             if (!offsets.length) continue;
             setMessage(`AI가 ${offsets.map((offset) => `${offset}초`).join(", ")} 구간을 더 촘촘히 탐색하고 있습니다.`);
             const found = demoMode !== "idle" ? (interactiveReplay ? interactiveReplay.atOffsets(offsets) : demoFramesAtOffsets(demoScenarioId, offsets)) : replayCapsuleRef.current ? await buffer.current.framesAtOffsets(replayCapsuleRef.current, offsets) : [];
@@ -732,14 +723,32 @@ export function ReplayWorkspace() {
   }, []);
   useEffect(() => { openCapturePipRef.current = openCapturePip; }, [openCapturePip]);
 
-  const startDemo = useCallback(async () => {
+  const startDemo = useCallback((scenarioId: DemoScenarioId) => {
     analysisController.current?.abort(); retryCapture.current = null;
-    setInteractiveReplay(null); setDemoArmed(false);
-    setDemoMode("playing"); setDemoElapsed(0); setDemoQuestion(demoScenario(demoScenarioId).question);
-    setSendSeconds(60); setRetention(1); setFrames([]); setAnalysis(""); setIncident(undefined); setCaptureContext("");
+    demoPipRequested.current = false;
+    setDemoScenarioId(scenarioId); setInteractiveReplay(null); setDemoArmed(false);
+    setDemoMode("playing"); setDemoElapsed(0); setDemoPipVisible(false); setDemoQuestion(demoScenario(scenarioId).question);
+    setSendSeconds(10); setRetention(1); setFrames([]); setAnalysis(""); setIncident(undefined); setCaptureContext("");
     setAnalysisEvidence([]); setAnalysisEvidencePreview(null); setExploration(undefined); setPrivacyReport(undefined);
-    setStatus("recording"); setMessage("60초 작업 화면을 압축 재생 중입니다. 0.5초짜리 오류를 놓치지 마세요.");
-  }, [demoScenarioId]);
+    setStatus("recording"); setMessage("실제 개발환경 녹화를 재생 중입니다. 끝나면 AI가 자동으로 리플레이를 탐색합니다.");
+  }, []);
+
+  const handleRecordedDemoProgress = useCallback((seconds: number) => {
+    setDemoElapsed(seconds * 1000);
+    if (seconds < DEMO_INCIDENT_CUE_SECONDS || demoPipRequested.current) return;
+    demoPipRequested.current = true;
+    void openCapturePipRef.current(true).then((opened) => {
+      if (!opened) setDemoPipVisible(true);
+    });
+  }, []);
+  const handleRecordedDemoReady = useCallback((replay: InteractiveReplay) => {
+    setInteractiveReplay(replay); setDemoMode("ready"); setDemoElapsed(replay.seconds * 1000);
+    setSendSeconds(Math.ceil(replay.seconds)); setFrames(replay.overview()); setStatus("recording");
+    setMessage("녹화 재생이 끝났습니다. AI가 화면 기록만 보고 원인을 탐색합니다."); setAutoAnalyze(true);
+  }, []);
+  const handleRecordedDemoError = useCallback(() => {
+    setDemoMode("ready"); setStatus("error"); setMessage("개발환경 녹화를 불러오지 못했습니다. 다시 체험해 주세요.");
+  }, []);
 
   const closeCapturePip = useCallback(() => {
     pipWindowRef.current?.close();
@@ -1187,10 +1196,9 @@ export function ReplayWorkspace() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [cancelPendingCapture, pendingCapture]);
   const demoActive = demoMode !== "idle";
-  const demoVisualState: ReturnType<typeof demoFrameState> = demoElapsed < 2_200 ? "editing" : demoElapsed < 4_700 ? "building" : demoElapsed < 5_200 ? "error" : "failed";
   const selectedDemo = demoScenario(demoScenarioId);
-  const demoVisualFrame = useMemo(() => interactiveReplay ? interactiveReplay.atOffsets([0])[0] : demoActive ? demoFrameAtOffset(demoScenarioId, { editing: -30, building: -8, error: -6, failed: -0.05 }[demoVisualState]) : null, [demoActive, demoScenarioId, demoVisualState, interactiveReplay]);
-  const effectiveElapsed = interactiveReplay ? interactiveReplay.seconds * 1000 : demoActive ? (demoElapsed / DEMO_PLAYBACK_MS) * 60_000 : elapsed;
+  const demoIncidentVisible = demoActive && (demoMode !== "playing" || demoElapsed >= DEMO_INCIDENT_CUE_SECONDS * 1_000);
+  const effectiveElapsed = interactiveReplay ? interactiveReplay.seconds * 1000 : demoActive ? demoElapsed : elapsed;
   const bufferPercent = Math.min(100, (effectiveElapsed / (retention * 60_000)) * 100);
   const timeLabel = formatDuration(effectiveElapsed);
   const stateLabel = useMemo(() => ({ idle: "대기", recording: "로컬 기록 중", preparing: "프레임 준비", analyzing: "AI 분석 중", done: "분석 완료", error: "확인 필요" })[status], [status]);
@@ -1217,6 +1225,7 @@ export function ReplayWorkspace() {
   const dockLoadingLabel = hotkeyMode ? "AirPointer 시작 중" : companionConnected ? "카메라 준비 중" : "AirPointer 연결 중";
   const dockBadgeLabel = gestureEnabled && companionReady ? (hotkeyMode ? "HOTKEY · EXE" : "CAM 01 · EXE") : "EXE 연결 안 됨";
   const pipelineStages = viewMode === "browser" ? BROWSER_PIPELINE_STAGES : NATIVE_PIPELINE_STAGES;
+  const capturePanel = <BrowserCapturePanel key={stream?.id ?? demoScenarioId} active={Boolean(stream) || demoActive} busy={demoMode === "playing" || status === "preparing" || status === "analyzing"} elapsed={effectiveElapsed} retention={retention} seconds={sendSeconds} onSecondsChange={setSendSeconds} bookmarkCount={replayBookmarks.length} bookmarkEnabled={Boolean(stream)} onBookmark={addReplayBookmark} frames={frames} highlight={!demoActive && proactiveDetectionEnabled ? highlight : null} exploration={exploration} snapshot={snapshot} analyze={analyzeWithOpenAI} initialExpanded={demoActive} demoMode={demoMode} demoQuestion={demoQuestion} demoAnswer={analysis} demoEvidence={analysisEvidence} demoCaptureContext={captureContext} privacyEnabled={privacyEnabled} onPrivacyEnabledChange={setPrivacyEnabled} privacyZone={privacyZone} onPrivacyZoneChange={setPrivacyZone} privacyReport={privacyReport} />;
 
   useEffect(() => {
     if (!demoActive || status !== "done") return;
@@ -1226,7 +1235,8 @@ export function ReplayWorkspace() {
 
   return (
     <main className={styles.shell}>
-      {pipContainer && createPortal(<BrowserCapturePanel key={stream?.id ?? demoMode} active={Boolean(stream) || demoActive} busy={demoMode === "playing" || status === "preparing" || status === "analyzing"} elapsed={effectiveElapsed} retention={retention} seconds={sendSeconds} onSecondsChange={setSendSeconds} bookmarkCount={replayBookmarks.length} bookmarkEnabled={Boolean(stream)} onBookmark={addReplayBookmark} frames={frames} highlight={!demoActive && proactiveDetectionEnabled ? highlight : null} exploration={exploration} snapshot={snapshot} analyze={analyzeWithOpenAI} initialExpanded={demoActive} demoMode={demoMode} demoQuestion={demoQuestion} privacyEnabled={privacyEnabled} onPrivacyEnabledChange={setPrivacyEnabled} privacyZone={privacyZone} onPrivacyZoneChange={setPrivacyZone} privacyReport={privacyReport} />, pipContainer)}
+      {pipContainer && createPortal(capturePanel, pipContainer)}
+      {demoActive && demoPipVisible && !pipContainer && <aside className={styles.demoPipPreview} aria-label="체험 PiP">{capturePanel}</aside>}
       <header className={styles.nav}>
         <a className={styles.brand} href="#top" aria-label="방금그거뭐였지 홈"><span className={styles.brandMark} aria-hidden="true">↺</span><span>방금그거뭐였지</span></a>
         <div className={styles.modeSwitch} role="tablist" aria-label="기능 범위 선택">
@@ -1240,17 +1250,11 @@ export function ReplayWorkspace() {
         <a href={AIRPOINTER_DOWNLOAD_URL}>AirPointer 다운로드</a>
       </div>}
 
-      <section hidden={demoArmed || Boolean(interactiveReplay)} className={styles.intro} id="top"><div><p>REWIND. FIND. EXPLAIN.</p><h1>방금그거뭐였지<span>놓친 순간을 찾는 AI 리플레이</span></h1><div>방금 사라진 오류, 다시 재현하지 마세요.<br />놓친 화면을 되짚고, 근거와 함께 설명합니다.</div></div><span className={styles.introIndex}>01 — 03<br /><b>놓침 → 발견 → 기록</b></span></section>
-      {demoArmed && demoScenarioId === "runtime" && <InteractiveCase onExit={stopDemo} onFreeze={(replay, question) => {
-        setInteractiveReplay(replay); setDemoArmed(false); setDemoMode("ready"); setDemoQuestion(question);
-        setSendSeconds(Math.ceil(replay.seconds)); setRetention(1); setFrames(replay.overview());
-        setAnalysis(""); setIncident(undefined); setAnalysisEvidence([]); setExploration(undefined);
-        setResultFocus(true); setAutoAnalyze(true);
-      }} />}
-      <section hidden={(demoArmed && demoScenarioId === "runtime") || (Boolean(interactiveReplay) && resultFocus) || (Boolean(analysis) && resultFocus && viewMode === "browser")} className={styles.hero}>
+      <section hidden={demoArmed || demoActive || Boolean(interactiveReplay)} className={styles.intro} id="top"><div><p>REWIND. FIND. EXPLAIN.</p><h1>방금그거뭐였지<span>놓친 순간을 찾는 AI 리플레이</span></h1><div>방금 사라진 오류, 다시 재현하지 마세요.<br />놓친 화면을 되짚고, 근거와 함께 설명합니다.</div></div><span className={styles.introIndex}>01 — 03<br /><b>놓침 → 발견 → 기록</b></span></section>
+      <section hidden={(Boolean(interactiveReplay) && resultFocus) || (Boolean(analysis) && resultFocus && viewMode === "browser")} className={styles.hero}>
         <div className={styles.stageColumn}>
           <div className={styles.stageHeader}><span>{demoActive ? `JUDGE DEMO · ${selectedDemo.label}` : "LIVE DESKTOP"}</span><span>{demoMode === "playing" ? "PLAYING" : demoMode === "ready" ? "REPLAY READY" : stream ? "CAPTURING" : "NOT CONNECTED"}</span></div>
-          <div className={styles.stageViewport} ref={stageViewportRef}>
+          <div className={`${styles.stageViewport} ${demoArmed ? styles.scenarioStage : ""}`} ref={stageViewportRef}>
             <div
               className={styles.stage}
               ref={stageRef}
@@ -1259,11 +1263,11 @@ export function ReplayWorkspace() {
               onDoubleClick={(event) => { if (!(event.target as HTMLElement).closest("button, a")) resetStageBox(); }}
             >
               <video ref={screenVideo} className={`${styles.screenVideo} ${stream ? styles.visible : ""}`} muted playsInline />
-              {demoActive && demoVisualFrame ? <DemoWorkspace frame={demoVisualFrame} title={selectedDemo.title} playing={demoMode === "playing"} onStop={stopDemo} /> : !stream && <div className={styles.emptyStage}>
+              {demoActive ? <div className={styles.recordedDemo}><RecordedDemoPlayer key={demoScenarioId} scenario={selectedDemo} onProgress={handleRecordedDemoProgress} onReady={handleRecordedDemoReady} onError={handleRecordedDemoError} /><div className={styles.recordedBadge}><span /> 실제 실행 녹화</div><button className={styles.recordedExit} onClick={stopDemo}>체험 종료</button></div> : !stream && <div className={styles.emptyStage}>
                 <span className={styles.sceneNumber}>{demoArmed ? "01 / 사건 발생" : "INTERACTIVE CASE 001"}</span>
                 <strong>{demoArmed ? selectedDemo.title : "눈 깜빡할 사이 사라진 단서."}</strong>
                 <span>{demoArmed ? "아래 버튼으로 처리를 시작하세요. 잠깐 나타나는 알림을 확인해 보세요." : "직접 오류를 만나고, AI와 함께 그 순간을 되찾아보세요."}</span>
-                {demoArmed ? <div className={styles.sampleOrder}><small>기록된 샘플 화면</small><div><span>{selectedDemo.label}</span></div><p>{selectedDemo.detail}</p><button className={styles.primary} onClick={() => void startDemo()}>시나리오 실행 →</button><button className={styles.demoReplay} onClick={() => setDemoArmed(false)}>돌아가기</button></div> : <><div className={styles.emptyActions}><button className={styles.primary} onClick={() => { setDemoScenarioId("runtime"); setDemoArmed(true); }}><Play size={18} weight="fill" /> 30초 체험하기</button><button className={styles.demoStart} onClick={() => void startSharing()} aria-label="화면 공유 시작">내 화면에서 사용하기 ↗</button><a className={styles.demoStart} href="/developer-lab" target="_blank" rel="noreferrer">PiP용 개발 작업 탭 열기 ↗</a></div><small>설치·가입·화면 공유 없이 체험 · AI 분석 시간 별도</small></>}
+                {demoArmed ? <div className={styles.sampleOrder}><small>실제 실행으로 만든 개발 시나리오</small><div className={styles.scenarioList}>{DEMO_SCENARIOS.map((scenario) => <button key={scenario.id} onClick={() => startDemo(scenario.id)}><b>{scenario.label}</b><span>{scenario.title}</span><small>{scenario.proof}</small></button>)}</div><button className={styles.demoReplay} onClick={() => setDemoArmed(false)}>돌아가기</button></div> : <><div className={styles.emptyActions}><button className={styles.primary} onClick={() => setDemoArmed(true)}><Play size={18} weight="fill" /> 30초 체험하기</button><button className={styles.demoStart} onClick={() => void startSharing()} aria-label="화면 공유 시작">내 화면에서 사용하기 ↗</button></div><small>시나리오 선택 후 자동 재생 · AI 분석 시간 포함 약 30초</small></>}
               </div>}
               {stream && <div className={styles.liveFlag}><span /> REC</div>}
               <div hidden={!stream && !demoActive} className={styles.nowLine} style={{ left: `${Math.max(2, bufferPercent)}%` }}><span>NOW</span></div>
@@ -1319,15 +1323,15 @@ export function ReplayWorkspace() {
             {(companionStatus || (!companionReady && companionMessage)) && <small className={styles.gestureError}>{companionStatus ? companionStatus.text : companionMessage}{companionStatus?.showDownload && <> <a href={AIRPOINTER_DOWNLOAD_URL}>AirPointer 다운로드</a></>}</small>}
             <div className={styles.rule} />
           </>}
-          <details className={styles.captureSettings}><summary>기록·분석 설정</summary><label className={styles.field}><span>로컬 버퍼</span><select value={retention} onChange={(event) => setRetention(Number(event.target.value))} disabled={Boolean(stream)}><option value={1}>최근 1분</option><option value={3}>최근 3분</option><option value={5}>최근 5분</option></select></label>
+          {!demoActive && <details className={styles.captureSettings}><summary>기록·분석 설정</summary><label className={styles.field}><span>로컬 버퍼</span><select value={retention} onChange={(event) => setRetention(Number(event.target.value))} disabled={Boolean(stream)}><option value={1}>최근 1분</option><option value={3}>최근 3분</option><option value={5}>최근 5분</option></select></label>
           <label className={styles.field}><span>전송 구간</span><select value={sendSeconds} onChange={(event) => setSendSeconds(Number(event.target.value))}><option value={5}>최근 5초</option><option value={15}>최근 15초</option><option value={30}>최근 30초</option><option value={60}>최근 1분</option></select></label>
           <div className={styles.apiDivider}><span>설치 없이</span><b>화면 바로 확인</b></div>
           <label className={styles.switch}><input type="checkbox" checked={privacyEnabled} disabled={status === "preparing" || status === "analyzing"} onChange={(event) => setPrivacyEnabled(event.target.checked)} /><span /><b><ShieldCheck size={16} /> 전송 전 개인정보 자동 가림</b></label>
           <div className={styles.gestureActions}><button type="button" className={styles.secondary} disabled={(!stream && !demoActive) || status === "preparing" || status === "analyzing"} onClick={() => { try { setPrivacyImage(snapshot()); setRegionImage(null); } catch { setMessage("가림 영역을 지정할 화면이 없습니다."); } }}>{privacyZone ? "가림 영역 변경" : "가림 영역 지정"}</button>{privacyZone && <button type="button" className={styles.secondary} disabled={status === "preparing" || status === "analyzing"} onClick={() => setPrivacyZone(undefined)}>가림 영역 해제</button>}</div>
           {privacyReport && <small className={styles.gestureError}>{privacyReport.scannedFrames}장 로컬 검사 · {privacyReport.maskedRegions ? `${privacyReport.maskedRegions}곳 가린 사본만 전송` : "민감정보 미검출"}</small>}
           {privacyImage && (stream || demoActive) && <PrivacyZoneEditor image={privacyImage} value={privacyZone} onCancel={() => setPrivacyImage(null)} onSave={(box) => { setPrivacyZone(box); setPrivacyImage(null); }} />}
-          </details>
-          {demoActive ? <form className={styles.demoPrompt} onSubmit={(event) => { event.preventDefault(); if (demoMode === "ready" && demoQuestion.trim()) void analyzeWithOpenAI("replay", demoQuestion.trim()); }}>
+          </details>}
+          {demoActive ? demoIncidentVisible ? <form className={styles.demoPrompt} onSubmit={(event) => { event.preventDefault(); if (demoMode === "ready" && demoQuestion.trim()) void analyzeWithOpenAI("replay", demoQuestion.trim()); }}>
             <div><strong>{demoMode === "playing" ? `${selectedDemo.title} 재생 중` : selectedDemo.title}</strong><span>{demoMode === "playing" ? "핵심 단서는 단 0.5초만 나타납니다." : "실사용과 동일한 AI 탐색 파이프라인으로 분석합니다."}</span></div>
             <ol className={styles.demoJourney} aria-label="심사 데모 진행 단계">
               <li data-state={demoMode === "playing" ? "active" : "done"}><b>01</b><span>순간 재생</span></li>
@@ -1335,15 +1339,16 @@ export function ReplayWorkspace() {
               <li data-state={status === "done" ? "done" : "next"}><b>03</b><span>근거 확인</span></li>
             </ol>
             <textarea aria-label="샘플 리플레이에 질문" value={demoQuestion} disabled={demoMode === "playing" || status === "analyzing" || status === "preparing"} onChange={(event) => setDemoQuestion(event.target.value)} maxLength={500} />
-            <button type="submit" disabled={demoMode !== "ready" || !demoQuestion.trim() || status === "analyzing" || status === "preparing"}>{status === "analyzing" || status === "preparing" ? <CircleNotch className={styles.spin} size={16} /> : <Sparkle size={16} weight="fill" />}{demoMode === "playing" ? "재생이 끝나면 질문할 수 있어요" : "AI로 사라진 오류 찾기"}</button>
-            {demoMode !== "playing" && <div className={styles.demoPromptLinks}><button type="button" className={styles.demoReplay} onClick={() => { if (interactiveReplay) { stopDemo(); setDemoArmed(true); } else void startDemo(); }}><ArrowCounterClockwise size={14} /> 다시 체험</button><button type="button" className={styles.demoReplay} onClick={stopDemo}>체험 종료</button></div>}
-          </form> : <>
+            <button type="submit" disabled={demoMode !== "ready" || !demoQuestion.trim() || status === "analyzing" || status === "preparing"}>{status === "analyzing" || status === "preparing" ? <CircleNotch className={styles.spin} size={16} /> : <Sparkle size={16} weight="fill" />}{demoMode === "playing" ? "재생 후 자동으로 분석합니다" : "같은 기록 다시 분석"}</button>
+            {demoMode !== "playing" && <div className={styles.demoPromptLinks}><button type="button" className={styles.demoReplay} onClick={() => { stopDemo(); setDemoArmed(true); }}><ArrowCounterClockwise size={14} /> 다른 시나리오</button><button type="button" className={styles.demoReplay} onClick={stopDemo}>체험 종료</button></div>}
+          </form> : <div className={styles.demoWaiting} role="status"><strong>{selectedDemo.title}</strong><span>실행 결과를 재생 중입니다. 사건이 나타나면 PiP가 열립니다.</span><ol className={styles.demoJourney} aria-label="심사 데모 진행 단계"><li data-state="active"><b>01</b><span>사건 재생</span></li><li data-state="next"><b>02</b><span>AI 재탐색</span></li><li data-state="next"><b>03</b><span>근거 확인</span></li></ol><p><LockKey size={13} />아직 AI에 질문하거나 화면을 보내지 않았습니다.</p></div> : <>
             {!stream && <div className={styles.welcomeSteps}><h2>사라졌어도,<br />찾을 수 있으니까.</h2><ol><li><b>01</b> 잠깐 나타난 오류를 놓치세요.</li><li><b>02</b> AI가 과거 화면에서 단서를 찾습니다.</li><li><b>03</b> 근거와 함께 사건을 기록하세요.</li></ol></div>}
             {stream && <textarea className={styles.workQuestion} aria-label="공유 화면에 질문" placeholder="방금 어떤 일이 있었나요?" value={workQuestion} onChange={event => setWorkQuestion(event.target.value)} maxLength={500} />}
 
             {stream && <><button className={styles.secondary} onClick={() => void analyzeWithOpenAI("replay", workQuestion.trim() || undefined)} disabled={!stream || status === "preparing" || status === "analyzing"}><ArrowCounterClockwise size={18} /> 최근 {sendSeconds}초 확인하기</button>
             <button className={styles.secondary} onClick={() => void analyzeWithOpenAI("current", workQuestion.trim() || undefined)} disabled={!stream || status === "preparing" || status === "analyzing"}><Camera size={18} /> 지금 화면 확인하기</button>
-            <button className={styles.secondary} disabled={!stream || status === "preparing" || status === "analyzing"} onClick={() => { try { setRegionImage(snapshot()); } catch { setMessage("먼저 화면 공유를 시작해 주세요."); } }}><Target size={18} /> 영역 선택해서 확인하기</button></>}
+            <button className={styles.secondary} disabled={!stream || status === "preparing" || status === "analyzing"} onClick={() => { try { setRegionImage(snapshot()); } catch { setMessage("먼저 화면 공유를 시작해 주세요."); } }}><Target size={18} /> 영역 선택해서 확인하기</button>
+            <a className={styles.downloadLink} href="/developer-lab" target="_blank" rel="noreferrer">PiP용 개발 작업 탭 열기 ↗</a></>}
           </>}
           {regionImage && (stream || demoActive) && <RegionCapture image={regionImage} busy={status === "preparing" || status === "analyzing"} onCancel={() => setRegionImage(null)} onSend={async (image, question) => {
             const result = await analyzeWithOpenAI("current", question, [], image);
@@ -1357,10 +1362,10 @@ export function ReplayWorkspace() {
             <div className={styles.cameraHud}><span><HandPalm size={16} /> {!browserGestureReady ? "연결 대기" : browserGesturePose === "palm" ? "손바닥 인식" : browserGesturePose === "fist" ? "주먹 인식" : browserGesturePose === "point" ? "검지 인식" : browserGesturePose === "none" ? "손 찾는 중" : "동작 대기"}</span></div>
             {browserGestureProgress.phase !== "idle" && <div className={styles.gestureTimer} data-active role="progressbar" aria-label="제스처 유지 시간" aria-valuemin={0} aria-valuemax={1} aria-valuenow={browserGestureProgress.value}><div className={styles.gestureTimerRing} style={{ background: `conic-gradient(var(--accent) ${browserGestureProgress.value * 360}deg, rgba(255,255,255,.14) 0deg)` }}><span><b>{Math.round(browserGestureProgress.value * 100)}</b></span></div><p>손바닥 2초</p></div>}
           </div>}
-          <label className={styles.switch}><input type="checkbox" checked={pipOpen} disabled={!pipSupported} onChange={(event) => { if (event.target.checked) void openCapturePip(); else closeCapturePip(); }} /><span /><b><PictureInPicture size={16} /> 항상 위 캡처 버튼 켜기 (브라우저, 설치 불필요)</b></label>
-          {!pipSupported && <small className={styles.gestureError}>작은 창을 지원하지 않습니다. 이 화면에서 계속 사용할 수 있습니다.</small>}
-          {pipSupported && !pipMessage && <small className={styles.gestureError}>화면 공유 후 작은 창에서 질문할 수 있습니다.</small>}
-          {pipMessage && <small className={styles.gestureError}>{pipMessage}</small>}
+          {!demoActive && <label className={styles.switch}><input type="checkbox" checked={pipOpen} disabled={!pipSupported} onChange={(event) => { if (event.target.checked) void openCapturePip(); else closeCapturePip(); }} /><span /><b><PictureInPicture size={16} /> 항상 위 캡처 버튼 켜기 (브라우저, 설치 불필요)</b></label>}
+          {!demoActive && !pipSupported && <small className={styles.gestureError}>작은 창을 지원하지 않습니다. 이 화면에서 계속 사용할 수 있습니다.</small>}
+          {!demoActive && pipSupported && !pipMessage && <small className={styles.gestureError}>화면 공유 후 작은 창에서 질문할 수 있습니다.</small>}
+          {!demoActive && pipMessage && <small className={styles.gestureError}>{pipMessage}</small>}
           {viewMode === "full" && <>
             <div className={styles.rule} />
             <p className={styles.settingsGroupLabel}>보낼 곳</p>
@@ -1400,7 +1405,7 @@ export function ReplayWorkspace() {
           </div>
         </div>}
         {interactiveReplay && !analysis && <div className={styles.resultToolbar} role="status"><span>{message}</span>{status === "error" && <button onClick={() => void analyzeWithOpenAI("replay", demoQuestion)}>같은 기록으로 다시 분석</button>}<button onClick={stopDemo}>체험 종료</button></div>}
-        {analysis && <div className={styles.resultToolbar}><span>사건 기록 · {analysisSample ? "샘플 분석" : "공유 화면"}</span><div><button onClick={() => { setResultFocus(false); window.scrollTo({ top: 0, behavior: "instant" }); }}>질문 수정</button>{analysisSample && <button onClick={stopDemo}>새 체험</button>}{!stream && <button onClick={() => void startSharing()}>내 화면에서 사용하기 ↗</button>}</div></div>}
+        {analysis && <div className={styles.resultToolbar}><span>사건 기록 · {analysisSample ? "실행 녹화 분석" : "공유 화면"}</span><div><button onClick={() => { setResultFocus(false); window.scrollTo({ top: 0, behavior: "instant" }); }}>질문 바꿔 재분석</button>{analysisSample && <button onClick={stopDemo}>새 체험</button>}{!stream && <button onClick={() => void startSharing()}>내 화면에서 사용하기 ↗</button>}</div></div>}
         {(frames.length > 0 || analysis) && <IncidentReview key={`${demoScenarioId}-${analysisRevision}`} frames={frames} evidence={analysisEvidence} answer={analysis} incident={incident} context={captureContext} sample={demoActive || analysisSample} exploration={exploration} onEvidence={setAnalysisEvidencePreview} />}
         {analysisEvidencePreview !== null && analysisEvidence[analysisEvidencePreview] && <EvidenceTimeMachine evidence={analysisEvidence[analysisEvidencePreview]} onClose={() => setAnalysisEvidencePreview(null)} />}
       </section>
@@ -1527,13 +1532,6 @@ export function ReplayWorkspace() {
       <footer className={styles.footer}><span>방금그거뭐였지</span><span>AI Championship 2026 Prototype</span><span>Built for moments that disappear.</span></footer>
     </main>
   );
-}
-
-function DemoWorkspace({ frame, title, playing, onStop }: { frame: OverviewFrame; title: string; playing: boolean; onStop: () => void }) {
-  return <div className={styles.demoWorkspace}>
-    <img className={styles.demoFrame} src={frame.url} alt={`${title} 샘플 작업 화면`} />
-    <div className={styles.demoTitlebar}><span><i />{title}</span><b>{playing ? "60초 압축 재생" : "리플레이 준비 완료"}</b><button type="button" onClick={onStop}>체험 종료</button></div>
-  </div>;
 }
 
 function formatDuration(ms: number) {

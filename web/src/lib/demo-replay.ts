@@ -1,15 +1,15 @@
 import type { NormalizedBox, OverviewFrame } from "./replay-buffer";
 
 export const DEMO_OVERVIEW_OFFSETS = [-60, -30, -12, -8, -4, -0.05];
-export type DemoScenarioId = "runtime" | "payment" | "inventory" | "meeting";
+export const DEMO_INCIDENT_CUE_SECONDS = 3;
+export type DemoScenarioId = "worktree" | "migration" | "test";
 export type DemoFrameState = "editing" | "building" | "error" | "failed";
-export type DemoScenario = { id: DemoScenarioId; label: string; title: string; detail: string; question: string; accent: string; focusBox: NormalizedBox };
+export type DemoScenario = { id: DemoScenarioId; label: string; title: string; detail: string; question: string; accent: string; focusBox: NormalizedBox; video: string; proof: string };
 
 export const DEMO_SCENARIOS: readonly DemoScenario[] = [
-  { id: "runtime", label: "개발 오류", title: "사라진 런타임 오류", detail: "빌드 중 0.5초간 나타난 오류의 원인과 수정법", question: "방금 잠깐 뜬 오류가 정확히 뭐였고 어떻게 고쳐?", accent: "#d97941", focusBox: [0.47, 0.25, 0.96, 0.58] },
-  { id: "payment", label: "결제 운영", title: "실패한 주문 결제", detail: "잠깐 뜬 결제 실패 사유와 안전한 후속 조치", question: "방금 결제 실패 원인이 뭐였고 이 주문은 어떻게 처리해야 해?", accent: "#7aa2f7", focusBox: [0.47, 0.2, 0.95, 0.5] },
-  { id: "inventory", label: "재고 시트", title: "깨진 집계 수식", detail: "사라진 경고에서 문제 셀과 수식 확인", question: "방금 시트에 뜬 경고가 뭐였고 어느 수식을 고쳐야 해?", accent: "#7fba73", focusBox: [0.43, 0.2, 0.94, 0.49] },
-  { id: "meeting", label: "화상 회의", title: "중단된 화면 공유", detail: "순간 알림에서 공유 중단 원인과 복구 방법 확인", question: "방금 화면 공유가 왜 끊겼고 다시 공유하려면 뭘 해야 해?", accent: "#b58af0", focusBox: [0.45, 0.2, 0.94, 0.49] },
+  { id: "worktree", label: "Worktree 혼선", title: "고쳤는데 미리보기는 그대로", detail: "편집 중인 체크아웃과 서버 실행 경로가 다른 상황", question: "코드를 고쳤는데 왜 미리보기에는 반영되지 않았어? 화면에 나온 경로를 근거로 알려줘.", accent: "#d97941", focusBox: [0.22, 0.65, 0.99, 0.98], video: "/demo-recordings/worktree-mismatch.webm", proof: "실제 Node 서버 실행 · 두 작업 폴더" },
+  { id: "migration", label: "DB 마이그레이션", title: "코드는 새 컬럼을 찾는데 DB에는 없다", detail: "SQLite 스키마와 적용되지 않은 마이그레이션의 불일치", question: "방금 실행이 왜 실패했어? 보이는 코드와 오류를 연결해서 다음 조치를 알려줘.", accent: "#8fb36b", focusBox: [0.22, 0.64, 0.99, 0.98], video: "/demo-recordings/missing-migration.webm", proof: "실제 Python · SQLite 실행" },
+  { id: "test", label: "테스트 회귀", title: "소수점이 사라진 가격", detail: "실제 Node 테스트가 구현 변경 때문에 실패하는 상황", question: "테스트가 왜 12와 12.99로 어긋났어? 원인이 되는 구현을 찾아줘.", accent: "#7aa2f7", focusBox: [0.22, 0.64, 0.99, 0.98], video: "/demo-recordings/test-regression.webm", proof: "실제 node:test 실행" },
 ];
 
 export function demoScenario(id: DemoScenarioId): DemoScenario {
@@ -34,10 +34,8 @@ export function demoFrameAtOffset(scenarioId: DemoScenarioId, offsetSeconds: num
   const canvas = document.createElement("canvas");
   canvas.width = 1440; canvas.height = 900;
   const draw = painter(canvas.getContext("2d")!);
-  if (scenarioId === "runtime") runtimeScreen(draw, state, scenario);
-  else if (scenarioId === "payment") paymentScreen(draw, state, scenario);
-  else if (scenarioId === "inventory") inventoryScreen(draw, state, scenario);
-  else meetingScreen(draw, state, scenario);
+  if (scenarioId === "worktree" || scenarioId === "test") runtimeScreen(draw, state, scenario);
+  else inventoryScreen(draw, state, scenario);
   draw.text(`${Math.abs(offset).toFixed(2)}s BEFORE TRIGGER`, 1164, 35, 12, "#a9c99a", 700);
   return {
     url: canvas.toDataURL("image/jpeg", 0.9), atSeconds: Math.abs(offset), capturedAt: triggeredAt + offset * 1_000,
@@ -78,15 +76,6 @@ function runtimeScreen(draw: Draw, state: DemoFrameState, scenario: DemoScenario
   if (state === "error") alert(draw, scenario, "UNHANDLED RUNTIME ERROR", "TypeError: Cannot read properties of undefined", "(reading 'map')", "ResultsPanel.tsx:84:22 · visible.map((item) => ...)");
 }
 
-function paymentScreen(draw: Draw, state: DemoFrameState, scenario: DemoScenario) {
-  shell(draw, "Northstar Commerce", "Orders / #10428", scenario.accent); draw.rect(0, 54, 250, 846, "#171a1e"); draw.rect(250, 54, 1190, 846, "#f2f1ec");
-  ["Overview", "Orders", "Payments", "Customers", "Inventory", "Settings"].forEach((item, index) => draw.text(item, 42, 125 + index * 58, 17, item === "Orders" ? "#ffffff" : "#969ba5", item === "Orders" ? 700 : 500, "Arial, sans-serif"));
-  draw.text("Order #10428", 310, 130, 30, "#171a1e", 700, "Arial, sans-serif"); draw.text("mina.cho@example.com", 310, 169, 16, "#696b70", 500, "Arial, sans-serif"); draw.rect(310, 205, 1070, 96, "#ffffff");
-  draw.text("PAYMENT", 344, 240, 12, "#777b82", 700); draw.text(state === "editing" ? "Ready to charge" : state === "building" ? "Processing payment..." : "Payment pending", 344, 278, 21, state === "failed" ? "#b65342" : "#22252a", 700, "Arial, sans-serif"); draw.text("TOTAL", 1130, 240, 12, "#777b82", 700); draw.text("$428.00", 1130, 278, 24, "#22252a", 700, "Arial, sans-serif");
-  ["Trail running shoes", "Performance socks", "Express shipping"].forEach((item, index) => { draw.line(310, 355 + index * 92, 1380, 355 + index * 92, "#d9d8d2"); draw.text(item, 344, 408 + index * 92, 18, "#303238", 600, "Arial, sans-serif"); }); draw.text("CARD ···· 4242", 980, 408, 15, "#666970", 600); draw.text("PaymentIntent pi_3Q8Z8YF2B", 980, 500, 14, "#777b82");
-  if (state === "error") alert(draw, scenario, "PAYMENT FAILED", "3-D Secure authentication timed out", "Order #10428 was not charged", "Do not retry automatically · review customer authentication");
-}
-
 function inventoryScreen(draw: Draw, state: DemoFrameState, scenario: DemoScenario) {
   shell(draw, "Warehouse Forecast", "September inventory", scenario.accent); draw.rect(0, 54, 1440, 72, "#f4f6f3"); draw.rect(0, 126, 1440, 774, "#ffffff");
   [70, 330, 550, 760, 970, 1160, 1350].forEach((x) => draw.line(x, 126, x, 900, "#d9ded8")); for (let y = 126; y < 900; y += 58) draw.line(0, y, 1440, y, "#d9ded8");
@@ -96,16 +85,7 @@ function inventoryScreen(draw: Draw, state: DemoFrameState, scenario: DemoScenar
   if (state === "error") alert(draw, scenario, "FORMULA WARNING", "Circular dependency detected in H42", "Formula: =SUM(H12:H42)", "Change the range to end before the total row");
 }
 
-function meetingScreen(draw: Draw, state: DemoFrameState, scenario: DemoScenario) {
-  shell(draw, "Meetroom", "Weekly product review", scenario.accent); draw.rect(0, 54, 1440, 846, "#14151a");
-  const people = [[60, 100, "Mina"], [520, 100, "Alex"], [980, 100, "Jae"], [60, 470, "Product deck"], [520, 470, "Sora"], [980, 470, "Notes"]] as const;
-  people.forEach(([x, y, name], index) => { draw.rect(x, y, 400, 310, index === 3 ? "#e7e7e0" : "#252832"); draw.circle(x + 200, y + 132, 54, ["#9db8e3", "#d9a58f", "#9bc6ae", "#777", "#c2a0d6", "#a7a9b4"][index]); draw.text(name, x + 20, y + 286, 16, index === 3 ? "#24262b" : "#f1f0ec", 700, "Arial, sans-serif"); }); draw.rect(500, 838, 440, 48, "#24262d"); draw.text(state === "editing" ? "You are presenting" : state === "building" ? "Sharing Product-Roadmap.pdf..." : "Screen sharing stopped", 590, 869, 17, state === "failed" ? "#ff907d" : "#dfe2dc", 700, "Arial, sans-serif"); draw.text("Room: product-review · host mina.cho@example.com", 68, 82, 14, "#a4a8b2");
-  if (state === "error") alert(draw, scenario, "SCREEN SHARE STOPPED", "Permission revoked by operating system", "Meetroom can no longer capture this window", "Open browser permissions, then choose Share screen again");
-}
-
 function privacyHints(id: DemoScenarioId): OverviewFrame["privacyHints"] {
-  if (id === "runtime") return [{ box: [0.235, 0.9, 0.66, 0.955], category: "API 키" }];
-  if (id === "payment") return [{ box: [0.21, 0.15, 0.43, 0.2], category: "이메일" }, { box: [0.67, 0.42, 0.91, 0.48], category: "결제 정보" }];
-  if (id === "inventory") return [{ box: [0.06, 0.91, 0.36, 0.96], category: "이메일" }];
-  return [{ box: [0.05, 0.06, 0.36, 0.1], category: "이메일" }];
+  void id;
+  return [];
 }

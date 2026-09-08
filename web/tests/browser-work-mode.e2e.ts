@@ -12,7 +12,11 @@ test("screen sharing opens the always-on-top capture controls automatically", as
     context?.fillRect(0, 0, canvas.width, canvas.height);
     Object.defineProperty(navigator.mediaDevices, "getDisplayMedia", {
       configurable: true,
-      value: async () => canvas.captureStream(15),
+      value: async () => {
+        const stream = canvas.captureStream(15);
+        context?.fillRect(0, 0, canvas.width, canvas.height);
+        return stream;
+      },
     });
 
     const pictureInPicture = {
@@ -41,4 +45,27 @@ test("screen sharing opens the always-on-top capture controls automatically", as
 
   await expect(pipToggle).toBeChecked();
   await expect.poll(() => page.evaluate(() => Boolean(window.documentPictureInPicture?.window))).toBe(true);
+  await expect.poll(() => page.evaluate(() => {
+    const doc = window.documentPictureInPicture?.window?.document;
+    return Array.from(doc?.querySelectorAll("button") ?? []).map((button) => button.textContent?.trim()).filter(Boolean);
+  })).toEqual(expect.arrayContaining(["리플레이", "화면", "북마크"]));
+  await expect.poll(() => page.evaluate(() => {
+    const doc = window.documentPictureInPicture?.window?.document;
+    return Array.from(doc?.querySelectorAll("button") ?? []).some((button) => button.textContent?.trim() === "영역");
+  })).toBe(false);
+
+  await expect.poll(() => page.evaluate(() => !(window.documentPictureInPicture!.window!.document.querySelector('[aria-label="현재 화면 선택"]') as HTMLButtonElement).disabled)).toBe(true);
+  await page.evaluate(() => (window.documentPictureInPicture!.window!.document.querySelector('[aria-label="현재 화면 선택"]') as HTMLButtonElement).click());
+  await expect.poll(() => page.evaluate(() => window.documentPictureInPicture?.window?.document.querySelector('[aria-label="분석할 화면 선택"]')?.textContent ?? "")).toContain("전체 화면 선택됨");
+  await expect.poll(() => page.evaluate(() => {
+    const selection = window.documentPictureInPicture?.window?.document.querySelector('[aria-label="분석할 화면 선택"] span[style]') as HTMLElement | null;
+    return selection ? [selection.style.left, selection.style.top, selection.style.width, selection.style.height] : [];
+  })).toEqual(["0%", "0%", "100%", "100%"]);
+
+  await page.evaluate(() => window.documentPictureInPicture!.window!.document.querySelector('[aria-label^="선택 영역:"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", shiftKey: true, bubbles: true })));
+  await expect.poll(() => page.evaluate(() => {
+    const section = window.documentPictureInPicture?.window?.document.querySelector('[aria-label="분석할 화면 선택"]');
+    const selection = section?.querySelector("span[style]") as HTMLElement | null;
+    return [section?.textContent ?? "", selection?.style.width ?? ""];
+  })).toEqual([expect.stringContaining("드래그로 영역 선택"), "98%"]);
 });
