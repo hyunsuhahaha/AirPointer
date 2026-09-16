@@ -300,6 +300,11 @@ export function ReplayWorkspace() {
   const demoPipRequested = useRef(false);
   const [pipSupported, setPipSupported] = useState(false);
   const [pipOpen, setPipOpen] = useState(false);
+  // Document PiP has no minimize API, so "minimize" shrinks the window to the
+  // status bar and remembers the size to restore. Lives here, not in the
+  // export panel, because the panel remounts whenever the share changes.
+  const [pipMinimized, setPipMinimized] = useState(false);
+  const pipRestoreSize = useRef<[number, number] | null>(null);
   const [pipMessage, setPipMessage] = useState("");
   const [pipContainer, setPipContainer] = useState<HTMLElement | null>(null);
   const [regionImage, setRegionImage] = useState<CaptureSnapshot | null>(null);
@@ -713,6 +718,7 @@ export function ReplayWorkspace() {
         pipWindowRef.current = null;
         setPipContainer(null);
         setPipOpen(false);
+        setPipMinimized(false);
       }, { once: true });
       return true;
     } catch (reason) {
@@ -727,6 +733,20 @@ export function ReplayWorkspace() {
     }
   }, []);
   useEffect(() => { openCapturePipRef.current = openCapturePip; }, [openCapturePip]);
+  const changePipMinimized = useCallback((next: boolean) => {
+    const pip = pipWindowRef.current;
+    setPipMinimized(next);
+    if (!pip || pip.closed) return;
+    try {
+      if (next) {
+        pipRestoreSize.current = [pip.outerWidth, pip.outerHeight];
+        pip.resizeTo(Math.min(pip.outerWidth, 340), 96);
+      } else {
+        const [width, height] = pipRestoreSize.current ?? [520, 560];
+        pip.resizeTo(width, height);
+      }
+    } catch { /* The browser owns PiP sizing; the panel still collapses. */ }
+  }, []);
 
   const startDemo = useCallback((scenarioId: DemoScenarioId) => {
     analysisController.current?.abort(); retryCapture.current = null;
@@ -762,6 +782,7 @@ export function ReplayWorkspace() {
     pipWindowRef.current = null;
     setPipContainer(null);
     setPipOpen(false);
+    setPipMinimized(false);
   }, []);
 
   useEffect(() => () => {
@@ -1217,7 +1238,7 @@ export function ReplayWorkspace() {
   const dockLoadingLabel = "AirPointer 시작 중";
   const dockBadgeLabel = companionEnabled && companionReady ? "HOTKEY · EXE" : "EXE 연결 안 됨";
   const pipelineStages = viewMode === "browser" ? BROWSER_PIPELINE_STAGES : NATIVE_PIPELINE_STAGES;
-  const exportPanel = <AgentExportPanel key={stream?.id ?? demoScenarioId} bufferRef={buffer} demo={demoActive && interactiveReplay ? { replay: interactiveReplay, scenario: selectedDemo } : undefined} active={Boolean(stream) || (demoActive && demoMode === "ready")} seconds={sendSeconds} bufferMinutes={retention} onBufferMinutesChange={changeRetention} onSecondsChange={setSendSeconds} captureIntervalMs={captureIntervalMs} onCaptureIntervalChange={setCaptureIntervalMs} surface={stream?.getVideoTracks()[0]?.getSettings().displaySurface ?? "unknown"} />;
+  const exportPanel = <AgentExportPanel key={stream?.id ?? demoScenarioId} bufferRef={buffer} demo={demoActive && interactiveReplay ? { replay: interactiveReplay, scenario: selectedDemo } : undefined} active={Boolean(stream) || (demoActive && demoMode === "ready")} seconds={sendSeconds} bufferMinutes={retention} onBufferMinutesChange={changeRetention} onSecondsChange={setSendSeconds} captureIntervalMs={captureIntervalMs} onCaptureIntervalChange={setCaptureIntervalMs} recording={Boolean(stream)} onStartRecording={demoActive ? undefined : () => void startSharing()} onStopRecording={demoActive ? undefined : stopSharing} minimized={pipMinimized} onMinimizedChange={changePipMinimized} surface={stream?.getVideoTracks()[0]?.getSettings().displaySurface ?? "unknown"} />;
 
   useEffect(() => {
     if (!demoActive || status !== "done") return;

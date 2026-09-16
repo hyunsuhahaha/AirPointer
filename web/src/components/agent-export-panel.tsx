@@ -2,7 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
-import { ArrowClockwise, CaretLeft, CaretRight, CaretUp, Check, CircleNotch, Copy, DownloadSimple, FolderOpen, FrameCorners, LinkSimple, MagnifyingGlassPlus, PaperPlaneTilt, Trash, X } from "@phosphor-icons/react";
+import { ArrowClockwise, CaretLeft, CaretRight, CaretUp, Check, CircleNotch, Copy, CornersOut, DownloadSimple, FolderOpen, FrameCorners, LinkSimple, MagnifyingGlassPlus, Minus, PaperPlaneTilt, Play, Stop, Trash, X } from "@phosphor-icons/react";
 import { createAgentLink, deleteAgentLink } from "@/lib/agent-link";
 import type { AgentLink } from "@/lib/agent-link";
 import { exportAgentContext, exportDemoAgentContext } from "@/lib/browser-agent-export";
@@ -20,11 +20,14 @@ import styles from "./agent-export-panel.module.css";
 type DeliveryMode = "link" | "folder" | "manual";
 type ExportResult = AgentExportBundle & { delivery: DeliveryMode; share?: AgentLink };
 
-export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinutes, onBufferMinutesChange, onSecondsChange, captureIntervalMs, onCaptureIntervalChange, surface }: {
+export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinutes, onBufferMinutesChange, onSecondsChange, captureIntervalMs, onCaptureIntervalChange, recording, onStartRecording, onStopRecording, minimized, onMinimizedChange, surface }: {
   bufferRef: RefObject<BrowserReplayBuffer>; demo?: { replay: InteractiveReplay; scenario: DemoScenario };
   active: boolean; seconds: number; bufferMinutes: number; surface: string;
   onBufferMinutesChange: (minutes: number) => void; onSecondsChange: (seconds: number) => void;
   captureIntervalMs: number; onCaptureIntervalChange: (ms: number) => void;
+  // Screen-share controls. Omitted in the demo, which has no live share.
+  recording: boolean; onStartRecording?: () => void; onStopRecording?: () => void;
+  minimized: boolean; onMinimizedChange: (minimized: boolean) => void;
 }) {
   const panel = useRef<HTMLElement>(null);
   const activeNow = useRef(active);
@@ -50,6 +53,7 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
+  const [confirmStop, setConfirmStop] = useState(false);
   const demoReplay = demo?.replay;
 
   useEffect(() => { activeNow.current = active; }, [active]);
@@ -266,14 +270,28 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
   const windows = [...new Set([5, 15, 30, 60, 180, 300, seconds])].filter((value) => value <= bufferMinutes * 60 && (!demo || value <= Math.ceil(demo.replay.seconds))).sort((left, right) => left - right);
   const ExportIcon = mode === "link" ? LinkSimple : FolderOpen;
 
+  const recordingControls = <div className={styles.recordingStatus}>
+    <span className={styles.dot} data-active={active} /><strong>{active ? "화면 기록 중" : "화면 공유 대기"}</strong>
+    {onStartRecording && onStopRecording && (recording
+      ? <button type="button" className={styles.recordToggle} data-recording="true" disabled={busy} onClick={() => { if (minimized) onMinimizedChange(false); setConfirmStop(true); }}><Stop size={10} weight="fill" />중지</button>
+      : <button type="button" className={styles.recordToggle} disabled={busy} onClick={onStartRecording}><Play size={10} weight="fill" />기록 시작</button>)}
+  </div>;
+  const minimizeButton = <button type="button" className={styles.minimizeButton} aria-label={minimized ? "창 펼치기" : "창 최소화"} title={minimized ? "펼치기" : "최소화"}
+    onClick={() => onMinimizedChange(!minimized)}>{minimized ? <CornersOut size={13} /> : <Minus size={13} weight="bold" />}</button>;
+
+  if (minimized) return <main ref={panel} className={styles.panel} data-minimized="true" aria-label="AI 맥락 내보내기">
+    <header><div className={styles.headerControls}>{recordingControls}{minimizeButton}</div></header>
+  </main>;
+
   return <main ref={panel} className={styles.panel} aria-label="AI 맥락 내보내기">
     <header>
       <div className={styles.headerControls}>
         <label>버퍼 길이<select aria-label="버퍼 길이" value={bufferMinutes} disabled={busy || Boolean(demo)} onChange={(event) => changeBuffer(Number(event.target.value))}><option value={1}>1분</option><option value={3}>3분</option><option value={5}>5분</option></select></label>
         <label>전송 구간<select aria-label="전송 구간" value={seconds} disabled={busy} onChange={(event) => changeWindow(Number(event.target.value))}>{windows.map((value) => <option key={value} value={value}>{value < 60 ? `${value}초` : `${value / 60}분`}</option>)}</select></label>
         <label title="사이 화면을 몇 초마다 저장할지 정합니다. 화면이 크게 바뀐 순간은 간격과 관계없이 저장됩니다.">캡처 간격<select aria-label="캡처 간격" value={captureIntervalMs} disabled={busy || Boolean(demo)} onChange={(event) => onCaptureIntervalChange(Number(event.target.value))}>{CAPTURE_INTERVALS_MS.map((value) => <option key={value} value={value}>{`${value / 1_000}초`}</option>)}</select></label>
+        {recordingControls}
+        {minimizeButton}
       </div>
-      <div className={styles.recordingStatus}><span className={styles.dot} data-active={active} /><strong>{active ? "화면 기록 중" : "화면 공유 대기"}</strong></div>
     </header>
     <div className={styles.body}>
       <div className={styles.modeOptions} role="group" aria-label="AI 내보내기 방식">
@@ -350,6 +368,16 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
       </div>
       <time>{frameTime(previewFrame)}</time>
       {previewIndex >= 0 && <small className={styles.lightboxCount}>{previewIndex + 1} / {visibleFrames.length}</small>}
+    </div>}
+    {confirmStop && <div className={styles.confirmBackdrop} onClick={() => setConfirmStop(false)}>
+      <div className={styles.confirmDialog} role="alertdialog" aria-modal="true" aria-labelledby="stop-recording-title" aria-describedby="stop-recording-body" onClick={(event) => event.stopPropagation()}>
+        <strong id="stop-recording-title">화면 기록을 중지할까요?</strong>
+        <p id="stop-recording-body">중지하면 이 기기에 쌓인 최근 {bufferMinutes}분 로컬 버퍼가 모두 삭제되고 되돌릴 수 없습니다.</p>
+        <div>
+          <button type="button" autoFocus onClick={() => setConfirmStop(false)}>취소</button>
+          <button type="button" data-danger="true" onClick={() => { setConfirmStop(false); onStopRecording?.(); }}>중지하고 버퍼 삭제</button>
+        </div>
+      </div>
     </div>}
   </main>;
 }
