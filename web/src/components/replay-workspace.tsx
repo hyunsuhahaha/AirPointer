@@ -90,6 +90,11 @@ type Mode = "current" | "replay";
 // Codex-Desktop-like thread view that opens only when there's something to
 // show -- Document PiP allows only one window per tab, so these are never
 // both open at once; switching between them closes one and opens the other.
+// Outer sizes for PiP resizeTo; requestWindow takes the inner size, so the
+// minimized bar asks for its content height there.
+const PIP_MINIMIZED_SIZE: [number, number] = [340, 96];
+const PIP_MINIMIZED_INNER_HEIGHT = 56;
+const PIP_MANUAL_SIZE: [number, number] = [520, 560];
 type ConversationTurn = { role: "user" | "assistant"; text: string };
 type AgentState = "loading" | "idle" | "preparing" | "drafting" | "sending" | "queued" | "done" | "error";
 type AgentThread = { id: string; title: string; status: string; cwd: string; updatedAt: number };
@@ -296,7 +301,7 @@ export function ReplayWorkspace() {
   // the visible switch remains only as a close/retry control.
   const pipWindowRef = useRef<Window | null>(null);
   const pipStyleCleanupRef = useRef<(() => void) | null>(null);
-  const openCapturePipRef = useRef<(expanded?: boolean) => Promise<boolean>>(async () => false);
+  const openCapturePipRef = useRef<(expanded?: boolean, minimized?: boolean) => Promise<boolean>>(async () => false);
   const demoPipRequested = useRef(false);
   const [pipSupported, setPipSupported] = useState(false);
   const [pipOpen, setPipOpen] = useState(false);
@@ -305,6 +310,7 @@ export function ReplayWorkspace() {
   // export panel, because the panel remounts whenever the share changes.
   const [pipMinimized, setPipMinimized] = useState(false);
   const pipRestoreSize = useRef<[number, number] | null>(null);
+  const [pipHalfScreen, setPipHalfScreen] = useState(false);
   const [pipMessage, setPipMessage] = useState("");
   const [pipContainer, setPipContainer] = useState<HTMLElement | null>(null);
   const [regionImage, setRegionImage] = useState<CaptureSnapshot | null>(null);
@@ -436,7 +442,7 @@ export function ReplayWorkspace() {
       // Request PiP immediately, before awaiting video playback or doing any
       // setup work, so the same explicit "화면 공유 시작" click can authorize
       // both parts of browser work mode.
-      const pipPromise = openCapturePipRef.current();
+      const pipPromise = openCapturePipRef.current(false, true);
       setRegionImage(null);
       setHighlight(null); setHighlightZoomUrl("");
       screenVideo.current.srcObject = nextStream;
@@ -686,7 +692,9 @@ export function ReplayWorkspace() {
     setReplayBookmarks((current) => [...current.filter((item) => item.url !== frame.url), frame].slice(-MAX_REPLAY_BOOKMARKS));
   }, []);
 
-  const openCapturePip = useCallback(async (expanded = false): Promise<boolean> => {
+  // `minimized` opens the window as the status bar only; the demo passes
+  // false so its export panel is visible as soon as the window appears.
+  const openCapturePip = useCallback(async (expanded = false, minimized = false): Promise<boolean> => {
     const current = pipWindowRef.current;
     if (current && !current.closed) {
       setPipOpen(true);
@@ -698,7 +706,9 @@ export function ReplayWorkspace() {
     }
     setPipMessage("");
     try {
-      const pipWindow = await window.documentPictureInPicture.requestWindow({ width: expanded ? 390 : 370, height: expanded ? 560 : 260 });
+      const pipWindow = await window.documentPictureInPicture.requestWindow(minimized
+        ? { width: PIP_MINIMIZED_SIZE[0], height: PIP_MINIMIZED_INNER_HEIGHT }
+        : { width: expanded ? 390 : 370, height: expanded ? 560 : 260 });
       pipWindowRef.current = pipWindow;
       pipWindow.document.title = "AI 내보내기";
       pipWindow.document.documentElement.lang = "ko";
@@ -711,6 +721,9 @@ export function ReplayWorkspace() {
       if (pipWindow.closed) return false;
       setPipContainer(pipWindow.document.body);
       setPipOpen(true);
+      pipRestoreSize.current = null;
+      setPipMinimized(minimized);
+      setPipHalfScreen(false);
       pipWindow.addEventListener("pagehide", () => {
         if (pipWindowRef.current !== pipWindow) return;
         pipStyleCleanupRef.current?.();
@@ -719,6 +732,7 @@ export function ReplayWorkspace() {
         setPipContainer(null);
         setPipOpen(false);
         setPipMinimized(false);
+        setPipHalfScreen(false);
       }, { once: true });
       return true;
     } catch (reason) {
@@ -740,12 +754,24 @@ export function ReplayWorkspace() {
     try {
       if (next) {
         pipRestoreSize.current = [pip.outerWidth, pip.outerHeight];
-        pip.resizeTo(Math.min(pip.outerWidth, 340), 96);
+        pip.resizeTo(Math.min(pip.outerWidth, PIP_MINIMIZED_SIZE[0]), PIP_MINIMIZED_SIZE[1]);
       } else {
-        const [width, height] = restoreSize ?? pipRestoreSize.current ?? [520, 560];
+        if (restoreSize) setPipHalfScreen(false);
+        const [width, height] = restoreSize ?? pipRestoreSize.current ?? PIP_MANUAL_SIZE;
         pip.resizeTo(width, height);
       }
     } catch { /* The browser owns PiP sizing; the panel still collapses. */ }
+  }, []);
+  // Half the screen: half the available width, full available height. PiP
+  // windows cannot be moved from script, so the browser keeps its anchor.
+  const changePipHalfScreen = useCallback((next: boolean) => {
+    const pip = pipWindowRef.current;
+    if (!pip || pip.closed) return;
+    setPipHalfScreen(next);
+    try {
+      if (next) pip.resizeTo(Math.round(pip.screen.availWidth / 2), pip.screen.availHeight);
+      else pip.resizeTo(...PIP_MANUAL_SIZE);
+    } catch { /* The browser owns PiP sizing. */ }
   }, []);
 
   const startDemo = useCallback((scenarioId: DemoScenarioId) => {
@@ -783,6 +809,7 @@ export function ReplayWorkspace() {
     setPipContainer(null);
     setPipOpen(false);
     setPipMinimized(false);
+    setPipHalfScreen(false);
   }, []);
 
   useEffect(() => () => {
@@ -1238,7 +1265,7 @@ export function ReplayWorkspace() {
   const dockLoadingLabel = "AirPointer 시작 중";
   const dockBadgeLabel = companionEnabled && companionReady ? "HOTKEY · EXE" : "EXE 연결 안 됨";
   const pipelineStages = viewMode === "browser" ? BROWSER_PIPELINE_STAGES : NATIVE_PIPELINE_STAGES;
-  const exportPanel = <AgentExportPanel key={stream?.id ?? demoScenarioId} bufferRef={buffer} demo={demoActive && interactiveReplay ? { replay: interactiveReplay, scenario: selectedDemo } : undefined} active={Boolean(stream) || (demoActive && demoMode === "ready")} seconds={sendSeconds} bufferMinutes={retention} onBufferMinutesChange={changeRetention} onSecondsChange={setSendSeconds} captureIntervalMs={captureIntervalMs} onCaptureIntervalChange={setCaptureIntervalMs} recording={Boolean(stream)} onStartRecording={demoActive ? undefined : () => void startSharing()} onStopRecording={demoActive ? undefined : stopSharing} minimized={pipMinimized} onMinimizedChange={changePipMinimized} surface={stream?.getVideoTracks()[0]?.getSettings().displaySurface ?? "unknown"} />;
+  const exportPanel = <AgentExportPanel key={stream?.id ?? demoScenarioId} bufferRef={buffer} demo={demoActive && interactiveReplay ? { replay: interactiveReplay, scenario: selectedDemo } : undefined} active={Boolean(stream) || (demoActive && demoMode === "ready")} seconds={sendSeconds} bufferMinutes={retention} onBufferMinutesChange={changeRetention} onSecondsChange={setSendSeconds} captureIntervalMs={captureIntervalMs} onCaptureIntervalChange={setCaptureIntervalMs} recording={Boolean(stream)} onStartRecording={demoActive ? undefined : () => void startSharing()} onStopRecording={demoActive ? undefined : stopSharing} minimized={pipMinimized} onMinimizedChange={changePipMinimized} halfScreen={pipHalfScreen} onHalfScreenChange={pipContainer ? changePipHalfScreen : undefined} surface={stream?.getVideoTracks()[0]?.getSettings().displaySurface ?? "unknown"} />;
 
   useEffect(() => {
     if (!demoActive || status !== "done") return;
@@ -1353,7 +1380,7 @@ export function ReplayWorkspace() {
             if ("text" in result) setRegionImage(null);
           }} />}
           <div className={styles.status} data-tone={status === "error" ? "error" : status === "done" ? "done" : "normal"}>{status === "analyzing" || status === "preparing" ? <CircleNotch className={styles.spin} size={16} /> : status === "error" ? <WarningCircle size={16} /> : status === "done" ? <Check size={16} /> : <span className={styles.statusDot} />}<div><strong>{stateLabel}</strong><span>{message}</span></div></div>
-          {!demoActive && <label className={styles.switch}><input type="checkbox" checked={pipOpen} disabled={!pipSupported} onChange={(event) => { if (event.target.checked) void openCapturePip(); else closeCapturePip(); }} /><span /><b><PictureInPicture size={16} /> 항상 위 AI 내보내기 창 켜기 (브라우저, 설치 불필요)</b></label>}
+          {!demoActive && <label className={styles.switch}><input type="checkbox" checked={pipOpen} disabled={!pipSupported} onChange={(event) => { if (event.target.checked) void openCapturePip(false, true); else closeCapturePip(); }} /><span /><b><PictureInPicture size={16} /> 항상 위 AI 내보내기 창 켜기 (브라우저, 설치 불필요)</b></label>}
           {!demoActive && !pipSupported && <small className={styles.companionError}>작은 창을 지원하지 않습니다. 이 화면에서 계속 사용할 수 있습니다.</small>}
           {!demoActive && pipSupported && !pipMessage && <small className={styles.companionError}>화면 공유 후 작은 창에서 파일과 프롬프트를 내보낼 수 있습니다.</small>}
           {!demoActive && pipMessage && <small className={styles.companionError}>{pipMessage}</small>}

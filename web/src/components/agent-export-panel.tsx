@@ -2,7 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
-import { ArrowClockwise, CaretLeft, CaretRight, CaretUp, Check, CircleNotch, Copy, CornersOut, DownloadSimple, FolderOpen, FrameCorners, LinkSimple, MagnifyingGlassPlus, Minus, PaperPlaneTilt, Play, Stop, Trash, X } from "@phosphor-icons/react";
+import { ArrowClockwise, ArrowDownLeft, ArrowUpRight, CaretLeft, CaretRight, CaretUp, Check, CircleNotch, Copy, CornersOut, DownloadSimple, FolderOpen, FrameCorners, LinkSimple, MagnifyingGlassPlus, Minus, PaperPlaneTilt, Play, Stop, Trash, X } from "@phosphor-icons/react";
 import { createAgentLink, deleteAgentLink } from "@/lib/agent-link";
 import type { AgentLink } from "@/lib/agent-link";
 import { exportAgentContext, exportDemoAgentContext } from "@/lib/browser-agent-export";
@@ -23,7 +23,7 @@ type DeliveryMode = "link" | "folder" | "manual";
 const MANUAL_WINDOW_SIZE: [number, number] = [520, 560];
 type ExportResult = AgentExportBundle & { delivery: DeliveryMode; share?: AgentLink };
 
-export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinutes, onBufferMinutesChange, onSecondsChange, captureIntervalMs, onCaptureIntervalChange, recording, onStartRecording, onStopRecording, minimized, onMinimizedChange, surface }: {
+export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinutes, onBufferMinutesChange, onSecondsChange, captureIntervalMs, onCaptureIntervalChange, recording, onStartRecording, onStopRecording, minimized, onMinimizedChange, halfScreen, onHalfScreenChange, surface }: {
   bufferRef: RefObject<BrowserReplayBuffer>; demo?: { replay: InteractiveReplay; scenario: DemoScenario };
   active: boolean; seconds: number; bufferMinutes: number; surface: string;
   onBufferMinutesChange: (minutes: number) => void; onSecondsChange: (seconds: number) => void;
@@ -31,6 +31,8 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
   // Screen-share controls. Omitted in the demo, which has no live share.
   recording: boolean; onStartRecording?: () => void; onStopRecording?: () => void;
   minimized: boolean; onMinimizedChange: (minimized: boolean, restoreSize?: [number, number]) => void;
+  // Only provided inside the PiP window, the one place a resize does anything.
+  halfScreen: boolean; onHalfScreenChange?: (halfScreen: boolean) => void;
 }) {
   const panel = useRef<HTMLElement>(null);
   const activeNow = useRef(active);
@@ -375,6 +377,9 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
       <time>{frameTime(previewFrame)}</time>
       {previewIndex >= 0 && <small className={styles.lightboxCount}>{previewIndex + 1} / {visibleFrames.length}</small>}
     </div>}
+    {onHalfScreenChange && <button type="button" className={styles.halfScreenButton} aria-pressed={halfScreen}
+      aria-label={halfScreen ? "원래 크기로" : "화면 절반 크기로"} title={halfScreen ? "원래 크기로" : "화면 절반 크기로"}
+      onClick={() => onHalfScreenChange(!halfScreen)}>{halfScreen ? <ArrowUpRight size={13} weight="bold" /> : <ArrowDownLeft size={13} weight="bold" />}</button>}
     {confirmStop && <div className={styles.confirmBackdrop} onClick={() => setConfirmStop(false)}>
       <div className={styles.confirmDialog} role="alertdialog" aria-modal="true" aria-labelledby="stop-recording-title" aria-describedby="stop-recording-body" onClick={(event) => event.stopPropagation()}>
         <strong id="stop-recording-title">화면 기록을 중지할까요?</strong>
