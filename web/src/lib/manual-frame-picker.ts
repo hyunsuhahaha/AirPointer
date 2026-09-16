@@ -3,10 +3,12 @@ import type { OverviewFrame, PreviewFrame } from "./replay-buffer";
 export type ManualFrame = {
   id: string;
   url: string;
+  originalUrl: string;
   previewUrl: string;
   capturedAt: number;
   representative: boolean;
   highResolution: boolean;
+  cropped?: boolean;
 };
 export type ManualGap = { id: string; frames: ManualFrame[] };
 export type ManualTimeline = { representatives: ManualFrame[]; gaps: ManualGap[] };
@@ -18,7 +20,7 @@ export function buildManualTimeline(previews: PreviewFrame[], overview: Overview
       const capturedAt = frame.capturedAt;
       if (capturedAt === undefined) return [];
       const previewUrl = nearestPreview(ordered, capturedAt)?.dataUrl ?? frame.url;
-      return [{ id: `representative-${capturedAt}-${index}`, url: frame.url, previewUrl, capturedAt, representative: true, highResolution: true }];
+      return [{ id: `representative-${capturedAt}-${index}`, url: frame.url, originalUrl: frame.url, previewUrl, capturedAt, representative: true, highResolution: true }];
     })
     .sort((left, right) => left.capturedAt - right.capturedAt);
   const gaps = representatives.slice(0, -1).map((frame, index) => {
@@ -28,7 +30,7 @@ export function buildManualTimeline(previews: PreviewFrame[], overview: Overview
       frames: ordered
         .filter((preview) => preview.capturedAt > frame.capturedAt + 125 && preview.capturedAt < next.capturedAt - 125)
         .map((preview, frameIndex) => ({
-          id: `frame-${preview.capturedAt}-${frameIndex}`, url: preview.dataUrl, previewUrl: preview.dataUrl,
+          id: `frame-${preview.capturedAt}-${frameIndex}`, url: preview.dataUrl, originalUrl: preview.dataUrl, previewUrl: preview.dataUrl,
           capturedAt: preview.capturedAt, representative: false, highResolution: false,
         })),
     };

@@ -108,6 +108,19 @@ test("Manual은 0장에서 시작해 대표 사이 화면을 펼치고 확대·�
   await expect(representatives.first()).toBeVisible({ timeout: 30_000 });
   await expect.poll(() => representatives.first().locator("img").evaluate((image) => (image as HTMLImageElement).naturalWidth), { timeout: 30_000 }).toBe(1600);
   const representativeCount = await representatives.count();
+  await representatives.first().getByRole("button", { name: /화면 크게 보기/ }).click();
+  let lightbox = page.getByRole("dialog", { name: "화면 크게 보기" });
+  await lightbox.getByRole("button", { name: "영역 선택", exact: true }).click();
+  const cropStage = lightbox.locator('[data-selecting="true"]');
+  const cropBounds = await cropStage.boundingBox();
+  await page.mouse.move(cropBounds!.x + cropBounds!.width * .25, cropBounds!.y + cropBounds!.height * .25);
+  await page.mouse.down();
+  await page.mouse.move(cropBounds!.x + cropBounds!.width * .75, cropBounds!.y + cropBounds!.height * .75, { steps: 8 });
+  await page.mouse.up();
+  await expect.poll(() => lightbox.locator("img").evaluate((image) => (image as HTMLImageElement).naturalWidth), { timeout: 30_000 }).toBe(800);
+  await expect(lightbox.getByRole("button", { name: "선택 취소", exact: true })).toBeEnabled();
+  await lightbox.getByRole("button", { name: "크게 보기 닫기" }).click();
+  await expect.poll(() => representatives.first().locator("img").evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBe(800);
   await page.evaluate(() => {
     const target = document.createElement("div");
     target.id = "real-drag-target";
@@ -139,6 +152,11 @@ test("Manual은 0장에서 시작해 대표 사이 화면을 펼치고 확대·�
   expect(realDrop.html).toContain("<img");
   expect(realDrop.html).toContain("data:image/jpeg;base64,");
   await page.locator("#real-drag-target").evaluate((element) => element.remove());
+  await representatives.first().getByRole("button", { name: /화면 크게 보기/ }).click();
+  lightbox = page.getByRole("dialog", { name: "화면 크게 보기" });
+  await lightbox.getByRole("button", { name: "선택 취소", exact: true }).click();
+  await expect.poll(() => lightbox.locator("img").evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBe(1600);
+  await lightbox.getByRole("button", { name: "크게 보기 닫기" }).click();
   const gap = picker.getByRole("button", { name: /\d+개 사이 화면/ }).first();
   await expect(gap).toHaveAccessibleName(/사이 화면 펼치기/);
   await gap.click();

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
-import { ArrowClockwise, CaretUp, Check, CircleNotch, Copy, DownloadSimple, FolderOpen, LinkSimple, MagnifyingGlassPlus, PaperPlaneTilt, Trash, X } from "@phosphor-icons/react";
+import { ArrowClockwise, CaretUp, Check, CircleNotch, Copy, DownloadSimple, FolderOpen, FrameCorners, LinkSimple, MagnifyingGlassPlus, PaperPlaneTilt, Trash, X } from "@phosphor-icons/react";
 import { createAgentLink, deleteAgentLink } from "@/lib/agent-link";
 import type { AgentLink } from "@/lib/agent-link";
 import { exportAgentContext, exportDemoAgentContext } from "@/lib/browser-agent-export";
@@ -11,7 +11,8 @@ import type { WritableDirectory } from "@/lib/export-directory";
 import { buildManualTimeline, manualFrameFile } from "@/lib/manual-frame-picker";
 import type { ManualFrame, ManualTimeline } from "@/lib/manual-frame-picker";
 import type { AgentExportBundle } from "@/lib/browser-agent-export";
-import type { BrowserReplayBuffer, ReplayCapsule } from "@/lib/replay-buffer";
+import { cropRegion } from "@/lib/replay-buffer";
+import type { BrowserReplayBuffer, NormalizedBox, ReplayCapsule } from "@/lib/replay-buffer";
 import type { InteractiveReplay } from "@/lib/interactive-replay";
 import type { DemoScenario } from "@/lib/demo-replay";
 import styles from "./agent-export-panel.module.css";
@@ -32,6 +33,7 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
   const manualHighResCache = useRef<Map<string, string>>(new Map());
   const manualDecodeQueue = useRef<Promise<void>>(Promise.resolve());
   const manualGeneration = useRef(0);
+  const cropAnchor = useRef<[number, number] | null>(null);
   const [mode, setMode] = useState<DeliveryMode>("link");
   const [exportDirectory, setExportDirectory] = useState<WritableDirectory | null>(null);
   const [result, setResult] = useState<ExportResult | null>(null);
@@ -41,6 +43,9 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
   const [loadingGaps, setLoadingGaps] = useState<Set<string>>(new Set());
   const [selectedFrames, setSelectedFrames] = useState<Map<string, ManualFrame>>(new Map());
   const [previewFrame, setPreviewFrame] = useState<ManualFrame | null>(null);
+  const [cropMode, setCropMode] = useState(false);
+  const [cropBox, setCropBox] = useState<NormalizedBox | null>(null);
+  const [cropBusy, setCropBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
@@ -115,6 +120,12 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
   };
   const changeBuffer = (minutes: number) => { resetResult(); onBufferMinutesChange(minutes); };
   const changeWindow = (nextSeconds: number) => { resetResult(); onSecondsChange(nextSeconds); };
+  const openPreview = (frame: ManualFrame) => {
+    setCropMode(false); setCropBox(null); setCropBusy(false); cropAnchor.current = null; setPreviewFrame(frame);
+  };
+  const closePreview = () => {
+    setCropMode(false); setCropBox(null); cropAnchor.current = null; setPreviewFrame(null);
+  };
   const prepareManualFrame = useCallback((frame: ManualFrame) => {
     const capsule = manualCapsule.current;
     if (frame.highResolution || !capsule) return Promise.resolve();
@@ -124,7 +135,7 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
     const decode = manualDecodeQueue.current.catch(() => undefined).then(async () => {
       const [decoded] = await bufferRef.current.framesAtOffsets(capsule, [(frame.capturedAt - capsule.triggeredAt) / 1_000]);
       if (!decoded || generation !== manualGeneration.current || manualCapsule.current !== capsule) return;
-      const upgraded = { ...frame, url: decoded.url, highResolution: true };
+      const upgraded = { ...frame, url: decoded.url, originalUrl: decoded.url, highResolution: true };
       manualHighResCache.current.delete(frame.id);
       manualHighResCache.current.set(frame.id, decoded.url);
       const evictedId = manualHighResCache.current.size > 24 ? manualHighResCache.current.keys().next().value as string | undefined : undefined;
@@ -176,6 +187,34 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
   const toggleFrame = (frame: ManualFrame) => setSelectedFrames((current) => {
     const next = new Map(current); if (next.has(frame.id)) next.delete(frame.id); else next.set(frame.id, frame); return next;
   });
+  const replaceManualFrame = useCallback((nextFrame: ManualFrame) => {
+    const replace = (frame: ManualFrame) => frame.id === nextFrame.id ? nextFrame : frame;
+    setManualTimeline((current) => current ? {
+      representatives: current.representatives.map(replace),
+      gaps: current.gaps.map((gap) => ({ ...gap, frames: gap.frames.map(replace) })),
+    } : current);
+    setSelectedFrames((current) => {
+      if (!current.has(nextFrame.id)) return current;
+      const next = new Map(current); next.set(nextFrame.id, nextFrame); return next;
+    });
+    setPreviewFrame((current) => current?.id === nextFrame.id ? nextFrame : current);
+  }, []);
+  const cancelFrameCrop = useCallback((frame: ManualFrame) => {
+    manualHighResCache.current.delete(frame.id);
+    replaceManualFrame({ ...frame, url: frame.originalUrl, cropped: false });
+    setCropMode(false); setCropBox(null);
+  }, [replaceManualFrame]);
+  const applyFrameCrop = useCallback(async (frame: ManualFrame, box: NormalizedBox) => {
+    setCropBusy(true);
+    try {
+      const url = await cropRegion(frame.originalUrl, box, 0);
+      manualHighResCache.current.delete(frame.id);
+      replaceManualFrame({ ...frame, url, cropped: true });
+      setCropMode(false); setCropBox(null);
+    } catch {
+      setError("선택 영역을 만들지 못했습니다. 다시 드래그해 주세요.");
+    } finally { setCropBusy(false); }
+  }, [replaceManualFrame]);
   const refreshManual = async () => {
     if (manualLoading) return;
     const generation = ++manualGeneration.current;
@@ -223,7 +262,7 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
       </div>}
       {mode !== "manual" && <button type="button" className={styles.exportButton} disabled={!active || busy} onClick={() => void doExport()}>{busy ? <CircleNotch className={styles.spin} size={16} /> : <ExportIcon size={17} />}AI Context 생성</button>}
       {mode === "manual" && <ManualPicker timeline={manualTimeline} loading={manualLoading} expandedGaps={expandedGaps} loadingGaps={loadingGaps} selectedFrames={selectedFrames}
-        onToggleGap={toggleGap} onToggleFrame={toggleFrame} onPreview={setPreviewFrame} onPrepareFrame={prepareManualFrame} onDownload={downloadSelected} onRefresh={refreshManual} />}
+        onToggleGap={toggleGap} onToggleFrame={toggleFrame} onPreview={openPreview} onPrepareFrame={prepareManualFrame} onDownload={downloadSelected} onRefresh={refreshManual} />}
       {error && <p className={styles.error} role="alert">{error}</p>}
       {result && mode !== "manual" && <section className={styles.result} aria-live="polite">
         <p className={styles.success}><Check size={15} weight="bold" />{result.delivery === "link" ? `링크 준비됨 · ${new Date(result.share!.expiresAt).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })} 만료` : result.fileName}</p>
@@ -233,10 +272,46 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
         {result.delivery === "link" && <button type="button" className={styles.deleteButton} onClick={() => void removeLink()}><Trash size={13} />링크 삭제</button>}
       </section>}
     </div>
-    {previewFrame && <div className={styles.lightbox} role="dialog" aria-modal="true" aria-label="화면 크게 보기" onClick={() => setPreviewFrame(null)}>
-      <button type="button" aria-label="크게 보기 닫기" onClick={() => setPreviewFrame(null)}><X size={18} /></button>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={previewFrame.url} alt={`${frameTime(previewFrame)} 화면`} onClick={(event) => event.stopPropagation()} />
+    {previewFrame && <div className={styles.lightbox} role="dialog" aria-modal="true" aria-label="화면 크게 보기" onClick={() => { if (!cropBusy) closePreview(); }}>
+      <button type="button" className={styles.cropButton} aria-pressed={cropMode || Boolean(previewFrame.cropped)} disabled={cropBusy}
+        onClick={(event) => {
+          event.stopPropagation();
+          if (cropMode || previewFrame.cropped) cancelFrameCrop(previewFrame);
+          else { setCropMode(true); setCropBox(null); setError(""); }
+        }}>{cropBusy ? <CircleNotch className={styles.spin} size={14} /> : <FrameCorners size={14} />}{cropMode || previewFrame.cropped ? "선택 취소" : "영역 선택"}</button>
+      <button type="button" className={styles.lightboxClose} aria-label="크게 보기 닫기" disabled={cropBusy} onClick={closePreview}><X size={18} /></button>
+      <div className={styles.cropStage} data-selecting={cropMode} onClick={(event) => event.stopPropagation()}
+        onPointerDown={(event) => {
+          if (!cropMode || cropBusy || event.button !== 0) return;
+          event.preventDefault();
+          const rect = event.currentTarget.getBoundingClientRect();
+          cropAnchor.current = [(event.clientX - rect.left) / rect.width, (event.clientY - rect.top) / rect.height];
+          setCropBox([cropAnchor.current[0], cropAnchor.current[1], cropAnchor.current[0], cropAnchor.current[1]]);
+          event.currentTarget.setPointerCapture(event.pointerId);
+        }}
+        onPointerMove={(event) => {
+          if (!cropMode || !cropAnchor.current) return;
+          const rect = event.currentTarget.getBoundingClientRect();
+          const x = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+          const y = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
+          const [ax, ay] = cropAnchor.current;
+          setCropBox([Math.min(ax, x), Math.min(ay, y), Math.max(ax, x), Math.max(ay, y)]);
+        }}
+        onPointerUp={(event) => {
+          if (!cropMode || !cropAnchor.current) return;
+          const rect = event.currentTarget.getBoundingClientRect();
+          const x = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+          const y = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
+          const [ax, ay] = cropAnchor.current;
+          const box: NormalizedBox = [Math.min(ax, x), Math.min(ay, y), Math.max(ax, x), Math.max(ay, y)];
+          cropAnchor.current = null;
+          if (box[2] - box[0] >= 0.02 && box[3] - box[1] >= 0.02) void applyFrameCrop(previewFrame, box);
+          else setCropBox(null);
+        }} onPointerCancel={() => { cropAnchor.current = null; setCropBox(null); }}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={previewFrame.url} alt={`${frameTime(previewFrame)} 화면`} draggable={!cropMode} />
+        {cropMode && cropBox && <span className={styles.cropSelection} style={{ left: `${cropBox[0] * 100}%`, top: `${cropBox[1] * 100}%`, width: `${(cropBox[2] - cropBox[0]) * 100}%`, height: `${(cropBox[3] - cropBox[1]) * 100}%` }} />}
+      </div>
       <time>{frameTime(previewFrame)}</time>
     </div>}
   </main>;
