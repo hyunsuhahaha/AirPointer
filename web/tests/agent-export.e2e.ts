@@ -94,6 +94,10 @@ test("Manual은 0장에서 시작해 대표 사이 화면을 펼치고 확대·�
   await page.getByRole("button", { name: "화면 공유 시작" }).first().click();
   await expect(page.getByText("로컬 기록 중")).toBeVisible();
   await page.waitForTimeout(4_000);
+  const modes = page.getByRole("group", { name: "AI 내보내기 방식" }).getByRole("button");
+  await expect(modes.nth(0)).toContainText("Manual");
+  await expect(modes.nth(1)).toContainText("Agent Link");
+  await expect(modes.nth(2)).toContainText("Local Folder");
   await page.getByRole("button", { name: /Manual/ }).click();
 
   const picker = page.getByRole("region", { name: "로컬 버퍼 화면 선택" });

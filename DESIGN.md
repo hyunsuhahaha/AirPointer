@@ -31,17 +31,20 @@ Desktop is an asymmetric 65/35 workspace. Tablet stacks command controls above t
 
 ## Browser PiP workspace
 
-PiP is a quiet utility above the user's work. Do not show the product name, logo, conversational
-slogans, large empty-state headings, orange CTA surfaces, or animated buffer decoration here.
-Keep the product branding on the main site. Use neutral graphite controls and short action labels:
-리플레이, 화면. 화면 opens a frozen preview with the full screen selected by default; dragging changes
-that selection to a region. Only the recording-status dot uses a muted color; buffer duration is a tooltip.
+PiP is a quiet export utility above the user's work. Do not show the product name, logo, conversational
+slogans, large empty-state headings, or decorative motion. Keep buffer length, send window, and recording
+state in the compact header. The three modes appear in priority order: Manual, Agent Link, Local Folder.
 
-The compact size request is 320×120 and the expanded request is 380×560; the browser owns final
-window sizing. Keep capture controls and the text composer fixed while conversation content scrolls.
-Use self-hosted Noto Sans KR and IBM Plex Mono with the existing CSP nonce. Preserve keyboard focus,
-loading/error states, region selection and reduced motion. Enter sends a text follow-up; Shift+Enter
-inserts a line break. Keep help text short and contextual, and do not repeat the brand in AI answers.
+Manual is the primary visual workflow. Keep representative frames on one horizontal timeline, use `…`
+to reveal frames between them, and start with zero selected images. A frame supports native image drag and
+click-to-enlarge; selection is a separate checkbox. Place refresh beside the selected count without adding
+another row. Refresh replaces the timeline only after the new snapshot is ready. The multi-download action
+stays below the timeline.
+
+Agent Link and Local Folder use the same compact mode area and one primary generation action. Keep status,
+errors, copied prompts, and link deletion legible. The expanded size request is 520×560; the browser owns
+the final window size. Use self-hosted fonts with the existing CSP nonce and preserve keyboard focus,
+loading states, reduced motion, and horizontal scrolling on narrow windows.
 
 For the zero-install demo, “30초 체험하기” reveals exactly three real-development scenarios inside
 the existing graphite stage. Each option names the incident and its execution proof; choosing one is

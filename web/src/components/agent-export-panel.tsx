@@ -141,9 +141,9 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
     </header>
     <div className={styles.body}>
       <div className={styles.modeOptions} role="group" aria-label="AI 내보내기 방식">
+        <button type="button" aria-pressed={mode === "manual"} disabled={busy} onClick={() => selectMode("manual")}><b>Manual</b><small>화면 직접 선택</small></button>
         <button type="button" aria-pressed={mode === "link"} disabled={busy} onClick={() => selectMode("link")}><b>Agent Link</b><small>URL 하나 전달</small></button>
         <button type="button" aria-pressed={mode === "folder"} disabled={busy} onClick={() => selectMode("folder")}><b>Local Folder</b><small>로컬 Agent가 검색</small></button>
-        <button type="button" aria-pressed={mode === "manual"} disabled={busy} onClick={() => selectMode("manual")}><b>Manual</b><small>화면 직접 선택</small></button>
       </div>
       {mode === "folder" && <p className={styles.modeNote}>{exportDirectory ? `저장 위치: …/${exportDirectory.name}` : "처음 한 번 저장할 폴더를 선택합니다."}</p>}
       {mode !== "manual" && <button type="button" className={styles.exportButton} disabled={!active || busy} onClick={() => void doExport()}>{busy ? <CircleNotch className={styles.spin} size={16} /> : <ExportIcon size={17} />}AI Context 생성</button>}
