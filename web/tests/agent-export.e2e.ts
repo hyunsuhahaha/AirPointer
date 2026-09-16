@@ -84,9 +84,9 @@ test("Local Folder는 저장 경로와 실제 작성 파일을 같은 프롬프�
 test("Manual은 0장에서 시작해 대표 사이 화면을 펼치고 확대·드래그·다중 다운로드한다", async ({ page }) => {
   test.setTimeout(90_000);
   await page.addInitScript(() => {
-    const canvas = document.createElement("canvas"); canvas.width = 640; canvas.height = 360;
+    const canvas = document.createElement("canvas"); canvas.width = 1920; canvas.height = 1080;
     const context = canvas.getContext("2d")!; let tick = 0;
-    setInterval(() => { context.fillStyle = `hsl(${tick++ * 31} 60% 50%)`; context.fillRect(0, 0, 640, 360); }, 200);
+    setInterval(() => { context.fillStyle = `hsl(${tick++ * 31} 60% 50%)`; context.fillRect(0, 0, canvas.width, canvas.height); }, 200);
     navigator.mediaDevices.getDisplayMedia = async () => canvas.captureStream(15);
     Object.defineProperty(window, "documentPictureInPicture", { configurable: true, value: undefined });
   });
@@ -104,6 +104,7 @@ test("Manual은 0장에서 시작해 대표 사이 화면을 펼치고 확대·�
   await expect(picker.getByText("선택 0장")).toBeVisible({ timeout: 30_000 });
   const representatives = picker.locator('article[data-representative="true"]');
   await expect(representatives.first()).toBeVisible();
+  await expect.poll(() => representatives.first().locator("img").evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBe(1600);
   const representativeCount = await representatives.count();
   await page.evaluate(() => {
     const target = document.createElement("div");
@@ -140,6 +141,7 @@ test("Manual은 0장에서 시작해 대표 사이 화면을 펼치고 확대·�
   await gap.click();
   const middle = picker.locator('article[data-representative="false"]');
   await expect(middle.first()).toBeVisible();
+  await expect.poll(() => middle.first().locator("img").evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBe(1600);
   expect(await picker.locator("article").count()).toBeGreaterThan(representativeCount);
 
   await middle.first().getByRole("button", { name: /화면 크게 보기/ }).click();

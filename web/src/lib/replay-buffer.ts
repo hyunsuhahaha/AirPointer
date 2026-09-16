@@ -623,7 +623,7 @@ function thumbnailFromVideo(video: HTMLVideoElement) {
 }
 
 function frameCanvas(video: HTMLVideoElement) {
-  const width = Math.min(1280, Math.max(1, video.videoWidth));
+  const width = Math.min(1600, Math.max(1, video.videoWidth));
   const height = Math.max(1, Math.round(width * video.videoHeight / Math.max(1, video.videoWidth)));
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -635,7 +635,7 @@ function frameCanvas(video: HTMLVideoElement) {
 function makeReplayFrames(frames: TimedFrame[], triggeredAt: number, kind: "replay-frame" | "bookmarked-frame" | "queried-frame"): OverviewFrame[] {
   return frames.map((frame) => {
     const atSeconds = Math.max(0, (triggeredAt - frame.capturedAt) / 1_000);
-    return { capturedAt: frame.capturedAt, sampleOffsetsSeconds: [atSeconds], url: frame.canvas.toDataURL("image/jpeg", 0.78), atSeconds, kind };
+    return { capturedAt: frame.capturedAt, sampleOffsetsSeconds: [atSeconds], url: frame.canvas.toDataURL("image/jpeg", 0.84), atSeconds, kind };
   });
 }
 

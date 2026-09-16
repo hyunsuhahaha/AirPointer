@@ -10,8 +10,7 @@ export function buildManualTimeline(previews: PreviewFrame[], overview: Overview
     .flatMap((frame, index) => {
       const capturedAt = frame.capturedAt;
       if (capturedAt === undefined) return [];
-      const nearest = ordered.reduce<PreviewFrame | null>((best, preview) => !best || Math.abs(preview.capturedAt - capturedAt) < Math.abs(best.capturedAt - capturedAt) ? preview : best, null);
-      return [{ id: `representative-${capturedAt}-${index}`, url: nearest?.dataUrl ?? frame.url, capturedAt, representative: true }];
+      return [{ id: `representative-${capturedAt}-${index}`, url: frame.url, capturedAt, representative: true }];
     })
     .sort((left, right) => left.capturedAt - right.capturedAt);
   const gaps = representatives.slice(0, -1).map((frame, index) => {

@@ -145,7 +145,15 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
         <button type="button" aria-pressed={mode === "link"} disabled={busy} onClick={() => selectMode("link")}><b>Agent Link</b><small>URL 하나 전달</small></button>
         <button type="button" aria-pressed={mode === "folder"} disabled={busy} onClick={() => selectMode("folder")}><b>Local Folder</b><small>로컬 Agent가 검색</small></button>
       </div>
-      {mode === "folder" && <p className={styles.modeNote}>{exportDirectory ? `저장 위치: …/${exportDirectory.name}` : "처음 한 번 저장할 폴더를 선택합니다."}</p>}
+      {mode === "folder" && <div className={styles.modeNoteRow}>
+        <p className={styles.modeNote}>{exportDirectory ? `저장 위치: …/${exportDirectory.name}` : "저장 위치를 선택해 주세요."}</p>
+        <button type="button" className={styles.directoryButton} disabled={busy} onClick={() => void (async () => {
+          setBusy(true); setError("");
+          try { setExportDirectory(await chooseExportDirectory(null)); setResult(null); setCopied(false); }
+          catch (reason) { setError(reason instanceof Error ? reason.message : "폴더를 선택하지 못했습니다."); }
+          finally { setBusy(false); }
+        })()}><FolderOpen size={12} />폴더 선택</button>
+      </div>}
       {mode !== "manual" && <button type="button" className={styles.exportButton} disabled={!active || busy} onClick={() => void doExport()}>{busy ? <CircleNotch className={styles.spin} size={16} /> : <ExportIcon size={17} />}AI Context 생성</button>}
       {mode === "manual" && <ManualPicker timeline={manualTimeline} loading={manualLoading} expandedGaps={expandedGaps} selectedFrames={selectedFrames}
         onToggleGap={toggleGap} onToggleFrame={toggleFrame} onPreview={setPreviewFrame} onDownload={downloadSelected} onRefresh={refreshManual} />}
