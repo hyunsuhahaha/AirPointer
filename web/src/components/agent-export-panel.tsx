@@ -2,11 +2,11 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
-import { ArrowClockwise, ArrowDownLeft, ArrowUpRight, CaretLeft, CaretRight, CaretUp, Check, CircleNotch, Copy, CornersOut, DownloadSimple, FolderOpen, FrameCorners, LinkSimple, MagnifyingGlassPlus, Minus, PaperPlaneTilt, Play, Stop, Trash, X } from "@phosphor-icons/react";
+import { ArrowClockwise, ArrowDownLeft, ArrowUpRight, CaretLeft, CaretRight, CaretUp, Check, CircleNotch, Copy, CornersOut, DownloadSimple, FolderOpen, FolderPlus, FrameCorners, LinkSimple, MagnifyingGlassPlus, Minus, PaperPlaneTilt, Play, Stop, Trash, X } from "@phosphor-icons/react";
 import { createAgentLink, deleteAgentLink } from "@/lib/agent-link";
 import type { AgentLink } from "@/lib/agent-link";
 import { exportAgentContext } from "@/lib/browser-agent-export";
-import { chooseExportDirectory, localExportPath, localFolderPrompt, savedExportDirectory, writeExportFolder } from "@/lib/export-directory";
+import { chooseExportDirectory, createExportDirectory, localExportPath, localFolderPrompt, savedExportDirectory, writeExportFolder } from "@/lib/export-directory";
 import type { WritableDirectory } from "@/lib/export-directory";
 import { buildManualTimeline, manualFrameFile, visibleManualFrames } from "@/lib/manual-frame-picker";
 import type { ManualFrame, ManualTimeline } from "@/lib/manual-frame-picker";
@@ -19,6 +19,13 @@ type DeliveryMode = "link" | "folder" | "manual";
 // PiP allows one resize per click, so the minimized bar's Manual shortcut
 // restores straight to this size instead of restoring and then resizing.
 const MANUAL_WINDOW_SIZE: [number, number] = [520, 560];
+const EXPORT_WINDOW_SIZE: [number, number] = [390, 330];
+// The minimized bar's 1·2·3 shortcuts, in this order.
+const QUICK_MODES: { mode: DeliveryMode; label: string; size: [number, number] }[] = [
+  { mode: "manual", label: "Manual", size: MANUAL_WINDOW_SIZE },
+  { mode: "link", label: "Agent Link", size: EXPORT_WINDOW_SIZE },
+  { mode: "folder", label: "Local Folder", size: EXPORT_WINDOW_SIZE },
+];
 type ExportResult = AgentExportBundle & { delivery: DeliveryMode; share?: AgentLink };
 
 export function AgentExportPanel({ bufferRef, active, seconds, bufferMinutes, onBufferMinutesChange, onSecondsChange, captureIntervalMs, onCaptureIntervalChange, recording, onStartRecording, onStopRecording, minimized, onMinimizedChange, halfScreen, onHalfScreenChange, surface }: {
@@ -33,7 +40,6 @@ export function AgentExportPanel({ bufferRef, active, seconds, bufferMinutes, on
 }) {
   const panel = useRef<HTMLElement>(null);
   const activeNow = useRef(active);
-  const shareToken = useRef("");
   const manualCapsule = useRef<ReplayCapsule | null>(null);
   const manualFrameLoads = useRef<Map<string, Promise<void>>>(new Map());
   const manualHighResCache = useRef<Map<string, string>>(new Map());
@@ -43,6 +49,8 @@ export function AgentExportPanel({ bufferRef, active, seconds, bufferMinutes, on
   // Nothing is preselected: the user picks how to hand off the context.
   const [mode, setMode] = useState<DeliveryMode | null>(null);
   const [exportDirectory, setExportDirectory] = useState<WritableDirectory | null>(null);
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
   const [result, setResult] = useState<ExportResult | null>(null);
   const [manualTimeline, setManualTimeline] = useState<ManualTimeline | null>(null);
   const [manualLoading, setManualLoading] = useState(false);
@@ -77,11 +85,9 @@ export function AgentExportPanel({ bufferRef, active, seconds, bufferMinutes, on
     return () => { cancelled = true; manualGeneration.current += 1; };
   }, [active, bufferRef, mode, seconds]);
 
-  const discardShare = () => {
-    if (shareToken.current) void deleteAgentLink(shareToken.current);
-    shareToken.current = "";
-  };
-  const resetResult = () => { discardShare(); setResult(null); setCopied(false); setError(""); };
+  // Resetting only forgets the link locally: it may already be in an agent's hands,
+  // so it stays live until its TTL unless the user deletes it explicitly.
+  const resetResult = () => { setResult(null); setCopied(false); setError(""); };
   const selectMode = (next: DeliveryMode, resize = true) => {
     resetResult(); setMode(next);
     if (next === "manual" && resize) try { panel.current?.ownerDocument.defaultView?.resizeTo(...MANUAL_WINDOW_SIZE); } catch { /* Browser owns PiP sizing. */ }
@@ -95,11 +101,9 @@ export function AgentExportPanel({ bufferRef, active, seconds, bufferMinutes, on
       if (directory) setExportDirectory(directory);
       const next = await exportAgentContext(bufferRef.current, "complete", seconds, surface);
       if (!activeNow.current) throw new Error("화면 공유가 끝나 Context를 만들지 않았습니다.");
-      discardShare();
       let share: AgentLink | undefined;
       if (mode === "link") {
         share = await createAgentLink(next.files, seconds);
-        shareToken.current = share.token;
         next.fileName = "Agent Link";
         next.prompt = `최근 ${seconds}초 화면 기록을 확인해서 제가 무엇을 하고 있었는지 파악해 주세요.\n\n${share.url}`;
       } else {
@@ -114,6 +118,18 @@ export function AgentExportPanel({ bufferRef, active, seconds, bufferMinutes, on
     } finally { setBusy(false); }
   };
 
+  const createFolder = async () => {
+    const name = newFolderName.trim();
+    if (!name || busy) return;
+    setBusy(true); setError("");
+    try {
+      const parent = exportDirectory ?? await chooseExportDirectory(null);
+      setExportDirectory(await createExportDirectory(parent, name));
+      setCreatingFolder(false); setResult(null); setCopied(false);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "폴더를 만들지 못했습니다."); }
+    finally { setBusy(false); }
+  };
+
   const prompt = result?.prompt ?? "";
   const copyPrompt = async () => {
     try { await copyText(prompt, panel.current?.ownerDocument ?? document); setCopied(true); setError(""); }
@@ -121,7 +137,7 @@ export function AgentExportPanel({ bufferRef, active, seconds, bufferMinutes, on
   };
   const removeLink = async () => {
     if (!result?.share) return;
-    try { await deleteAgentLink(result.share.token); shareToken.current = ""; setResult(null); setCopied(false); }
+    try { await deleteAgentLink(result.share.token); setResult(null); setCopied(false); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "Agent Link를 삭제하지 못했습니다."); }
   };
   const changeBuffer = (minutes: number) => { resetResult(); onBufferMinutesChange(minutes); };
@@ -282,7 +298,8 @@ export function AgentExportPanel({ bufferRef, active, seconds, bufferMinutes, on
 
   if (minimized) return <main ref={panel} className={styles.panel} data-minimized="true" aria-label="AI 맥락 내보내기">
     <header><div className={styles.headerControls}>{recordingControls}
-      <button type="button" className={styles.recordToggle} onClick={() => { onMinimizedChange(false, MANUAL_WINDOW_SIZE); selectMode("manual", false); }}>Manual</button>
+      {QUICK_MODES.map((quick, index) => <button key={quick.mode} type="button" className={styles.quickMode} aria-label={quick.label} title={quick.label}
+        onClick={() => { onMinimizedChange(false, quick.size); selectMode(quick.mode, false); }}>{index + 1}</button>)}
       {minimizeButton}</div></header>
   </main>;
 
@@ -310,7 +327,13 @@ export function AgentExportPanel({ bufferRef, active, seconds, bufferMinutes, on
           catch (reason) { setError(reason instanceof Error ? reason.message : "폴더를 선택하지 못했습니다."); }
           finally { setBusy(false); }
         })()}><FolderOpen size={12} />폴더 선택</button>
+        <button type="button" className={styles.directoryButton} disabled={busy} onClick={() => { setNewFolderName(""); setCreatingFolder((open) => !open); }}><FolderPlus size={12} />새 폴더</button>
       </div>}
+      {mode === "folder" && creatingFolder && <form className={styles.newFolderRow} onSubmit={(event) => { event.preventDefault(); void createFolder(); }}>
+        <input aria-label="새 폴더 이름" placeholder={exportDirectory ? `${exportDirectory.name} 안에 만들 폴더 이름` : "폴더 이름 (만들 위치를 다음에 선택)"} value={newFolderName}
+          autoFocus disabled={busy} onChange={(event) => setNewFolderName(event.target.value)} />
+        <button type="submit" className={styles.directoryButton} disabled={busy || !newFolderName.trim()}>만들기</button>
+      </form>}
       {mode && mode !== "manual" && <button type="button" className={styles.exportButton} disabled={!active || busy} onClick={() => void doExport()}>{busy ? <CircleNotch className={styles.spin} size={16} /> : <ExportIcon size={17} />}AI Context 생성</button>}
       {mode === "manual" && <ManualPicker timeline={manualTimeline} loading={manualLoading} expandedGaps={expandedGaps} loadingGaps={loadingGaps} selectedFrames={selectedFrames}
         onToggleGap={toggleGap} onToggleFrame={toggleFrame} onPreview={openPreview} onPrepareFrame={prepareManualFrame} onDownload={downloadSelected} onRefresh={refreshManual} />}

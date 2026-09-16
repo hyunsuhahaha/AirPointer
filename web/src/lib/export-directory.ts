@@ -58,6 +58,14 @@ export async function chooseExportDirectory(saved: WritableDirectory | null) {
   return handle;
 }
 
+// Creates (or reuses) a subfolder of `parent` and makes it the saved export location.
+export async function createExportDirectory(parent: FileSystemDirectoryHandle, name: string) {
+  if (/[\/:*?"<>|]/.test(name) || name === "." || name === "..") throw new Error("폴더 이름에 쓸 수 없는 문자가 있습니다.");
+  const handle = await parent.getDirectoryHandle(name, { create: true }) as WritableDirectory;
+  await rememberDirectory(handle).catch(() => undefined);
+  return handle;
+}
+
 export async function writeExportFolder(parent: FileSystemDirectoryHandle, name: string, files: File[]) {
   const folder = await parent.getDirectoryHandle(name, { create: true });
   await Promise.all(files.map(async (file) => {

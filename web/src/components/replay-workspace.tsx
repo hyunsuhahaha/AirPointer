@@ -38,7 +38,7 @@ import type { AnalysisMode, AnalysisTiming, EvidenceItem, ExplorationProgress } 
 declare global {
   interface Window {
     documentPictureInPicture?: {
-      requestWindow(options?: { width?: number; height?: number }): Promise<Window>;
+      requestWindow(options?: { width?: number; height?: number; preferInitialWindowPlacement?: boolean }): Promise<Window>;
       window: Window | null;
     };
   }
@@ -683,9 +683,13 @@ export function ReplayWorkspace() {
     }
     setPipMessage("");
     try {
-      const pipWindow = await window.documentPictureInPicture.requestWindow(minimized
-        ? { width: PIP_MINIMIZED_SIZE[0], height: PIP_MINIMIZED_INNER_HEIGHT }
-        : { width: expanded ? 390 : 370, height: expanded ? 560 : 260 });
+      // Chrome otherwise reopens at the size the user last dragged the PiP to.
+      const pipWindow = await window.documentPictureInPicture.requestWindow({
+        ...(minimized
+          ? { width: PIP_MINIMIZED_SIZE[0], height: PIP_MINIMIZED_INNER_HEIGHT }
+          : { width: expanded ? 390 : 370, height: expanded ? 560 : 260 }),
+        preferInitialWindowPlacement: true,
+      });
       pipWindowRef.current = pipWindow;
       pipWindow.document.title = "AI 내보내기";
       pipWindow.document.documentElement.lang = "ko";
