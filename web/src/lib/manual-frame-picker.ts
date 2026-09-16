@@ -8,9 +8,10 @@ export function buildManualTimeline(previews: PreviewFrame[], overview: Overview
   const ordered = [...previews].sort((left, right) => left.capturedAt - right.capturedAt);
   const representatives = overview
     .flatMap((frame, index) => {
-      if (frame.capturedAt === undefined) return [];
-      const nearest = ordered.reduce<PreviewFrame | null>((best, preview) => !best || Math.abs(preview.capturedAt - frame.capturedAt) < Math.abs(best.capturedAt - frame.capturedAt) ? preview : best, null);
-      return [{ id: `representative-${frame.capturedAt}-${index}`, url: nearest?.dataUrl ?? frame.url, capturedAt: frame.capturedAt, representative: true }];
+      const capturedAt = frame.capturedAt;
+      if (capturedAt === undefined) return [];
+      const nearest = ordered.reduce<PreviewFrame | null>((best, preview) => !best || Math.abs(preview.capturedAt - capturedAt) < Math.abs(best.capturedAt - capturedAt) ? preview : best, null);
+      return [{ id: `representative-${capturedAt}-${index}`, url: nearest?.dataUrl ?? frame.url, capturedAt, representative: true }];
     })
     .sort((left, right) => left.capturedAt - right.capturedAt);
   const gaps = representatives.slice(0, -1).map((frame, index) => {
