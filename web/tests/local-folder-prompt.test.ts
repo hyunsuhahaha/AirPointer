@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { localExportPath, localFolderPrompt } from "../src/lib/export-directory.ts";
+import { chooseExportDirectory, localExportPath, localFolderPrompt } from "../src/lib/export-directory.ts";
 
 test("Local Folder 프롬프트는 생성된 폴더 경로를 포함하고 그 경로로 자료를 조회할 수 있다", async () => {
   const contextName = "Context-2026-09-16T04-24-28-327Z";
@@ -26,4 +26,16 @@ test("Local Folder 프롬프트는 생성된 폴더 경로를 포함하고 그 �
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("PiP에서 누른 폴더 선택은 메인 창이 아니라 PiP 창의 picker를 연다", async () => {
+  const selected = { name: "dd" } as FileSystemDirectoryHandle;
+  const pipWindow = { showDirectoryPicker: async () => selected };
+  const originalWindow = globalThis.window;
+  Object.defineProperty(globalThis, "window", { configurable: true, value: {
+    documentPictureInPicture: { window: pipWindow },
+    showDirectoryPicker: async () => { throw new Error("메인 창 picker가 호출됨"); },
+  } });
+  try { assert.equal(await chooseExportDirectory(null), selected); }
+  finally { Object.defineProperty(globalThis, "window", { configurable: true, value: originalWindow }); }
 });

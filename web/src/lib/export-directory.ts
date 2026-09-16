@@ -46,9 +46,14 @@ function rememberDirectory(handle: WritableDirectory) {
 export async function chooseExportDirectory(saved: WritableDirectory | null) {
   let handle = saved;
   if (handle && await handle.requestPermission({ mode: "readwrite" }) === "granted") return handle;
-  if (!("showDirectoryPicker" in window)) throw new Error("이 브라우저는 원본 파일 폴더 저장을 지원하지 않습니다. PDF 형식을 선택해 주세요.");
-  const picker = window.showDirectoryPicker as (options: { mode: "readwrite"; startIn: string }) => Promise<FileSystemDirectoryHandle>;
-  handle = await picker({ mode: "readwrite", startIn: "downloads" }) as WritableDirectory;
+  const pickerWindow = window.documentPictureInPicture?.window ?? window;
+  if (!("showDirectoryPicker" in pickerWindow)) throw new Error("이 브라우저는 로컬 폴더 저장을 지원하지 않습니다.");
+  const picker = pickerWindow.showDirectoryPicker as (options: { mode: "readwrite"; startIn: string }) => Promise<FileSystemDirectoryHandle>;
+  try { handle = await picker.call(pickerWindow, { mode: "readwrite", startIn: "downloads" }) as WritableDirectory; }
+  catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw new Error("폴더 선택이 취소되었습니다.");
+    throw error;
+  }
   await rememberDirectory(handle).catch(() => undefined);
   return handle;
 }
