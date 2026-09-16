@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { evenlySpaced, replayGapOffsets, replayPointsAtOffsets, selectNotable, surroundingReplayOffsets, withReplayBookmarks } from "../src/lib/replay-buffer.ts";
-import { DEMO_SCENARIOS, demoFrameState } from "../src/lib/demo-replay.ts";
+import { demoFrameState } from "../src/lib/demo-replay.ts";
 import { formatReplayRange, replayExplorationRequestsFrom } from "../src/lib/replay-frame-request.ts";
 import { sensitiveCategory } from "../src/lib/privacy-redaction.ts";
 
@@ -72,10 +72,4 @@ test("60초 체험 리플레이의 오류는 0.5초 동안만 존재한다", () 
   assert.equal(demoFrameState(-6.24), "error");
   assert.equal(demoFrameState(-5.76), "error");
   assert.equal(demoFrameState(-5.74), "failed");
-});
-
-test("모든 체험 시나리오는 재현 가능한 실제 실행 녹화와 사용자 질문을 사용한다", () => {
-  assert.deepEqual(DEMO_SCENARIOS.map(({ id }) => id), ["worktree", "migration", "test"]);
-  assert.ok(DEMO_SCENARIOS.every(({ question, focusBox, video, proof }) => question.length > 10 && focusBox.every((value) => value >= 0 && value <= 1) && video.endsWith(".webm") && proof.includes("실제")));
-  assert.equal(new Set(DEMO_SCENARIOS.map(({ question }) => question)).size, DEMO_SCENARIOS.length);
 });

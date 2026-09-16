@@ -1,7 +1,5 @@
-import { ChangeTracker, selectNotable } from "./replay-buffer.ts";
+import { selectNotable } from "./replay-buffer.ts";
 import type { BrowserReplayBuffer, ChangeEvent, OverviewFrame, PreviewFrame, ReplayCapsule } from "./replay-buffer";
-import type { InteractiveReplay } from "./interactive-replay";
-import type { DemoScenario } from "./demo-replay";
 
 export type AgentExportMode = "complete" | "attach";
 
@@ -72,32 +70,5 @@ export async function exportAgentContext(buffer: BrowserReplayBuffer,
   const frames = notable.length >= 6 ? notable.map(({ dataUrl, capturedAt }) => ({
       url: dataUrl, capturedAt, atSeconds: (capsule.triggeredAt - capturedAt) / 1_000, kind: "replay-frame" as const,
     })) : capsule.overviewFrames;
-  return bundleSnapshot(mode, capsule, captures, events, frames);
-}
-
-export async function exportDemoAgentContext(replay: InteractiveReplay, scenario: DemoScenario,
-  mode: AgentExportMode, seconds: number): Promise<AgentExportBundle> {
-  const response = await fetch(scenario.video);
-  if (!response.ok) throw new Error("체험 녹화 파일을 읽지 못했습니다.");
-  const video = await response.blob();
-  const windowSeconds = Math.min(seconds, replay.seconds);
-  const capsule: ReplayCapsule = { overviewFrames: [], startedAt: replay.triggeredAt - windowSeconds * 1_000,
-    triggeredAt: replay.triggeredAt, segments: [{ blob: video, startedAt: replay.triggeredAt - replay.seconds * 1_000, durationMs: replay.seconds * 1_000 }] };
-  const captures = replay.scenes.filter(({ at }) => at >= capsule.startedAt).map(({ url, at }) => ({ dataUrl: url, capturedAt: at }));
-  const tracker = new ChangeTracker();
-  const events: ChangeEvent[] = [];
-  for (const capture of captures) {
-    const bitmap = await createImageBitmap(imageBlob(capture.dataUrl));
-    try {
-      const event = tracker.observe(bitmap, bitmap.width, bitmap.height, capture.capturedAt);
-      if (event) events.push({ ...event, bbox: [event.bbox[0] / bitmap.width, event.bbox[1] / bitmap.height,
-        event.bbox[2] / bitmap.width, event.bbox[3] / bitmap.height] });
-    } finally { bitmap.close(); }
-  }
-  const notable = selectNotable(captures, events, 12);
-  const frames = (notable.length >= 6 ? notable.map(({ dataUrl, capturedAt }) => ({ url: dataUrl, capturedAt })) :
-    replay.atOffsets(Array.from({ length: 12 }, (_, index) => -windowSeconds * (1 - index / 11))).map(({ url, capturedAt }) => ({ url, capturedAt: capturedAt ?? replay.triggeredAt }))).map(({ url, capturedAt }) => ({
-    url, capturedAt, atSeconds: (replay.triggeredAt - capturedAt) / 1_000, kind: "replay-frame" as const,
-  }));
   return bundleSnapshot(mode, capsule, captures, events, frames);
 }

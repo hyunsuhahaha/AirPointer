@@ -1,0 +1,163 @@
+.overlay { position: fixed; inset: 0; z-index: 1000; overflow: hidden; background: radial-gradient(ellipse at 50% 0%, #22211d, #0b0b0a 70%); color: #f1f1eb; outline: none; font-family: inherit; }
+.overlay button { font: inherit; }
+.overlay button:focus-visible { outline: 2px solid #ff6b22; outline-offset: 2px; }
+
+.topBar { position: absolute; left: 0; right: 0; top: 0; height: 64px; display: flex; align-items: center; gap: 18px; padding: 0 16px 0 24px; border-bottom: 1px solid #2d2c28; }
+.topBar > strong { font-size: 15px; letter-spacing: -.02em; white-space: nowrap; }
+.tabs { display: flex; gap: 6px; min-width: 0; overflow-x: auto; }
+.tabs button { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 14px; border: 1px solid #3a3934; border-radius: 999px; background: transparent; color: #bdbcb3; font-size: 13px; white-space: nowrap; cursor: pointer; }
+.tabs button b { color: #ff9360; font: 600 11px var(--font-mono), monospace; }
+.tabs button[aria-pressed=true] { border-color: #ff6b22; background: #2a1d15; color: #fff; }
+.controls { display: flex; gap: 6px; margin-left: auto; }
+.controls button { display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid #3a3934; border-radius: 999px; background: #151513; color: #fff; cursor: pointer; }
+.controls button:hover { border-color: #ff6b22; }
+
+.stageArea { position: absolute; left: 0; right: 0; top: 64px; bottom: 0; }
+.stage { position: absolute; left: 50%; top: 50%; overflow: hidden; border-radius: 18px; background: #16161a; box-shadow: 0 30px 80px rgba(0,0,0,.5), inset 0 0 0 1px #2c2c33; }
+.progress { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(255,255,255,.1); }
+.progress span { display: block; height: 100%; background: #ff6b22; }
+
+/* Game preview window */
+.gameWindow { position: absolute; overflow: hidden; border-radius: 12px; background: #0f1013; box-shadow: 0 20px 50px rgba(0,0,0,.45), 0 0 0 1px #34353d; }
+.gameWindow > header { display: flex; align-items: center; gap: 7px; height: 36px; padding: 0 14px; background: #24252c; color: #a9abb8; font-size: 13px; }
+.gameWindow > header i { width: 11px; height: 11px; border-radius: 50%; background: #ff5f57; }
+.gameWindow > header i:nth-child(2) { background: #febc2e; }
+.gameWindow > header i:nth-child(3) { background: #28c840; }
+.gameWindow > header i[data-gone=true] { visibility: hidden; }
+.gameWindow > header span { margin-left: 10px; }
+.gameCanvas { position: relative; height: 405px; overflow: hidden; }
+.gameCanvas svg { display: block; width: 100%; height: 100%; }
+.gameZoom { width: 100%; height: 100%; transform-origin: 31% 50%; }
+.huh { position: absolute; left: 44%; top: 10%; color: #fff; font-size: 64px; font-weight: 900; letter-spacing: -.04em; text-shadow: 0 4px 0 #b43b2a, 0 0 24px rgba(0,0,0,.6); rotate: 8deg; animation: huh .4s ease-out; }
+@keyframes huh { from { transform: scale(.3); opacity: 0; } }
+
+/* Claudy chat */
+.claudy { position: absolute; overflow: hidden; border-radius: 16px; background: #f4f0e6; color: #2d2b26; box-shadow: 0 20px 50px rgba(0,0,0,.45); }
+.claudy > header { display: flex; align-items: center; gap: 8px; height: 52px; padding: 0 18px; border-bottom: 1px solid #e3ddd0; }
+.claudy > header b { font-size: 17px; letter-spacing: -.02em; }
+.claudy > header small { margin-left: auto; color: #8b8578; font-size: 12px; }
+.messages { position: absolute; left: 0; right: 0; top: 56px; display: flex; flex-direction: column; justify-content: flex-end; gap: 12px; padding: 0 18px 8px; overflow: hidden; mask-image: linear-gradient(180deg, transparent, #000 48px); }
+.welcome { display: flex; flex-direction: column; align-items: center; gap: 10px; margin: auto 0; color: #6f695d; font-family: Georgia, "Noto Serif KR", serif; font-size: 22px; }
+.userMessage { align-self: flex-end; max-width: 78%; padding: 10px 14px; border-radius: 16px; background: #e7e0d1; font-size: 15px; line-height: 1.5; animation: rise .25s ease-out; }
+.userMessage p { margin: 0; }
+.messageImages { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.messageImage { display: block; width: 92px; height: 92px; overflow: hidden; border-radius: 10px; border: 1px solid #cfc6b3; }
+.messageImages[data-many=true] .messageImage { width: 62px; height: 40px; border-radius: 6px; }
+.evidence { display: flex; flex-direction: column; gap: 4px; width: 200px; }
+.evidence svg { display: block; width: 200px; height: 125px; border: 1px solid #e0d8c7; border-radius: 8px; }
+.evidence small { color: #8b8578; font: 11px var(--font-mono), monospace; }
+.attachmentMore { flex: none; display: grid; place-items: center; width: 34px; height: 44px; border-radius: 8px; background: #efe9dc; color: #6f695d; font-size: 13px; font-weight: 700; }
+.messageImage svg, .attachment svg { display: block; width: 100%; height: 100%; }
+.claudyMessage { display: flex; gap: 10px; align-items: flex-start; animation: rise .25s ease-out; }
+.claudyMessage > svg { flex: none; margin-top: 3px; }
+.claudyMessage > div { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.claudyMessage p { margin: 0; font-family: Georgia, "Noto Serif KR", serif; font-size: 15.5px; line-height: 1.6; }
+.claudyMessage code { display: block; padding: 7px 10px; border: 1px solid #e0d8c7; border-radius: 8px; background: #fbf8f1; color: #5f5a4f; font: 12.5px var(--font-mono), monospace; }
+.thinking { color: #9a9282; font-style: italic; }
+.thinking i { display: inline-block; width: 4px; height: 4px; margin-left: 3px; border-radius: 50%; background: #d9784f; animation: dot 1s infinite; }
+.thinking i:nth-child(2) { animation-delay: .15s; }
+.thinking i:nth-child(3) { animation-delay: .3s; }
+@keyframes dot { 50% { transform: translateY(-4px); opacity: .4; } }
+@keyframes rise { from { transform: translateY(8px); opacity: 0; } }
+.chatInput { position: absolute; display: flex; align-items: center; gap: 10px; padding: 0 56px 0 14px; border: 1.5px solid #ddd5c4; border-radius: 16px; background: #fff; transition: border-color .15s, box-shadow .15s; }
+.chatInput[data-dropping=true] { border-color: #d9784f; box-shadow: 0 0 0 4px rgba(217,120,79,.2); }
+.attachment { flex: none; width: 44px; height: 44px; overflow: hidden; border-radius: 8px; border: 1px solid #cfc6b3; animation: rise .2s ease-out; }
+.inputText { flex: 1; min-width: 0; overflow: hidden; color: #2d2b26; font-size: 15px; white-space: nowrap; text-overflow: ellipsis; }
+.inputText[data-empty=true] { color: #aaa293; }
+.caret { display: inline-block; width: 2px; height: 1.05em; margin-left: 1px; vertical-align: -.15em; background: #2d2b26; animation: blink .8s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.clip { position: absolute; right: 52px; color: #a39b8b; }
+.send { position: absolute; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 10px; background: #d9784f; color: #fff; }
+
+/* The AI as a stick figure on a white card */
+.stickCard { position: absolute; z-index: 6; display: flex; flex-direction: column; align-items: center; width: 170px; margin: 0; padding: 10px 14px 14px; border-radius: 14px; background: #fff; color: #111; box-shadow: 0 24px 60px rgba(0,0,0,.55); animation: cardPop .45s cubic-bezier(.2, 1.6, .4, 1); transform-origin: 50% 90%; }
+.stickCard > b { font-size: 26px; font-weight: 900; line-height: 1.1; }
+.stickCard img { display: block; width: 100%; height: auto; }
+.stickCard[data-kind=smart] { box-shadow: 0 0 0 4px #ffd84a, 0 0 40px rgba(255,216,74,.6), 0 24px 60px rgba(0,0,0,.55); }
+@keyframes cardPop { from { transform: scale(.4); opacity: 0; } }
+
+/* 방금그거뭐였지 PiP (mirrors the real export panel) */
+.pip { position: absolute; overflow: hidden; border-radius: 10px; background: #111210; color: #f1f1eb; box-shadow: 0 24px 60px rgba(0,0,0,.6), 0 0 0 1px #3a3b36; font-size: 12px; animation: pipIn .3s ease-out; }
+.pip > header { height: 30px; padding: 0 12px; background: #1f201d; color: #9a9c93; font-size: 12px; line-height: 30px; }
+@keyframes pipIn { from { transform: translateY(20px) scale(.96); opacity: 0; } }
+.pipStatus { position: absolute; right: 14px; top: 6px; display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; }
+.pipStatus em, .pipBar em { display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px; border: 1px solid #6b3a28; border-radius: 3px; color: #ff9e80; font-size: 10px; font-style: normal; }
+.pipBar { display: flex; align-items: center; gap: 8px; height: 48px; padding: 0 14px; font-size: 12px; font-weight: 700; }
+.pipBar em:last-of-type { border-color: #4a4c45; color: #e1e2da; }
+.pipBar svg { margin-left: auto; }
+.recDot { width: 7px; height: 7px; border-radius: 50%; background: #ff6b22; box-shadow: 0 0 8px #ff6b22; }
+.modeButton { position: absolute; width: 168px; height: 48px; padding: 7px 10px; border: 1px solid #393b35; border-radius: 6px; background: #1b1c19; color: #d0d1c8; transition: border-color .15s, background .15s; }
+.modeButton[data-pressed=true] { border-color: #ff6b22; background: #2a211b; color: #fff; }
+.modeButton b, .modeButton small { display: block; }
+.modeButton b { font-size: 13px; }
+.modeButton small { margin-top: 3px; color: #a7a99f; font-size: 10px; }
+.stripLabel { position: absolute; right: 16px; display: flex; justify-content: space-between; font-size: 12px; font-weight: 700; }
+.stripLabel em { color: #ff9360; font-style: normal; font-size: 11px; }
+.strip { position: absolute; left: 0; right: 0; height: 96px; overflow: hidden; }
+.frame, .gap { position: absolute; top: 0; height: 62px; animation: rise .25s ease-out; }
+.frame { overflow: visible; border: 1px solid #777a70; border-radius: 4px; background: #050505; }
+.frame[data-middle=true] { border-color: #3a3c36; }
+.frame[data-picked=true] { border-color: #ff6b22; box-shadow: 0 0 0 1px #ff6b22; }
+.frame svg { display: block; width: 100%; height: 100%; border-radius: 3px; }
+.frame > b { position: absolute; right: 3px; top: 3px; padding: 0 3px; border-radius: 2px; background: #0f100ecc; color: #ff9360; font-size: 9px; }
+.frame > svg:last-of-type { position: absolute; right: 3px; bottom: 3px; width: 13px; height: 13px; padding: 1px; border-radius: 2px; background: #000b; color: #fff; }
+.frame time { position: absolute; left: 0; right: 0; top: 70px; color: #dcded5; font: 600 9px var(--font-mono), monospace; text-align: center; }
+.frame[data-middle=true] time { color: #8b8d84; font-weight: 500; }
+.gap { top: 13px; height: 36px; display: grid; place-items: center; border: 1px dashed #55584f; border-radius: 4px; background: #1b1c19; color: #c8c9c1; font-size: 15px; }
+.gap[data-expanded=true] { border-color: #ff6b22; color: #ff9360; }
+.download { position: absolute; left: 16px; right: 16px; height: 34px; display: grid; place-items: center; border-radius: 4px; background: #f1f1eb; color: #17130f; font-weight: 800; opacity: .4; }
+.dragHint { position: absolute; left: 16px; right: 16px; color: #8f9188; font-size: 11px; }
+.lightbox { position: absolute; left: 0; right: 0; top: 30px; bottom: 0; background: #080908f2; animation: fadeIn .2s ease-out; }
+@keyframes fadeIn { from { opacity: 0; } }
+.cropButton { position: absolute; width: 96px; height: 28px; display: grid; place-items: center; border: 1px solid #4a4c45; border-radius: 4px; background: #1b1c19; font-size: 11px; }
+.cropButton[data-pressed=true] { border-color: #ff6b22; background: #2a1b14; color: #ff9360; }
+.lightboxClose { position: absolute; right: 12px; top: 10px; width: 28px; height: 28px; display: grid; place-items: center; border: 1px solid #4a4c45; border-radius: 4px; background: #1b1c19; }
+.lightboxImage, .croppedImage { position: absolute; margin-top: -30px; overflow: hidden; }
+.lightboxImage svg, .croppedImage svg { display: block; width: 100%; height: 100%; }
+.cropRect { position: absolute; border: 1.5px solid #ff6b22; background: #ff6b221a; box-shadow: 0 0 0 999px rgba(0,0,0,.55); }
+.croppedImage { border: 2px solid #ff6b22; border-radius: 4px; animation: fadeIn .2s ease-out; transition: opacity .2s; }
+.croppedImage[data-dragging=true] { opacity: .35; }
+.lightboxTime { position: absolute; left: 0; right: 0; bottom: 8px; color: #d8d9d1; font-size: 11px; text-align: center; }
+
+/* The failed screenshot attempt */
+.snipOverlay { position: absolute; inset: 0; z-index: 6; background: rgba(0,0,0,.45); animation: fadeIn .15s ease-out; }
+.snipToolbar { position: absolute; left: 50%; top: 14px; display: flex; align-items: center; gap: 14px; margin: 0; padding: 10px 18px; border-radius: 10px; background: #f3f3f3; color: #1d1d1f; font-size: 15px; font-weight: 700; transform: translateX(-50%); box-shadow: 0 10px 30px rgba(0,0,0,.4); }
+.snipToolbar span { color: #6b6b70; font-weight: 500; }
+.snipSelection { position: absolute; border: 2px dashed #fff; background: rgba(255,255,255,.12); box-shadow: 0 0 0 1px rgba(0,0,0,.4); }
+.shutterFlash { position: absolute; inset: 0; z-index: 8; background: #fff; pointer-events: none; }
+.keycaps { position: absolute; left: 50%; top: 86px; z-index: 7; display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 14px; background: rgba(12,12,14,.9); color: #fff; font-size: 18px; font-weight: 800; transform: translateX(-50%); box-shadow: 0 12px 30px rgba(0,0,0,.45); animation: keyPress .18s ease-out; }
+.keycaps kbd { padding: 6px 12px; border: 1px solid #5a5b63; border-bottom-width: 4px; border-radius: 8px; background: #26272d; font: 700 17px var(--font-mono), monospace; }
+.keycaps span { color: #ff9e80; font-size: 15px; font-weight: 700; }
+@keyframes keyPress { from { transform: translate(-50%, 4px) scale(.95); } }
+.snipResult { position: absolute; left: 470px; top: 400px; z-index: 7; display: flex; align-items: center; gap: 12px; width: 280px; padding: 10px; border-radius: 12px; background: #f3f3f3; color: #1d1d1f; box-shadow: 0 16px 40px rgba(0,0,0,.5); animation: rise .25s ease-out; }
+.snipResult > span { flex: none; width: 110px; height: 62px; overflow: hidden; border-radius: 6px; }
+.snipResult svg { display: block; width: 100%; height: 100%; }
+.snipResult b { display: block; font-size: 15px; }
+.snipResult small { display: block; margin-top: 4px; color: #d33b2c; font-size: 13px; font-weight: 700; }
+.cursor[data-crosshair=true] { margin: -14px 0 0 -14px; filter: none; }
+
+.dragGhost { position: absolute; z-index: 8; width: 96px; height: 96px; margin: -48px 0 0 -48px; overflow: hidden; border: 2px solid #ff6b22; border-radius: 8px; box-shadow: 0 16px 36px rgba(0,0,0,.5); opacity: .92; rotate: -4deg; }
+.dragGhost svg { display: block; width: 100%; height: 100%; }
+
+.cursor { position: absolute; z-index: 9; width: 28px; height: 28px; margin: -3px 0 0 -4px; pointer-events: none; filter: drop-shadow(0 3px 4px rgba(0,0,0,.45)); transition: transform .08s; }
+.cursor[data-pressed=true] { transform: scale(.86); }
+.cursor svg { position: relative; display: block; }
+.cursor > i { position: absolute; left: 4px; top: 3px; width: 44px; height: 44px; border: 3px solid #ff6b22; border-radius: 50%; }
+
+.caption { position: absolute; left: 50%; bottom: 22px; z-index: 7; margin: 0; padding: 10px 22px; border-radius: 999px; background: rgba(10,10,10,.82); color: #fff; font-size: 22px; font-weight: 800; letter-spacing: -.03em; white-space: nowrap; transform: translateX(-50%); box-shadow: 0 10px 30px rgba(0,0,0,.4); animation: captionIn .3s ease-out; }
+@keyframes captionIn { from { transform: translate(-50%, 10px); opacity: 0; } }
+
+.endCard { position: absolute; inset: 0; z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: rgba(8,8,8,.78); animation: fadeIn .4s ease-out; }
+.endCard small { color: #ff9360; font: 600 14px var(--font-mono), monospace; }
+.endCard strong { font-size: 40px; letter-spacing: -.04em; }
+.endCard div { display: flex; gap: 10px; margin-top: 8px; }
+.endCard button { display: inline-flex; align-items: center; gap: 7px; height: 46px; padding: 0 22px; border: 1px solid rgba(255,255,255,.35); border-radius: 999px; background: rgba(15,15,15,.7); color: #fff; font-size: 16px; font-weight: 700; cursor: pointer; }
+.endCard .primary { border-color: #ff6b22; background: #ff6b22; color: #150a04; }
+
+@media (max-width: 640px) {
+  .topBar { gap: 10px; padding: 0 10px; }
+  .topBar > strong { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .userMessage, .claudyMessage, .frame, .gap, .pip, .lightbox, .croppedImage, .caption, .endCard, .attachment, .huh, .thinking i, .caret, .snipOverlay, .keycaps, .snipResult, .stickCard { animation: none; }
+}

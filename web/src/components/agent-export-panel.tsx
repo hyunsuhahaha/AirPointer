@@ -5,7 +5,7 @@ import type { RefObject } from "react";
 import { ArrowClockwise, ArrowDownLeft, ArrowUpRight, CaretLeft, CaretRight, CaretUp, Check, CircleNotch, Copy, CornersOut, DownloadSimple, FolderOpen, FrameCorners, LinkSimple, MagnifyingGlassPlus, Minus, PaperPlaneTilt, Play, Stop, Trash, X } from "@phosphor-icons/react";
 import { createAgentLink, deleteAgentLink } from "@/lib/agent-link";
 import type { AgentLink } from "@/lib/agent-link";
-import { exportAgentContext, exportDemoAgentContext } from "@/lib/browser-agent-export";
+import { exportAgentContext } from "@/lib/browser-agent-export";
 import { chooseExportDirectory, localExportPath, localFolderPrompt, savedExportDirectory, writeExportFolder } from "@/lib/export-directory";
 import type { WritableDirectory } from "@/lib/export-directory";
 import { buildManualTimeline, manualFrameFile, visibleManualFrames } from "@/lib/manual-frame-picker";
@@ -13,8 +13,6 @@ import type { ManualFrame, ManualTimeline } from "@/lib/manual-frame-picker";
 import type { AgentExportBundle } from "@/lib/browser-agent-export";
 import { cropRegion } from "@/lib/replay-buffer";
 import type { BrowserReplayBuffer, NormalizedBox, ReplayCapsule } from "@/lib/replay-buffer";
-import type { InteractiveReplay } from "@/lib/interactive-replay";
-import type { DemoScenario } from "@/lib/demo-replay";
 import styles from "./agent-export-panel.module.css";
 
 type DeliveryMode = "link" | "folder" | "manual";
@@ -23,13 +21,12 @@ type DeliveryMode = "link" | "folder" | "manual";
 const MANUAL_WINDOW_SIZE: [number, number] = [520, 560];
 type ExportResult = AgentExportBundle & { delivery: DeliveryMode; share?: AgentLink };
 
-export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinutes, onBufferMinutesChange, onSecondsChange, captureIntervalMs, onCaptureIntervalChange, recording, onStartRecording, onStopRecording, minimized, onMinimizedChange, halfScreen, onHalfScreenChange, surface }: {
-  bufferRef: RefObject<BrowserReplayBuffer>; demo?: { replay: InteractiveReplay; scenario: DemoScenario };
+export function AgentExportPanel({ bufferRef, active, seconds, bufferMinutes, onBufferMinutesChange, onSecondsChange, captureIntervalMs, onCaptureIntervalChange, recording, onStartRecording, onStopRecording, minimized, onMinimizedChange, halfScreen, onHalfScreenChange, surface }: {
+  bufferRef: RefObject<BrowserReplayBuffer>;
   active: boolean; seconds: number; bufferMinutes: number; surface: string;
   onBufferMinutesChange: (minutes: number) => void; onSecondsChange: (seconds: number) => void;
   captureIntervalMs: number; onCaptureIntervalChange: (ms: number) => void;
-  // Screen-share controls. Omitted in the demo, which has no live share.
-  recording: boolean; onStartRecording?: () => void; onStopRecording?: () => void;
+  recording: boolean; onStartRecording: () => void; onStopRecording: () => void;
   minimized: boolean; onMinimizedChange: (minimized: boolean, restoreSize?: [number, number]) => void;
   // Only provided inside the PiP window, the one place a resize does anything.
   halfScreen: boolean; onHalfScreenChange?: (halfScreen: boolean) => void;
@@ -60,7 +57,6 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
-  const demoReplay = demo?.replay;
 
   useEffect(() => { activeNow.current = active; }, [active]);
   useEffect(() => { void savedExportDirectory().then(setExportDirectory); }, []);
@@ -72,14 +68,14 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
     void (async () => {
       setManualLoading(true); setManualTimeline(null); setExpandedGaps(new Set()); setLoadingGaps(new Set()); setSelectedFrames(new Map()); setPreviewFrame(null); setError("");
       try {
-        const next = await readManualTimeline(bufferRef.current, demoReplay, seconds);
+        const next = await readManualTimeline(bufferRef.current, seconds);
         if (!cancelled && generation === manualGeneration.current) { manualCapsule.current = next.capsule; setManualTimeline(next.timeline); }
       } catch (reason) {
         if (!cancelled) setError(reason instanceof Error ? reason.message : "화면 목록을 불러오지 못했습니다.");
       } finally { if (!cancelled) setManualLoading(false); }
     })();
     return () => { cancelled = true; manualGeneration.current += 1; };
-  }, [active, bufferRef, demoReplay, mode, seconds]);
+  }, [active, bufferRef, mode, seconds]);
 
   const discardShare = () => {
     if (shareToken.current) void deleteAgentLink(shareToken.current);
@@ -97,8 +93,7 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
     try {
       const directory = mode === "folder" ? await chooseExportDirectory(exportDirectory) : null;
       if (directory) setExportDirectory(directory);
-      const next = demo ? await exportDemoAgentContext(demo.replay, demo.scenario, "complete", seconds)
-        : await exportAgentContext(bufferRef.current, "complete", seconds, surface);
+      const next = await exportAgentContext(bufferRef.current, "complete", seconds, surface);
       if (!activeNow.current) throw new Error("화면 공유가 끝나 Context를 만들지 않았습니다.");
       discardShare();
       let share: AgentLink | undefined;
@@ -260,7 +255,7 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
     manualFrameLoads.current.clear(); manualHighResCache.current.clear(); manualDecodeQueue.current = Promise.resolve();
     setManualLoading(true); setError("");
     try {
-      const next = await readManualTimeline(bufferRef.current, demoReplay, seconds);
+      const next = await readManualTimeline(bufferRef.current, seconds);
       if (generation === manualGeneration.current) {
         manualCapsule.current = next.capsule; setManualTimeline(next.timeline); setExpandedGaps(new Set()); setLoadingGaps(new Set()); setSelectedFrames(new Map()); setPreviewFrame(null);
       }
@@ -273,12 +268,12 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
       const file = manualFrameFile(frame); download(file, file.name);
     }
   };
-  const windows = [...new Set([5, 15, 30, 60, 180, 300, seconds])].filter((value) => value <= bufferMinutes * 60 && (!demo || value <= Math.ceil(demo.replay.seconds))).sort((left, right) => left - right);
+  const windows = [...new Set([5, 15, 30, 60, 180, 300, seconds])].filter((value) => value <= bufferMinutes * 60).sort((left, right) => left - right);
   const ExportIcon = mode === "link" ? LinkSimple : FolderOpen;
 
   const recordingControls = <div className={styles.recordingStatus}>
     <span className={styles.dot} data-active={active} /><strong>{active ? "화면 기록 중" : "화면 공유 대기"}</strong>
-    {onStartRecording && onStopRecording && (recording
+    {(recording
       ? <button type="button" className={styles.recordToggle} data-recording="true" disabled={busy} onClick={() => { if (minimized) onMinimizedChange(false); setConfirmStop(true); }}><Stop size={10} weight="fill" />중지</button>
       : <button type="button" className={styles.recordToggle} disabled={busy} onClick={onStartRecording}><Play size={10} weight="fill" />기록 시작</button>)}
   </div>;
@@ -294,9 +289,9 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
   return <main ref={panel} className={styles.panel} aria-label="AI 맥락 내보내기">
     <header>
       <div className={styles.headerControls}>
-        <label>버퍼 길이<select aria-label="버퍼 길이" value={bufferMinutes} disabled={busy || Boolean(demo)} onChange={(event) => changeBuffer(Number(event.target.value))}><option value={1}>1분</option><option value={3}>3분</option><option value={5}>5분</option></select></label>
+        <label>버퍼 길이<select aria-label="버퍼 길이" value={bufferMinutes} disabled={busy} onChange={(event) => changeBuffer(Number(event.target.value))}><option value={1}>1분</option><option value={3}>3분</option><option value={5}>5분</option></select></label>
         <label>전송 구간<select aria-label="전송 구간" value={seconds} disabled={busy} onChange={(event) => changeWindow(Number(event.target.value))}>{windows.map((value) => <option key={value} value={value}>{value < 60 ? `${value}초` : `${value / 60}분`}</option>)}</select></label>
-        <label title="사이 화면을 몇 초마다 저장할지 정합니다. 화면이 크게 바뀐 순간은 간격과 관계없이 저장됩니다.">캡처 간격<select aria-label="캡처 간격" value={captureIntervalMs} disabled={busy || Boolean(demo)} onChange={(event) => onCaptureIntervalChange(Number(event.target.value))}>{CAPTURE_INTERVALS_MS.map((value) => <option key={value} value={value}>{`${value / 1_000}초`}</option>)}</select></label>
+        <label title="사이 화면을 몇 초마다 저장할지 정합니다. 화면이 크게 바뀐 순간은 간격과 관계없이 저장됩니다.">캡처 간격<select aria-label="캡처 간격" value={captureIntervalMs} disabled={busy} onChange={(event) => onCaptureIntervalChange(Number(event.target.value))}>{CAPTURE_INTERVALS_MS.map((value) => <option key={value} value={value}>{`${value / 1_000}초`}</option>)}</select></label>
         {recordingControls}
         {minimizeButton}
       </div>
@@ -484,13 +479,7 @@ function gapSpan(frame: ManualFrame, next?: ManualFrame) {
   return seconds < 60 ? `${seconds}초` : `${Math.floor(seconds / 60)}분${seconds % 60 ? ` ${seconds % 60}초` : ""}`;
 }
 
-async function readManualTimeline(buffer: BrowserReplayBuffer, demoReplay: InteractiveReplay | undefined, seconds: number) {
-  if (demoReplay) {
-    const cutoff = demoReplay.triggeredAt - Math.min(seconds, demoReplay.seconds) * 1_000;
-    const previews = demoReplay.scenes.filter((scene) => scene.at >= cutoff).map((scene) => ({ dataUrl: scene.url, capturedAt: scene.at }));
-    const overview = demoReplay.overview().filter((frame) => (frame.capturedAt ?? 0) >= cutoff);
-    return { timeline: buildManualTimeline(previews, overview), capsule: null };
-  }
+async function readManualTimeline(buffer: BrowserReplayBuffer, seconds: number) {
   const capsule = await buffer.recentCapsule(seconds, 12);
   if (!capsule.segments.length) throw new Error("내보낼 화면 기록이 없습니다. 화면을 조금 더 기록해 주세요.");
   const { captures } = buffer.exportMetadata(capsule);

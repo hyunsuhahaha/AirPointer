@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  FLASH_CUES, LOG_RAIN, LOG_VANISH_AT, RANT, STAGES, TIMELINE, TOAST_CUES,
+  AI_BEAT, AI_LINE, FLASH_CUES, LOG_RAIN, LOG_VANISH_AT, RANT, STAGES, TIMELINE, TOAST_CUES,
   cameraAt, nextSceneTime, revealedChars, sceneAt, timeForChar,
 } from "../src/lib/overview-script.ts";
 
-test("하소연은 다섯 단계로 끊김 없이 끝까지 드러나고 1막은 20초 안에 끝난다", () => {
+test("하소연은 다섯 단계로 끊김 없이 끝까지 드러나고 1막은 22초 안에 끝난다", () => {
   assert.equal(STAGES.length, 5);
   assert.equal(STAGES[0].from, 0);
   assert.equal(STAGES.at(-1)!.to, RANT.length);
@@ -14,7 +14,7 @@ test("하소연은 다섯 단계로 끊김 없이 끝까지 드러나고 1막은
     assert.equal(STAGES[index].start, STAGES[index - 1].end);
   }
   assert.ok(RANT.endsWith("병원비가 더 나옴"));
-  assert.ok(TIMELINE.act1End <= 20.5, `act 1 lasts ${TIMELINE.act1End}s`);
+  assert.ok(TIMELINE.act1End <= 22, `act 1 lasts ${TIMELINE.act1End}s`);
   assert.equal(revealedChars(0), 0);
   assert.equal(revealedChars(TIMELINE.act1End), RANT.length);
   let previous = 0;
@@ -23,6 +23,21 @@ test("하소연은 다섯 단계로 끊김 없이 끝까지 드러나고 1막은
     assert.ok(shown >= previous, `reveal went backwards at ${t}`);
     previous = shown;
   }
+});
+
+test("도입부 뒤에는 AI 장면 동안 글이 멈췄다가 AI의 말을 인용하며 이어진다", () => {
+  assert.ok(RANT.slice(0, STAGES[0].to).endsWith("코드 15분동안 검토하더니 "));
+  assert.ok(RANT.slice(STAGES[0].to).startsWith(`“${AI_LINE}”라고 해서 화만 엄청 났다가`));
+  assert.ok(AI_BEAT.start < AI_BEAT.clockEnd && AI_BEAT.clockEnd < AI_BEAT.popAt && AI_BEAT.popAt < AI_BEAT.bubbleAt && AI_BEAT.bubbleAt < AI_BEAT.end);
+  assert.equal(AI_BEAT.end, STAGES[1].start);
+  const paused = revealedChars(AI_BEAT.start + 0.01);
+  assert.equal(revealedChars(AI_BEAT.end - 0.01), paused);
+  // No stall once the flood starts: the last beats type at a steady clip.
+  for (const stage of STAGES.slice(3)) {
+    assert.equal(stage.ease, 1);
+    assert.ok((stage.to - stage.from) / stage.duration > 200, `${stage.id} is too slow`);
+  }
+  assert.equal(STAGES[3].hold, 0);
 });
 
 test("글자 등장 시각은 드러나는 속도의 역함수이고 효과 타이밍이 모두 1막 안에 있다", () => {

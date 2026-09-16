@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ArrowCounterClockwise, ArrowRight, Pause, Play, SkipForward, SpeakerHigh, SpeakerSlash, X } from "@phosphor-icons/react";
 import {
-  ART, FLASH_CUES, LOG_RAIN, LOG_VANISH_AT, RANT, TIMELINE, TOAST_CUES,
+  AI_BEAT, AI_LINE, ART, FLASH_CUES, LOG_RAIN, LOG_VANISH_AT, RANT, TIMELINE, TOAST_CUES,
   cameraAt, nextSceneTime, revealedChars, sceneAt, stageAt,
 } from "@/lib/overview-script";
 import { createOverviewSound } from "@/lib/overview-sound";
@@ -12,6 +12,7 @@ import type { OverviewSound } from "@/lib/overview-sound";
 import styles from "./project-overview.module.css";
 
 const ART_SRC = "/overview/capture-error-solution.webp";
+const AI_SRC = "/overview/ai-stick-figure.webp";
 const FLASH_SPOTS: [number, number][] = [[14, 20], [58, 14], [34, 54], [66, 46], [22, 68], [50, 30], [72, 62], [40, 18], [8, 44], [62, 72]];
 const LOG_LINES = Array.from({ length: 64 }, (_, index) => {
   const level = ["ERROR", "INFO", "WARN", "ERROR", "INFO"][index % 5];
@@ -22,7 +23,10 @@ const SPARKLES: [number, number, number][] = [[1040, 110, 0], [1150, 90, 0.35], 
 
 type Cue = { id: string; at: number; play: (sound: OverviewSound) => void };
 const SOUND_CUES: Cue[] = [
-  { id: "whoosh", at: TIMELINE.act1End + 1.6, play: (sound) => sound.whoosh() },
+  { id: "ai-pop", at: AI_BEAT.popAt, play: (sound) => sound.pop() },
+  { id: "whoosh", at: TIMELINE.act1End + 1.4, play: (sound) => sound.whoosh() },
+  { id: "ding", at: TIMELINE.act1End + 1.72, play: (sound) => sound.ding() },
+  { id: "yoohoo", at: TIMELINE.act1End + 2.45, play: (sound) => sound.yoohoo() },
   { id: "sparkle", at: TIMELINE.transitionEnd + 0.3, play: (sound) => sound.sparkle() },
   { id: "wow", at: TIMELINE.finaleStart + 0.8, play: (sound) => { sound.wow(); sound.sparkle(); } },
 ];
@@ -34,7 +38,7 @@ const MAX_CLICKS_PER_SECOND = 30;
 const fade = (t: number, start: number, end: number, ramp = 0.35) =>
   Math.max(0, Math.min(1, (t - start) / ramp, (end - t) / ramp));
 
-export function ProjectOverview({ onClose, onTryDemo }: { onClose: () => void; onTryDemo: () => void }) {
+export function ProjectOverview({ onClose, onShowExamples }: { onClose: () => void; onShowExamples: () => void }) {
   const dialog = useRef<HTMLDivElement>(null);
   const sound = useRef<OverviewSound | null>(null);
   const clock = useRef(0);
@@ -104,6 +108,7 @@ export function ProjectOverview({ onClose, onTryDemo }: { onClose: () => void; o
   const blackout = scene === "transition" ? fade(t, TIMELINE.act1End - 0.35, TIMELINE.transitionEnd - 0.2, 0.3) : 0;
   const flash = Math.max(0, 1 - Math.abs(t - (TIMELINE.transitionEnd - 0.1)) / 0.45);
   const finaleT = t - TIMELINE.finaleStart;
+  const reviewSeconds = Math.round(Math.min(1, (t - AI_BEAT.start) / (AI_BEAT.clockEnd - AI_BEAT.start)) * 900);
 
   return createPortal(
     <div ref={dialog} className={styles.overlay} role="dialog" aria-modal="true" aria-label="프로젝트 개요" tabIndex={-1}
@@ -142,6 +147,17 @@ export function ProjectOverview({ onClose, onTryDemo }: { onClose: () => void; o
           <div className={styles.toasts} aria-hidden="true">
             {TOAST_CUES.filter((cue) => t >= cue.at && t < cue.at + 1.7).map((cue) => <div key={cue.phrase} className={styles.toast}>⚠ {cue.text}</div>)}
           </div>
+          {t >= AI_BEAT.start && t < AI_BEAT.end + 0.35 && <div className={styles.aiBeat} data-leaving={t >= AI_BEAT.end}>
+            <p className={styles.review} data-done={t >= AI_BEAT.clockEnd}>
+              <span className={styles.reviewSpinner} />AI가 코드 검토 중 <b>{String(Math.floor(reviewSeconds / 60)).padStart(2, "0")}:{String(reviewSeconds % 60).padStart(2, "0")}</b>
+            </p>
+            {t >= AI_BEAT.popAt && <figure className={styles.aiCard}>
+              <b className={styles.aiLabel}>AI</b>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={AI_SRC} alt="AI" width={303} height={520} />
+              {t >= AI_BEAT.bubbleAt && <figcaption className={styles.bubble}>{AI_LINE}</figcaption>}
+            </figure>}
+          </div>}
           <div className={styles.rant}>
             <p>{RANT.slice(0, revealedChars(t))}<span className={styles.caret} /></p>
           </div>
@@ -170,9 +186,9 @@ export function ProjectOverview({ onClose, onTryDemo }: { onClose: () => void; o
 
         {scene === "finale" && <div className={styles.finale}>
           <p className={styles.wow} style={{ opacity: fade(finaleT, 0.8, 99, 0.2), transform: `scale(${1 + 0.4 * Math.max(0, 1 - (finaleT - 0.8) / 0.25)})` }}>wow~</p>
-          <p className={styles.tagline} style={{ opacity: fade(finaleT, 1.4, 99, 0.5) }}>사라지는 화면도, 이제 놓치지 않아요.</p>
+          <p className={styles.tagline} style={{ opacity: fade(finaleT, 1.4, 99, 0.5) }}>내 에이전트가 똑똑해지는 마법</p>
           {finaleT > 2 && <div className={styles.actions}>
-            <button type="button" className={styles.primary} onClick={onTryDemo}>30초 체험하기 <ArrowRight size={16} weight="bold" /></button>
+            <button type="button" className={styles.primary} onClick={onShowExamples}>실제 활용 예시 보기 <ArrowRight size={16} weight="bold" /></button>
             <button type="button" onClick={() => seek(0)}><ArrowCounterClockwise size={15} /> 다시 보기</button>
             <button type="button" onClick={onClose}>닫기</button>
           </div>}

@@ -4,12 +4,12 @@ export const DEMO_OVERVIEW_OFFSETS = [-60, -30, -12, -8, -4, -0.05];
 export const DEMO_INCIDENT_CUE_SECONDS = 3;
 export type DemoScenarioId = "worktree" | "migration" | "test";
 export type DemoFrameState = "editing" | "building" | "error" | "failed";
-export type DemoScenario = { id: DemoScenarioId; label: string; title: string; detail: string; question: string; accent: string; focusBox: NormalizedBox; video: string; proof: string };
+export type DemoScenario = { id: DemoScenarioId; label: string; title: string; detail: string; question: string; accent: string; focusBox: NormalizedBox; proof: string };
 
 export const DEMO_SCENARIOS: readonly DemoScenario[] = [
-  { id: "worktree", label: "Worktree 혼선", title: "고쳤는데 미리보기는 그대로", detail: "편집 중인 체크아웃과 서버 실행 경로가 다른 상황", question: "코드를 고쳤는데 왜 미리보기에는 반영되지 않았어? 화면에 나온 경로를 근거로 알려줘.", accent: "#d97941", focusBox: [0.22, 0.65, 0.99, 0.98], video: "/demo-recordings/worktree-mismatch.webm", proof: "실제 Node 서버 실행 · 두 작업 폴더" },
-  { id: "migration", label: "DB 마이그레이션", title: "코드는 새 컬럼을 찾는데 DB에는 없다", detail: "SQLite 스키마와 적용되지 않은 마이그레이션의 불일치", question: "방금 실행이 왜 실패했어? 보이는 코드와 오류를 연결해서 다음 조치를 알려줘.", accent: "#8fb36b", focusBox: [0.22, 0.64, 0.99, 0.98], video: "/demo-recordings/missing-migration.webm", proof: "실제 Python · SQLite 실행" },
-  { id: "test", label: "테스트 회귀", title: "소수점이 사라진 가격", detail: "실제 Node 테스트가 구현 변경 때문에 실패하는 상황", question: "테스트가 왜 12와 12.99로 어긋났어? 원인이 되는 구현을 찾아줘.", accent: "#7aa2f7", focusBox: [0.22, 0.64, 0.99, 0.98], video: "/demo-recordings/test-regression.webm", proof: "실제 node:test 실행" },
+  { id: "worktree", label: "Worktree 혼선", title: "고쳤는데 미리보기는 그대로", detail: "편집 중인 체크아웃과 서버 실행 경로가 다른 상황", question: "코드를 고쳤는데 왜 미리보기에는 반영되지 않았어? 화면에 나온 경로를 근거로 알려줘.", accent: "#d97941", focusBox: [0.22, 0.65, 0.99, 0.98], proof: "실제 Node 서버 실행 · 두 작업 폴더" },
+  { id: "migration", label: "DB 마이그레이션", title: "코드는 새 컬럼을 찾는데 DB에는 없다", detail: "SQLite 스키마와 적용되지 않은 마이그레이션의 불일치", question: "방금 실행이 왜 실패했어? 보이는 코드와 오류를 연결해서 다음 조치를 알려줘.", accent: "#8fb36b", focusBox: [0.22, 0.64, 0.99, 0.98], proof: "실제 Python · SQLite 실행" },
+  { id: "test", label: "테스트 회귀", title: "소수점이 사라진 가격", detail: "실제 Node 테스트가 구현 변경 때문에 실패하는 상황", question: "테스트가 왜 12와 12.99로 어긋났어? 원인이 되는 구현을 찾아줘.", accent: "#7aa2f7", focusBox: [0.22, 0.64, 0.99, 0.98], proof: "실제 node:test 실행" },
 ];
 
 export function demoScenario(id: DemoScenarioId): DemoScenario {
