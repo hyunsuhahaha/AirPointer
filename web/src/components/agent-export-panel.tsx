@@ -1,7 +1,7 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { RefObject } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, RefObject } from "react";
 import { ArrowClockwise, ArrowDownLeft, ArrowUpRight, CaretLeft, CaretRight, CaretUp, Check, CircleNotch, Copy, CornersOut, DownloadSimple, FolderOpen, FolderPlus, FrameCorners, LinkSimple, MagnifyingGlassPlus, Minus, PaperPlaneTilt, Play, Stop, Trash, X } from "@phosphor-icons/react";
 import { createAgentLink, deleteAgentLink } from "@/lib/agent-link";
 import type { AgentLink } from "@/lib/agent-link";
@@ -20,6 +20,12 @@ type DeliveryMode = "link" | "folder" | "manual";
 // restores straight to this size instead of restoring and then resizing.
 const MANUAL_WINDOW_SIZE: [number, number] = [520, 560];
 const EXPORT_WINDOW_SIZE: [number, number] = [390, 330];
+// Manual timeline frame sizing: height is the knob, width follows the 16:9-ish card.
+const MIN_FRAME_HEIGHT = 59;
+const MAX_FRAME_HEIGHT = 520;
+const FRAME_ASPECT = 1.76;
+// .body's bottom padding, which keeps the half-screen button clear.
+const FIT_BOTTOM_MARGIN = 32;
 // The minimized bar's 1·2·3 shortcuts, in this order.
 const QUICK_MODES: { mode: DeliveryMode; label: string; size: [number, number] }[] = [
   { mode: "manual", label: "Manual", size: MANUAL_WINDOW_SIZE },
@@ -417,7 +423,34 @@ function ManualPicker({ timeline, loading, expandedGaps, loadingGaps, selectedFr
   onPrepareFrame: (frame: ManualFrame) => Promise<void>;
   onDownload: () => void; onRefresh: () => Promise<void>;
 }) {
-  return <section className={styles.manual} aria-label="로컬 버퍼 화면 선택">
+  const section = useRef<HTMLElement>(null);
+  const drag = useRef<{ startY: number; startHeight: number } | null>(null);
+  const userSized = useRef(false);
+  const [frameHeight, setFrameHeight] = useState(MIN_FRAME_HEIGHT);
+  const clampHeight = useCallback((height: number) => {
+    const win = section.current?.ownerDocument.defaultView;
+    const widest = win ? (win.innerWidth - 28) / FRAME_ASPECT : MAX_FRAME_HEIGHT;
+    return Math.round(Math.max(MIN_FRAME_HEIGHT, Math.min(height, MAX_FRAME_HEIGHT, widest)));
+  }, []);
+  // Until the user drags the handle, frames grow into whatever height the
+  // window leaves free below the picker (e.g. after switching to half screen).
+  useLayoutEffect(() => {
+    const root = section.current;
+    const win = root?.ownerDocument.defaultView;
+    if (!root || !win || !timeline) return;
+    const fit = () => {
+      if (userSized.current) return;
+      const free = win.innerHeight - FIT_BOTTOM_MARGIN - root.getBoundingClientRect().bottom;
+      setFrameHeight((current) => clampHeight(current + free));
+    };
+    fit();
+    win.addEventListener("resize", fit);
+    return () => win.removeEventListener("resize", fit);
+  }, [clampHeight, timeline]);
+  const resizeBy = (delta: number) => { userSized.current = true; setFrameHeight((current) => clampHeight(current + delta)); };
+  const endDrag = () => { drag.current = null; };
+
+  return <section ref={section} className={styles.manual} aria-label="로컬 버퍼 화면 선택">
     <div className={styles.manualHeader}><strong>화면 선택</strong><span>선택 {selectedFrames.size}장 <button type="button" aria-label="현재 화면으로 갱신" title="현재 화면으로 갱신" disabled={loading} onClick={() => void onRefresh()}><ArrowClockwise className={loading ? styles.spin : undefined} size={13} /></button></span></div>
     {loading && !timeline && <p className={styles.manualEmpty}><CircleNotch className={styles.spin} size={14} /> 화면을 불러오는 중</p>}
     {/* One horizontal scroller holds both the frames and the time ruler: every
@@ -428,7 +461,7 @@ function ManualPicker({ timeline, loading, expandedGaps, loadingGaps, selectedFr
         ruler stops lining up with the fixed-width cards; the time the
         timeline skips shows up as the gap slot's own duration label. */}
     {timeline && <div className={styles.timeline} aria-label="대표 화면 타임라인">
-      <div className={styles.track}>
+      <div className={styles.track} style={{ "--frame-h": `${frameHeight}px` } as CSSProperties}>
         {timeline.representatives.map((frame, index) => {
           // A gap with no in-between captures has nothing to expand, so it gets
           // no slot at all and the two representatives sit side by side.
@@ -451,6 +484,15 @@ function ManualPicker({ timeline, loading, expandedGaps, loadingGaps, selectedFr
         })}
       </div>
     </div>}
+    {timeline && <div role="separator" aria-orientation="horizontal" aria-label="타임라인 크기 조절" tabIndex={0} className={styles.resizeHandle}
+      aria-valuemin={MIN_FRAME_HEIGHT} aria-valuemax={MAX_FRAME_HEIGHT} aria-valuenow={frameHeight} title="드래그해서 화면 크기 조절"
+      onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); drag.current = { startY: event.clientY, startHeight: frameHeight }; userSized.current = true; }}
+      onPointerMove={(event) => { if (drag.current) setFrameHeight(clampHeight(drag.current.startHeight + event.clientY - drag.current.startY)); }}
+      onPointerUp={endDrag} onPointerCancel={endDrag}
+      onKeyDown={(event) => {
+        if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+        event.preventDefault(); resizeBy(event.key === "ArrowDown" ? 16 : -16);
+      }} />}
     {!loading && timeline && !timeline.representatives.length && <p className={styles.manualEmpty}>표시할 화면이 없습니다.</p>}
     <button type="button" className={styles.downloadSelected} disabled={!selectedFrames.size} onClick={onDownload}><DownloadSimple size={15} />선택한 {selectedFrames.size}장 다운로드</button>
     <small className={styles.dragHint}>화면을 AI 앱이나 브라우저 대화창으로 직접 드래그할 수 있습니다.</small>

@@ -67,8 +67,38 @@ export async function exportAgentContext(buffer: BrowserReplayBuffer,
   // The periodic previews come directly from the shared screen. Prefer them
   // because decoding short WebM segments can occasionally produce black frames.
   const notable = selectNotable(captures, events, 12);
-  const frames = notable.length >= 6 ? notable.map(({ dataUrl, capturedAt }) => ({
-      url: dataUrl, capturedAt, atSeconds: (capsule.triggeredAt - capturedAt) / 1_000, kind: "replay-frame" as const,
-    })) : capsule.overviewFrames;
+  const frames = notable.length >= 6 ? await upgradeFrames(buffer, capsule, notable) : capsule.overviewFrames;
   return bundleSnapshot(mode, capsule, captures, events, frames);
+}
+
+// Previews are small, low-quality thumbnails. Swap each for a full-resolution
+// frame decoded from the recording, keeping the preview when decoding fails
+// or yields the occasional black frame.
+async function upgradeFrames(buffer: BrowserReplayBuffer, capsule: ReplayCapsule, notable: PreviewFrame[]): Promise<OverviewFrame[]> {
+  const offsets = notable.map(({ capturedAt }) => (capturedAt - capsule.triggeredAt) / 1_000);
+  let decoded: OverviewFrame[] = [];
+  try { decoded = await buffer.framesAtOffsets(capsule, offsets, "queried-frame"); } catch { /* Previews still work. */ }
+  // Frames outside any segment are dropped, so match by time, not position.
+  const byTime = new Map(decoded.map((frame) => [Math.round(frame.capturedAt ?? 0), frame]));
+  return Promise.all(notable.map(async ({ dataUrl, capturedAt }, index) => {
+    const high = byTime.get(Math.round(capturedAt));
+    const url = high && !(await isMostlyBlack(high.url)) ? high.url : dataUrl;
+    return { url, capturedAt, atSeconds: (capsule.triggeredAt - capturedAt) / 1_000, sampleOffsetsSeconds: [offsets[index]], kind: "replay-frame" as const };
+  }));
+}
+
+async function isMostlyBlack(dataUrl: string) {
+  try {
+    const image = new Image();
+    image.src = dataUrl;
+    await image.decode();
+    const canvas = document.createElement("canvas");
+    canvas.width = 16; canvas.height = 9;
+    const context = canvas.getContext("2d", { willReadFrequently: true })!;
+    context.drawImage(image, 0, 0, 16, 9);
+    const pixels = context.getImageData(0, 0, 16, 9).data;
+    let brightest = 0;
+    for (let index = 0; index < pixels.length; index += 4) brightest = Math.max(brightest, pixels[index], pixels[index + 1], pixels[index + 2]);
+    return brightest < 12;
+  } catch { return true; }
 }

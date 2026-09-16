@@ -85,7 +85,7 @@
 .replayBar button { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px; border: 1px solid #4b4942; background: #1b1a17; color: var(--ink); font: inherit; cursor: pointer; }
 .replayBar button:hover { border-color: var(--accent); }
 .iconButton { width: 32px; height: 32px; border: 1px solid var(--line); background: transparent; display: grid; place-items: center; cursor: pointer; border-radius: 50%; }
-.commandDock { padding: clamp(26px, 3vw, 46px) clamp(24px, 3.2vw, 50px); display: flex; flex-direction: column; justify-content: center; }
+.commandDock { min-width: 0; padding: clamp(26px, 3vw, 46px) clamp(24px, 3.2vw, 50px); display: flex; flex-direction: column; justify-content: center; }
 .eyebrow { margin: 0 0 18px; color: var(--accent); font: 600 10px var(--font-mono); letter-spacing: .16em; }
 .eyebrowRow { display: flex; align-items: center; justify-content: space-between; margin: 0 0 18px; }
 .eyebrowRow .eyebrow { margin: 0; }
