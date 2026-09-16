@@ -28,7 +28,7 @@ test("하소연은 다섯 단계로 끊김 없이 끝까지 드러나고 1막은
 test("도입부 뒤에는 AI 장면 동안 글이 멈췄다가 AI의 말을 인용하며 이어진다", () => {
   assert.ok(RANT.slice(0, STAGES[0].to).endsWith("코드 15분동안 검토하더니 "));
   assert.ok(RANT.slice(STAGES[0].to).startsWith(`“${AI_LINE}”라고 해서 화만 엄청 났다가`));
-  assert.ok(AI_BEAT.start < AI_BEAT.clockEnd && AI_BEAT.clockEnd < AI_BEAT.popAt && AI_BEAT.popAt < AI_BEAT.bubbleAt && AI_BEAT.bubbleAt < AI_BEAT.end);
+  assert.ok(AI_BEAT.start < AI_BEAT.clockEnd && AI_BEAT.clockEnd < AI_BEAT.popAt && AI_BEAT.popAt < AI_BEAT.bubbleAt && AI_BEAT.bubbleAt < AI_BEAT.followupAt && AI_BEAT.followupAt < AI_BEAT.end - 1);
   assert.equal(AI_BEAT.end, STAGES[1].start);
   const paused = revealedChars(AI_BEAT.start + 0.01);
   assert.equal(revealedChars(AI_BEAT.end - 0.01), paused);

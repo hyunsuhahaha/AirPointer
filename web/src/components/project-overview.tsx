@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ArrowCounterClockwise, ArrowRight, Pause, Play, SkipForward, SpeakerHigh, SpeakerSlash, X } from "@phosphor-icons/react";
 import {
-  AI_BEAT, AI_LINE, ART, FLASH_CUES, LOG_RAIN, LOG_VANISH_AT, RANT, TIMELINE, TOAST_CUES,
+  AI_BEAT, AI_FOLLOWUP, AI_LINE, ART, FLASH_CUES, LOG_RAIN, LOG_VANISH_AT, RANT, TIMELINE, TOAST_CUES,
   cameraAt, nextSceneTime, revealedChars, sceneAt, stageAt,
 } from "@/lib/overview-script";
 import { createOverviewSound } from "@/lib/overview-sound";
@@ -155,7 +155,10 @@ export function ProjectOverview({ onClose, onShowExamples }: { onClose: () => vo
               <b className={styles.aiLabel}>AI</b>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={AI_SRC} alt="AI" width={303} height={520} />
-              {t >= AI_BEAT.bubbleAt && <figcaption className={styles.bubble}>{AI_LINE}</figcaption>}
+              {t >= AI_BEAT.bubbleAt && <figcaption className={styles.bubbles}>
+                <p className={styles.bubble}>{AI_LINE}</p>
+                {t >= AI_BEAT.followupAt && <p className={styles.bubble}>{AI_FOLLOWUP}</p>}
+              </figcaption>}
             </figure>}
           </div>}
           <div className={styles.rant}>
