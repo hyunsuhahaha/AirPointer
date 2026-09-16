@@ -74,11 +74,11 @@ function startPipStyleSync(source: Document, target: Document): () => void {
   const observer = new MutationObserver(sync);
   observer.observe(source.head, { attributes: true, childList: true, characterData: true, subtree: true });
   // Next's dev runtime can replace CSS rules through CSSOM without changing
-  // a DOM node. The small poll also repairs an already-open PiP after HMR.
-  const timer = window.setInterval(sync, 500);
+  // a DOM node. Production styles are static, so polling there only burns CPU.
+  const timer = process.env.NODE_ENV === "development" ? window.setInterval(sync, 2_000) : null;
   return () => {
     observer.disconnect();
-    window.clearInterval(timer);
+    if (timer !== null) window.clearInterval(timer);
     style.remove();
   };
 }

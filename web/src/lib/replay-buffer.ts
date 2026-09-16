@@ -21,6 +21,9 @@ export type ChangeHighlight = { beforeUrl: string; afterUrl: string; bbox: [numb
 
 const SEGMENT_MS = 1_000;
 const PREVIEW_INTERVAL_MS = 250;
+const PREVIEW_STORE_INTERVAL_MS = 1_000;
+const PRUNE_INTERVAL_MS = 1_000;
+const DECODE_CONCURRENCY = 2;
 const MAX_BYTES = 250 * 1024 * 1024;
 
 // Change detection: a JS/Canvas port of airpointer/screen_buffer.py's
@@ -298,6 +301,8 @@ export class BrowserReplayBuffer {
   private previewVideo: HTMLVideoElement | null = null;
   private previewTimer: number | null = null;
   private previewFrames: PreviewFrame[] = [];
+  private lastPreviewStoredAt = 0;
+  private lastPrunedAt = 0;
   private changeTracker = new ChangeTracker();
   private changeEvents: ChangeEvent[] = [];
   private active = false;
@@ -333,6 +338,8 @@ export class BrowserReplayBuffer {
     }
     this.previewVideo = null;
     this.previewFrames = [];
+    this.lastPreviewStoredAt = 0;
+    this.lastPrunedAt = 0;
     // Fresh tracker per stop()/start() cycle: its previous-frame thumbnail
     // and any in-progress event belong to whatever was on screen before
     // this session ended -- comparing against that stale frame on the very
@@ -362,8 +369,8 @@ export class BrowserReplayBuffer {
     const windowEvents = this.changeEvents.filter((event) => event.peakAt >= cutoff && event.peakAt <= now);
     const candidates = sampleSegmentPoints(recent, cutoff, now, PREVIEW_INTERVAL_MS);
     const chosen = selectNotable(candidates, windowEvents, Math.min(count, candidates.length));
-    const frames = await decodeReplayPoints(recent, chosen);
-    return { overviewFrames: makeReplayFrames(frames, now, "replay-frame"), segments: [...recent], startedAt: cutoff, triggeredAt: now };
+    const frames = await decodeReplayFrames(recent, chosen, now, "replay-frame");
+    return { overviewFrames: frames, segments: [...recent], startedAt: cutoff, triggeredAt: now };
   }
 
   exportMetadata(capsule: ReplayCapsule): { captures: PreviewFrame[]; events: ChangeEvent[] } {
@@ -376,7 +383,7 @@ export class BrowserReplayBuffer {
 
   async framesAtOffsets(capsule: ReplayCapsule, offsetsSeconds: number[], kind: "bookmarked-frame" | "queried-frame" = "queried-frame"): Promise<OverviewFrame[]> {
     const points = replayPointsAtOffsets(capsule.segments, capsule.triggeredAt, offsetsSeconds);
-    return makeReplayFrames(await decodeReplayPoints(capsule.segments, points), capsule.triggeredAt, kind);
+    return decodeReplayFrames(capsule.segments, points, capsule.triggeredAt, kind);
   }
 
   // The single highest-scoring detected change in the window, as a
@@ -406,19 +413,34 @@ export class BrowserReplayBuffer {
     this.previewVideo = video;
     const capture = () => {
       if (!this.active || generation !== this.generation || video.readyState < 2 || !video.videoWidth) return;
-      const canvas = thumbnailFromVideo(video);
       const capturedAt = Date.now();
-      this.previewFrames.push({ dataUrl: canvas.toDataURL("image/jpeg", 0.48), capturedAt });
+      let storedPreview = false;
+      if (capturedAt - this.lastPreviewStoredAt >= PREVIEW_STORE_INTERVAL_MS) {
+        const canvas = thumbnailFromVideo(video);
+        this.previewFrames.push({ dataUrl: canvas.toDataURL("image/jpeg", 0.48), capturedAt });
+        this.lastPreviewStoredAt = capturedAt;
+        storedPreview = true;
+      }
       // Observe the entire source. Passing 1x1 here crops the input to its
       // top-left pixel; normalize only the resulting screen coordinates.
       const event = this.changeTracker.observe(video, video.videoWidth, video.videoHeight, capturedAt);
       if (event) {
+        // Keep the completed change's visible result even when it lands
+        // between the one-second preview samples.
+        if (!storedPreview) {
+          const canvas = thumbnailFromVideo(video);
+          this.previewFrames.push({ dataUrl: canvas.toDataURL("image/jpeg", 0.48), capturedAt: event.peakAt });
+          this.lastPreviewStoredAt = capturedAt;
+        }
         event.bbox = [event.bbox[0] / video.videoWidth, event.bbox[1] / video.videoHeight,
           event.bbox[2] / video.videoWidth, event.bbox[3] / video.videoHeight];
         this.changeEvents.push(event);
         if (this.changeEvents.length > MAX_CHANGE_EVENTS) this.changeEvents.shift();
       }
-      this.prune(Date.now());
+      if (capturedAt - this.lastPrunedAt >= PRUNE_INTERVAL_MS) {
+        this.prune(capturedAt);
+        this.lastPrunedAt = capturedAt;
+      }
     };
     void video.play().then(capture).catch(() => undefined);
     this.previewTimer = window.setInterval(capture, PREVIEW_INTERVAL_MS);
@@ -568,14 +590,24 @@ export function replayPointsAtOffsets(segments: ReplaySegment[], triggeredAt: nu
   });
 }
 
-async function decodeReplayPoints(segments: ReplaySegment[], points: Array<{ segmentIndex: number; ratio: number; capturedAt: number }>) {
+async function decodeReplayFrames(segments: ReplaySegment[], points: Array<{ segmentIndex: number; ratio: number; capturedAt: number }>,
+  triggeredAt: number, kind: "replay-frame" | "bookmarked-frame" | "queried-frame") {
   const bySegment = new Map<number, Array<{ ratio: number; capturedAt: number }>>();
   for (const point of points) bySegment.set(point.segmentIndex, [...(bySegment.get(point.segmentIndex) ?? []), point]);
-  const groups = await Promise.all([...bySegment].map(async ([segmentIndex, segmentPoints]) => {
-    try { return await framesFromBlob(segments[segmentIndex].blob, segmentPoints); }
-    catch { return []; }
-  }));
-  return groups.flat().sort((a, b) => a.capturedAt - b.capturedAt);
+  const entries = [...bySegment];
+  const groups: OverviewFrame[][] = Array.from({ length: entries.length }, () => []);
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < entries.length) {
+      const index = cursor++;
+      const [segmentIndex, segmentPoints] = entries[index];
+      try { groups[index] = makeReplayFrames(await framesFromBlob(segments[segmentIndex].blob, segmentPoints), triggeredAt, kind); }
+      catch { groups[index] = []; }
+      await new Promise<void>((resolve) => window.setTimeout(resolve));
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(DECODE_CONCURRENCY, entries.length) }, worker));
+  return groups.flat().sort((a, b) => (a.capturedAt ?? 0) - (b.capturedAt ?? 0));
 }
 
 async function framesFromBlob(blob: Blob, points: Array<{ ratio: number; capturedAt: number }>): Promise<TimedFrame[]> {

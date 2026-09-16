@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import { ArrowClockwise, Check, CircleNotch, Copy, DownloadSimple, FolderOpen, LinkSimple, MagnifyingGlassPlus, PaperPlaneTilt, Trash, X } from "@phosphor-icons/react";
 import { createAgentLink, deleteAgentLink } from "@/lib/agent-link";
@@ -28,7 +28,10 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
   const activeNow = useRef(active);
   const shareToken = useRef("");
   const manualCapsule = useRef<ReplayCapsule | null>(null);
-  const manualGapLoads = useRef<Set<string>>(new Set());
+  const manualFrameLoads = useRef<Set<string>>(new Set());
+  const manualHighResCache = useRef<Map<string, string>>(new Map());
+  const manualDecodeQueue = useRef<Promise<void>>(Promise.resolve());
+  const manualGeneration = useRef(0);
   const [mode, setMode] = useState<DeliveryMode>("link");
   const [exportDirectory, setExportDirectory] = useState<WritableDirectory | null>(null);
   const [result, setResult] = useState<ExportResult | null>(null);
@@ -46,17 +49,19 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
   useEffect(() => { void savedExportDirectory().then(setExportDirectory); }, []);
   useEffect(() => {
     if (mode !== "manual" || !active) return;
+    const generation = ++manualGeneration.current;
+    manualFrameLoads.current.clear(); manualHighResCache.current.clear(); manualDecodeQueue.current = Promise.resolve();
     let cancelled = false;
     void (async () => {
       setManualLoading(true); setManualTimeline(null); setExpandedGaps(new Set()); setSelectedFrames(new Map()); setPreviewFrame(null); setError("");
       try {
         const next = await readManualTimeline(bufferRef.current, demoReplay, seconds);
-        if (!cancelled) { manualCapsule.current = next.capsule; setManualTimeline(next.timeline); }
+        if (!cancelled && generation === manualGeneration.current) { manualCapsule.current = next.capsule; setManualTimeline(next.timeline); }
       } catch (reason) {
         if (!cancelled) setError(reason instanceof Error ? reason.message : "화면 목록을 불러오지 못했습니다.");
       } finally { if (!cancelled) setManualLoading(false); }
     })();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; manualGeneration.current += 1; };
   }, [active, bufferRef, demoReplay, mode, seconds]);
 
   const discardShare = () => {
@@ -110,35 +115,62 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
   const changeBuffer = (minutes: number) => { resetResult(); onBufferMinutesChange(minutes); };
   const changeWindow = (nextSeconds: number) => { resetResult(); onSecondsChange(nextSeconds); };
   const toggleGap = (id: string) => {
-    const opening = !expandedGaps.has(id);
-    if (!opening) {
-      setExpandedGaps((current) => { const next = new Set(current); next.delete(id); return next; });
-      return;
-    }
-    const capsule = manualCapsule.current;
-    const gap = manualTimeline?.gaps.find((candidate) => candidate.id === id);
-    const showGap = () => setExpandedGaps((current) => new Set(current).add(id));
-    if (!capsule || !gap?.frames.length) { showGap(); return; }
-    if (manualGapLoads.current.has(id)) return;
-    manualGapLoads.current.add(id);
-    const offsets = gap.frames.map((frame) => (frame.capturedAt - capsule.triggeredAt) / 1_000);
-    void bufferRef.current.framesAtOffsets(capsule, offsets).then((decoded) => {
-      if (!decoded.length) return;
-      const highResolution = new Map(decoded.flatMap((frame) => frame.capturedAt === undefined ? [] : [[frame.capturedAt, frame.url] as const]));
-      setManualTimeline((current) => current ? { ...current, gaps: current.gaps.map((candidate) => candidate.id === id ? {
-        ...candidate, frames: candidate.frames.map((frame) => ({ ...frame, url: highResolution.get(frame.capturedAt) ?? frame.url })),
-      } : candidate) } : current);
-    }).catch(() => undefined).finally(() => { manualGapLoads.current.delete(id); showGap(); });
+    setExpandedGaps((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
   };
+  const prepareManualFrame = useCallback((frame: ManualFrame) => {
+    const capsule = manualCapsule.current;
+    if (frame.highResolution || !capsule || manualFrameLoads.current.has(frame.id)) return;
+    const generation = manualGeneration.current;
+    manualFrameLoads.current.add(frame.id);
+    const decode = manualDecodeQueue.current.catch(() => undefined).then(async () => {
+      const [decoded] = await bufferRef.current.framesAtOffsets(capsule, [(frame.capturedAt - capsule.triggeredAt) / 1_000]);
+      if (!decoded || generation !== manualGeneration.current || manualCapsule.current !== capsule) return;
+      const upgraded = { ...frame, url: decoded.url, highResolution: true };
+      manualHighResCache.current.delete(frame.id);
+      manualHighResCache.current.set(frame.id, decoded.url);
+      const evictedId = manualHighResCache.current.size > 24 ? manualHighResCache.current.keys().next().value as string | undefined : undefined;
+      if (evictedId) manualHighResCache.current.delete(evictedId);
+      const updateFrame = (current: ManualFrame) => {
+        if (current.id === frame.id) return upgraded;
+        if (current.id === evictedId) return { ...current, url: current.previewUrl, highResolution: false };
+        return current;
+      };
+      setManualTimeline((current) => current ? { ...current, gaps: current.gaps.map((gap) => ({ ...gap, frames: gap.frames.map(updateFrame) })) } : current);
+      setSelectedFrames((current) => {
+        if (!current.has(frame.id) && (!evictedId || !current.has(evictedId))) return current;
+        const next = new Map(current);
+        if (next.has(frame.id)) next.set(frame.id, upgraded);
+        if (evictedId && next.has(evictedId)) {
+          const evicted = next.get(evictedId)!;
+          next.set(evictedId, { ...evicted, url: evicted.previewUrl, highResolution: false });
+        }
+        return next;
+      });
+      setPreviewFrame((current) => current?.id === frame.id ? upgraded
+        : evictedId && current?.id === evictedId ? { ...current, url: current.previewUrl, highResolution: false } : current);
+    });
+    manualDecodeQueue.current = decode.catch(() => undefined);
+    void decode.catch(() => undefined).finally(() => {
+      if (generation === manualGeneration.current) manualFrameLoads.current.delete(frame.id);
+    });
+  }, [bufferRef]);
   const toggleFrame = (frame: ManualFrame) => setSelectedFrames((current) => {
     const next = new Map(current); if (next.has(frame.id)) next.delete(frame.id); else next.set(frame.id, frame); return next;
   });
   const refreshManual = async () => {
     if (manualLoading) return;
+    const generation = ++manualGeneration.current;
+    manualFrameLoads.current.clear(); manualHighResCache.current.clear(); manualDecodeQueue.current = Promise.resolve();
     setManualLoading(true); setError("");
     try {
       const next = await readManualTimeline(bufferRef.current, demoReplay, seconds);
-      manualCapsule.current = next.capsule; setManualTimeline(next.timeline); setExpandedGaps(new Set()); setSelectedFrames(new Map()); setPreviewFrame(null);
+      if (generation === manualGeneration.current) {
+        manualCapsule.current = next.capsule; setManualTimeline(next.timeline); setExpandedGaps(new Set()); setSelectedFrames(new Map()); setPreviewFrame(null);
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "화면 목록을 불러오지 못했습니다.");
     } finally { setManualLoading(false); }
@@ -176,7 +208,7 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
       </div>}
       {mode !== "manual" && <button type="button" className={styles.exportButton} disabled={!active || busy} onClick={() => void doExport()}>{busy ? <CircleNotch className={styles.spin} size={16} /> : <ExportIcon size={17} />}AI Context 생성</button>}
       {mode === "manual" && <ManualPicker timeline={manualTimeline} loading={manualLoading} expandedGaps={expandedGaps} selectedFrames={selectedFrames}
-        onToggleGap={toggleGap} onToggleFrame={toggleFrame} onPreview={setPreviewFrame} onDownload={downloadSelected} onRefresh={refreshManual} />}
+        onToggleGap={toggleGap} onToggleFrame={toggleFrame} onPreview={setPreviewFrame} onPrepareFrame={prepareManualFrame} onDownload={downloadSelected} onRefresh={refreshManual} />}
       {error && <p className={styles.error} role="alert">{error}</p>}
       {result && mode !== "manual" && <section className={styles.result} aria-live="polite">
         <p className={styles.success}><Check size={15} weight="bold" />{result.delivery === "link" ? `링크 준비됨 · ${new Date(result.share!.expiresAt).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })} 만료` : result.fileName}</p>
@@ -195,9 +227,10 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
   </main>;
 }
 
-function ManualPicker({ timeline, loading, expandedGaps, selectedFrames, onToggleGap, onToggleFrame, onPreview, onDownload, onRefresh }: {
+function ManualPicker({ timeline, loading, expandedGaps, selectedFrames, onToggleGap, onToggleFrame, onPreview, onPrepareFrame, onDownload, onRefresh }: {
   timeline: ManualTimeline | null; loading: boolean; expandedGaps: Set<string>; selectedFrames: Map<string, ManualFrame>;
   onToggleGap: (id: string) => void; onToggleFrame: (frame: ManualFrame) => void; onPreview: (frame: ManualFrame) => void;
+  onPrepareFrame: (frame: ManualFrame) => void;
   onDownload: () => void; onRefresh: () => Promise<void>;
 }) {
   return <section className={styles.manual} aria-label="로컬 버퍼 화면 선택">
@@ -205,10 +238,14 @@ function ManualPicker({ timeline, loading, expandedGaps, selectedFrames, onToggl
     {loading && !timeline && <p className={styles.manualEmpty}><CircleNotch className={styles.spin} size={14} /> 화면을 불러오는 중</p>}
     {timeline && <div className={styles.timeline} aria-label="대표 화면 타임라인">
       {timeline.representatives.map((frame, index) => <div className={styles.timelinePart} key={frame.id}>
-        <FrameCard frame={frame} selected={selectedFrames.has(frame.id)} onToggle={onToggleFrame} onPreview={onPreview} />
+        <FrameCard frame={frame} selected={selectedFrames.has(frame.id)} onToggle={onToggleFrame} onPreview={onPreview} onPrepare={onPrepareFrame} />
         {timeline.gaps[index] && <>
-          <button type="button" className={styles.gapButton} aria-expanded={expandedGaps.has(timeline.gaps[index].id)} aria-label={`${formatGap(timeline.gaps[index].frames)} 사이 화면`} onClick={() => onToggleGap(timeline.gaps[index].id)}>…</button>
-          {expandedGaps.has(timeline.gaps[index].id) && timeline.gaps[index].frames.map((middle) => <FrameCard key={middle.id} frame={middle} selected={selectedFrames.has(middle.id)} onToggle={onToggleFrame} onPreview={onPreview} />)}
+          <button type="button" className={styles.gapButton} aria-expanded={expandedGaps.has(timeline.gaps[index].id)} aria-label={`${formatGap(timeline.gaps[index].frames)} 사이 화면`} onClick={() => {
+            const gap = timeline.gaps[index];
+            if (!expandedGaps.has(gap.id) && gap.frames[0]) onPrepareFrame(gap.frames[0]);
+            onToggleGap(gap.id);
+          }}>…</button>
+          {expandedGaps.has(timeline.gaps[index].id) && timeline.gaps[index].frames.map((middle) => <FrameCard key={middle.id} frame={middle} selected={selectedFrames.has(middle.id)} onToggle={onToggleFrame} onPreview={onPreview} onPrepare={onPrepareFrame} />)}
         </>}
       </div>)}
     </div>}
@@ -218,11 +255,21 @@ function ManualPicker({ timeline, loading, expandedGaps, selectedFrames, onToggl
   </section>;
 }
 
-function FrameCard({ frame, selected, onToggle, onPreview }: {
-  frame: ManualFrame; selected: boolean; onToggle: (frame: ManualFrame) => void; onPreview: (frame: ManualFrame) => void;
+function FrameCard({ frame, selected, onToggle, onPreview, onPrepare }: {
+  frame: ManualFrame; selected: boolean; onToggle: (frame: ManualFrame) => void; onPreview: (frame: ManualFrame) => void; onPrepare: (frame: ManualFrame) => void;
 }) {
-  return <article className={styles.frameCard} data-representative={frame.representative} data-selected={selected}>
-    <button type="button" className={styles.framePreview} onClick={() => onPreview(frame)} aria-label={`${frameTime(frame)} 화면 크게 보기`}>
+  const card = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (frame.highResolution || !card.current) return;
+    if (!("IntersectionObserver" in window)) { onPrepare(frame); return; }
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) { onPrepare(frame); observer.disconnect(); }
+    }, { rootMargin: "120px" });
+    observer.observe(card.current);
+    return () => observer.disconnect();
+  }, [frame, onPrepare]);
+  return <article ref={card} className={styles.frameCard} data-representative={frame.representative} data-selected={selected} onPointerEnter={() => onPrepare(frame)} onFocusCapture={() => onPrepare(frame)}>
+    <button type="button" className={styles.framePreview} onClick={() => { onPrepare(frame); onPreview(frame); }} aria-label={`${frameTime(frame)} 화면 크게 보기`}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={frame.url} alt="" /><MagnifyingGlassPlus size={14} />
     </button>

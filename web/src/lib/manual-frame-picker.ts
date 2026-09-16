@@ -1,6 +1,13 @@
 import type { OverviewFrame, PreviewFrame } from "./replay-buffer";
 
-export type ManualFrame = { id: string; url: string; capturedAt: number; representative: boolean };
+export type ManualFrame = {
+  id: string;
+  url: string;
+  previewUrl: string;
+  capturedAt: number;
+  representative: boolean;
+  highResolution: boolean;
+};
 export type ManualGap = { id: string; frames: ManualFrame[] };
 export type ManualTimeline = { representatives: ManualFrame[]; gaps: ManualGap[] };
 
@@ -10,7 +17,8 @@ export function buildManualTimeline(previews: PreviewFrame[], overview: Overview
     .flatMap((frame, index) => {
       const capturedAt = frame.capturedAt;
       if (capturedAt === undefined) return [];
-      return [{ id: `representative-${capturedAt}-${index}`, url: frame.url, capturedAt, representative: true }];
+      const previewUrl = nearestPreview(ordered, capturedAt)?.dataUrl ?? frame.url;
+      return [{ id: `representative-${capturedAt}-${index}`, url: frame.url, previewUrl, capturedAt, representative: true, highResolution: true }];
     })
     .sort((left, right) => left.capturedAt - right.capturedAt);
   const gaps = representatives.slice(0, -1).map((frame, index) => {
@@ -20,11 +28,18 @@ export function buildManualTimeline(previews: PreviewFrame[], overview: Overview
       frames: ordered
         .filter((preview) => preview.capturedAt > frame.capturedAt + 125 && preview.capturedAt < next.capturedAt - 125)
         .map((preview, frameIndex) => ({
-          id: `frame-${preview.capturedAt}-${frameIndex}`, url: preview.dataUrl, capturedAt: preview.capturedAt, representative: false,
+          id: `frame-${preview.capturedAt}-${frameIndex}`, url: preview.dataUrl, previewUrl: preview.dataUrl,
+          capturedAt: preview.capturedAt, representative: false, highResolution: false,
         })),
     };
   });
   return { representatives, gaps };
+}
+
+function nearestPreview(previews: PreviewFrame[], capturedAt: number) {
+  return previews.reduce<PreviewFrame | undefined>((nearest, preview) => (
+    !nearest || Math.abs(preview.capturedAt - capturedAt) < Math.abs(nearest.capturedAt - capturedAt) ? preview : nearest
+  ), undefined);
 }
 
 export function manualFrameFile(frame: ManualFrame) {
