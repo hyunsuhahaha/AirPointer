@@ -10,7 +10,7 @@ export function proxy(request: NextRequest) {
     "style-src-attr 'unsafe-inline'",
     "img-src 'self' blob: data:",
     "media-src 'self' blob:",
-    "connect-src 'self' https://cdn.jsdelivr.net https://storage.googleapis.com",
+    "connect-src 'self' https://cdn.jsdelivr.net https://storage.googleapis.com https://*.blob.vercel-storage.com",
     "worker-src 'self' blob:",
     "font-src 'self'",
     "object-src 'none'",

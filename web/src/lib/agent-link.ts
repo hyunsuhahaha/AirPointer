@@ -12,10 +12,19 @@ export async function createAgentLink(files: File[], seconds: number): Promise<A
   const setup = await prepared.json() as { storage?: "local" | "blob"; token?: string; createdAt?: number; expiresAt?: number; error?: string };
   if (!prepared.ok) throw new Error(setup.error || "Agent Link를 준비하지 못했습니다.");
   if (setup.storage === "blob" && setup.token && setup.createdAt && setup.expiresAt) {
-    await Promise.all(sharedFiles.map((file) => upload(`whatwas-contexts/${setup.token}/${file.name}`, file, {
-      access: "private", handleUploadUrl: "/api/contexts/upload", contentType: file.type.split(";", 1)[0],
-      clientPayload: JSON.stringify({ token: setup.token, path: file.name, type: file.type }),
-    })));
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 60_000);
+    try {
+      for (let index = 0; index < sharedFiles.length; index += 3) {
+        await Promise.all(sharedFiles.slice(index, index + 3).map((file) => upload(`whatwas-contexts/${setup.token}/${file.name}`, file, {
+          access: "private", handleUploadUrl: "/api/contexts/upload", contentType: file.type.split(";", 1)[0], abortSignal: controller.signal,
+          clientPayload: JSON.stringify({ token: setup.token, path: file.name, type: file.type }),
+        })));
+      }
+    } catch (error) {
+      if (controller.signal.aborted) throw new Error("Agent Link 업로드가 60초 안에 끝나지 않았습니다. 다시 시도해 주세요.");
+      throw error;
+    } finally { window.clearTimeout(timeout); }
     const finalized = await fetch("/api/contexts/finalize", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token: setup.token, createdAt: setup.createdAt, expiresAt: setup.expiresAt, seconds,
