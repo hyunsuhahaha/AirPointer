@@ -82,7 +82,7 @@ test("Local Folder는 저장 경로와 실제 작성 파일을 같은 프롬프�
 });
 
 test("Manual은 0장에서 시작해 대표 사이 화면을 펼치고 확대·드래그·다중 다운로드한다", async ({ page }) => {
-  test.setTimeout(90_000);
+  test.setTimeout(120_000);
   await page.addInitScript(() => {
     const canvas = document.createElement("canvas"); canvas.width = 1920; canvas.height = 1080;
     const context = canvas.getContext("2d")!; let tick = 0;
@@ -93,7 +93,9 @@ test("Manual은 0장에서 시작해 대표 사이 화면을 펼치고 확대·�
   await page.goto("http://localhost:3000");
   await page.getByRole("button", { name: "화면 공유 시작" }).first().click();
   await expect(page.getByText("로컬 기록 중")).toBeVisible();
-  await page.waitForTimeout(4_000);
+  // The production buffer keeps one lightweight preview per second. Record
+  // long enough for those previews to sit between the 12 representatives.
+  await page.waitForTimeout(13_000);
   const modes = page.getByRole("group", { name: "AI 내보내기 방식" }).getByRole("button");
   await expect(modes.nth(0)).toContainText("Manual");
   await expect(modes.nth(1)).toContainText("Agent Link");
@@ -103,8 +105,8 @@ test("Manual은 0장에서 시작해 대표 사이 화면을 펼치고 확대·�
   const picker = page.getByRole("region", { name: "로컬 버퍼 화면 선택" });
   await expect(picker.getByText("선택 0장")).toBeVisible({ timeout: 30_000 });
   const representatives = picker.locator('article[data-representative="true"]');
-  await expect(representatives.first()).toBeVisible();
-  await expect.poll(() => representatives.first().locator("img").evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBe(1600);
+  await expect(representatives.first()).toBeVisible({ timeout: 30_000 });
+  await expect.poll(() => representatives.first().locator("img").evaluate((image) => (image as HTMLImageElement).naturalWidth), { timeout: 30_000 }).toBe(1600);
   const representativeCount = await representatives.count();
   await page.evaluate(() => {
     const target = document.createElement("div");
@@ -138,10 +140,13 @@ test("Manual은 0장에서 시작해 대표 사이 화면을 펼치고 확대·�
   expect(realDrop.html).toContain("data:image/jpeg;base64,");
   await page.locator("#real-drag-target").evaluate((element) => element.remove());
   const gap = picker.getByRole("button", { name: /\d+개 사이 화면/ }).first();
+  await expect(gap).toHaveAccessibleName(/사이 화면 펼치기/);
   await gap.click();
+  await expect(gap).toHaveAccessibleName(/사이 화면 접기/);
   const middle = picker.locator('article[data-representative="false"]');
   await expect(middle.first()).toBeVisible();
-  await expect.poll(() => middle.first().locator("img").evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBe(1600);
+  await expect.poll(() => middle.first().locator("img").evaluate((image) => (image as HTMLImageElement).naturalWidth), { timeout: 30_000 }).toBe(1600);
+  await expect(gap).toHaveAttribute("aria-busy", "false");
   expect(await picker.locator("article").count()).toBeGreaterThan(representativeCount);
 
   await middle.first().getByRole("button", { name: /화면 크게 보기/ }).click();
