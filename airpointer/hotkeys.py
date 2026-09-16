@@ -1,7 +1,4 @@
-"""Global keyboard-shortcut triggers -- a camera-free alternative to the
-hand-gesture path for the same three capture actions (see capture_controller.
-CaptureController / main.App._dispatch_hotkey_action, which both hotkeys and
-gestures ultimately call into).
+"""Global keyboard-shortcut triggers for the three capture actions.
 
 Implementation note: RegisterHotKey(hwnd=None, ...) posts WM_HOTKEY straight
 to the calling thread's message queue rather than to a window -- no WNDPROC
@@ -36,7 +33,7 @@ _NAMED_KEYS = {
 }
 
 # Same three actions capture_controller.CaptureKind covers, keyed the same
-# way CompanionState's `gestures` dict already is -- kept in sync so a
+# way CompanionState's hotkey config is -- kept in sync so a
 # binding dict from either the native Settings file or the browser's
 # companion config drops in without translation.
 DEFAULT_BINDINGS: Bindings = {

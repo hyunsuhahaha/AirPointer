@@ -1,17 +1,12 @@
 from __future__ import annotations
 
 import base64
-import io
 import json
 import threading
-import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable
 from urllib.parse import parse_qs, urlparse
 
-from PIL import Image
-
-from .command_gesture import CommandView
 from .hotkeys import parse_binding
 from .memory_store import MemoryStore
 from .screen_buffer import _GLOBAL_MIN_SCORE
@@ -37,7 +32,6 @@ class CompanionState:
         self._lock = threading.Lock()
         self._tokens: set[str] = set()
         self._agent_thread_id = ""
-        self._gestures = {"replay": True, "screenshot": True, "region": True}
         # Empty until the browser sends bindings -- App falls back to the
         # local Settings file's own hotkeys in that case (see main.py's
         # _resolve_hotkey_bindings), so an un-configured companion never
@@ -47,20 +41,12 @@ class CompanionState:
         # whatever the local Settings/native SEND TO radio has, same
         # not-configured-yet fallback shape as _hotkeys above. Set only via
         # the browser's own "보낼 곳" picker (see replay-workspace.tsx) so a
-        # hotkey/gesture capture and the browser's own screen-share capture
+        # hotkey capture and the browser's own screen-share capture
         # stop silently targeting two different apps (see App._sync_delivery_target).
         self._delivery_target = ""
         self._running = False
         self._mode: str | None = None
-        self._camera_ready = False
-        self._pose = "none"
-        self._phase = "idle"
-        self._progress = 0.0
-        self._route: str | None = None
-        self._replay_event = 0
-        self._preview = ""
-        self._last_preview_at = 0.0
-        # What a gesture/hotkey-triggered send last actually delivered (see
+        # What a hotkey-triggered send last actually delivered (see
         # App._publish_sent_frames) -- kept out of snapshot()'s own payload
         # since that's polled every 100ms and these can be several full-size
         # JPEGs; the browser instead watches `sentEvent` for a bump and pulls
@@ -92,16 +78,8 @@ class CompanionState:
         with self._lock:
             self._running = running
             self._mode = mode if running else None
-            if not running:
-                self._camera_ready = False
-                self._pose = "none"
-                self._phase = "idle"
-                self._progress = 0.0
-                self._route = None
-                self._preview = ""
 
     def configure(self, token: str, agent_thread_id: str,
-                  gestures: dict[str, bool] | None = None,
                   hotkeys: dict[str, str] | None = None,
                   delivery_target: str | None = None) -> bool:
         with self._lock:
@@ -110,16 +88,12 @@ class CompanionState:
             self._agent_thread_id = agent_thread_id.strip()[:256]
             if delivery_target in ("codex", "claude"):
                 self._delivery_target = delivery_target
-            if gestures:
-                for key in self._gestures:
-                    if key in gestures:
-                        self._gestures[key] = bool(gestures[key])
             if hotkeys is not None:
                 # Invalid entries (typo'd modifier, no modifier at all) are
                 # dropped rather than rejecting the whole update -- one bad
                 # combo shouldn't take the other two actions' hotkeys down too.
                 self._hotkeys = {action: combo for action, combo in hotkeys.items()
-                                 if action in self._gestures and parse_binding(combo)}
+                                 if action in {"replay", "screenshot", "region"} and parse_binding(combo)}
             return True
 
     def agent_thread_id(self) -> str:
@@ -173,36 +147,12 @@ class CompanionState:
         except Exception as error:
             return 500, {"error": str(error), "threads": []}
 
-    def gesture_flags(self) -> tuple[bool, bool, bool]:
-        with self._lock:
-            return self._gestures["replay"], self._gestures["screenshot"], self._gestures["region"]
-
     def hotkeys(self) -> dict[str, str]:
         with self._lock:
             return dict(self._hotkeys)
 
-    def publish(self, frame, pose: str, command: CommandView) -> None:
-        now = time.monotonic()
-        preview = None
-        if frame is not None and now - self._last_preview_at >= 0.15:
-            image = Image.fromarray(frame)
-            output = io.BytesIO()
-            image.save(output, format="JPEG", quality=58, optimize=False)
-            preview = "data:image/jpeg;base64," + base64.b64encode(output.getvalue()).decode("ascii")
-            self._last_preview_at = now
-        with self._lock:
-            self._camera_ready = frame is not None
-            self._pose = pose
-            self._phase = command.phase
-            self._progress = command.progress
-            self._route = command.route
-            if command.event == "replay":
-                self._replay_event += 1
-            if preview is not None:
-                self._preview = preview
-
     def publish_sent(self, frames: list[dict]) -> None:
-        """Called after a gesture/hotkey-triggered capture is actually
+        """Called after a hotkey-triggered capture is actually
         delivered (see App._publish_sent_frames) -- `frames` are the same
         images that just went to Codex/Claude Desktop, so the browser's
         "LOCAL RING BUFFER" grid can show what a native capture sent even
@@ -228,13 +178,6 @@ class CompanionState:
             return {
                 "running": self._running,
                 "mode": self._mode,
-                "cameraReady": self._camera_ready,
-                "pose": self._pose,
-                "phase": self._phase,
-                "progress": self._progress,
-                "route": self._route,
-                "replayEvent": self._replay_event,
-                "preview": self._preview,
                 "sentEvent": self._sent_event,
                 "scoreHistory": list(self._score_history),
                 "scoreThreshold": _GLOBAL_MIN_SCORE,
@@ -405,11 +348,6 @@ class CompanionHttpServer:
                     thread_id = payload.get("agentThreadId", "")
                     if not isinstance(thread_id, str):
                         raise ValueError("agentThreadId must be a string")
-                    raw_gestures = payload.get("gestures", {})
-                    if not isinstance(raw_gestures, dict) or any(
-                            key not in {"replay", "screenshot", "region"} or not isinstance(value, bool)
-                            for key, value in raw_gestures.items()):
-                        raise ValueError("gestures must contain booleans")
                     raw_hotkeys = payload.get("hotkeys", {})
                     if not isinstance(raw_hotkeys, dict) or any(
                             not isinstance(key, str) or not isinstance(value, str) or len(value) > 64
@@ -421,7 +359,7 @@ class CompanionHttpServer:
                 except (ValueError, json.JSONDecodeError):
                     self.send_error(400)
                     return
-                if not state_ref.configure(token, thread_id, raw_gestures, raw_hotkeys, delivery_target):
+                if not state_ref.configure(token, thread_id, raw_hotkeys, delivery_target):
                     self.send_error(403)
                     return
                 self.send_response(204)
@@ -430,7 +368,7 @@ class CompanionHttpServer:
 
             def _handle_send(self, parsed) -> None:
                 # Lets the browser's own screen-share capture (getDisplayMedia,
-                # not AirPointer's gesture/hotkey pipeline) reach either Codex
+                # not AirPointer's hotkey pipeline) reach either Codex
                 # Desktop or Claude Desktop through the same UI-automation
                 # delivery the native app already uses for its own captures --
                 # see App._deliver_companion_capture in main.py.

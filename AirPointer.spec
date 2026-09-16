@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
+from PyInstaller.utils.hooks import collect_submodules
 
 # winsdk (used by ocr_fallback.py) ships one compiled extension module per
 # WinRT namespace, discovered at runtime rather than via a plain top-level
@@ -12,26 +12,12 @@ from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, co
 # 폴백" section).
 winsdk_hidden = collect_submodules("winsdk")
 
-# AirPointer only ever instantiates mp.solutions.hands.Hands(), but importing
-# mediapipe.python.solutions eagerly imports every solution's Python module
-# (mediapipe's own __init__.py does this, not us). That doesn't load their
-# model weights though -- those are read from disk lazily, only when a
-# solution object (Pose(), FaceMesh(), ...) is actually constructed. Since we
-# never construct those, only bundle the hand/palm models we do use.
-mediapipe_data = collect_data_files(
-    "mediapipe", includes=["modules/hand_landmark/**/*", "modules/palm_detection/**/*"]
-)
-mediapipe_binaries = collect_dynamic_libs("mediapipe")
-mediapipe_hidden = [
-    "mediapipe.python.solutions.hands",
-]
-
 a = Analysis(
     ["airpointer_launcher.py"],
     pathex=[],
-    binaries=mediapipe_binaries,
-    datas=mediapipe_data,
-    hiddenimports=mediapipe_hidden + winsdk_hidden,
+    binaries=[],
+    datas=[],
+    hiddenimports=winsdk_hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -40,18 +26,8 @@ a = Analysis(
     optimize=0,
 )
 
-# cv2 ships Haar cascade XML data for face/eye/body detection; AirPointer
-# only uses MediaPipe hand tracking, so this is dead weight (~7MB).
+# cv2 ships Haar cascade XML data for face/eye/body detection; replay does not use them.
 a.datas = [entry for entry in a.datas if "cv2" + "\\data\\" not in entry[0] and "cv2/data/" not in entry[0]]
-
-# sounddevice/portaudio (pulled in transitively by mediapipe's audio task
-# modules, unused by AirPointer's hand-tracking-only code path) also isn't
-# reliably readable mid-build on this machine -- Windows Defender's on-access
-# scan holds a lock on the freshly-written binaries long enough that
-# PyInstaller's own archive-packing step hits a PermissionError. Drop it from
-# both datas and binaries so it's never even considered.
-a.datas = [entry for entry in a.datas if "sounddevice" not in entry[0] and "portaudio" not in entry[0]]
-a.binaries = [entry for entry in a.binaries if "sounddevice" not in entry[0] and "portaudio" not in entry[0]]
 
 pyz = PYZ(a.pure)
 

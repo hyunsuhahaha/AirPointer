@@ -7,9 +7,6 @@ from tkinter import ttk
 from pathlib import Path
 from typing import Callable
 
-from PIL import Image, ImageTk
-
-from .camera import CameraLoop
 from .capture_controller import CaptureController
 from .click_tracker import ClickTracker
 from .clipboard_tracker import ClipboardTracker
@@ -17,7 +14,6 @@ from .codex_delivery import (
     AgentThread, CodexAppServerDelivery, DesktopPasteDelivery, resolve_delivery_target,
 )
 from .companion_bridge import CompanionState
-from .command_gesture import CommandEvent, CommandView
 from .conversation_picker import ConversationPicker
 from .memory_ingest import ScreenMemoryIngestor
 from .overlay import Overlay
@@ -44,14 +40,7 @@ class App:
         self.root.configure(bg="#07131c")
         self.root.resizable(False, False)
         self.settings = Settings.load()
-        self._frame = None
-        self._frame_version = 0
-        self._drawn_frame_version = -1
-        self._frame_lock = threading.Lock()
-        self._preview_photo = None
-        self._command = CommandView()
         self._selection = SelectionView()
-        self._pose = "none"
         self.companion_state = companion_state
         self._last_mode = ""
         self._active_mode: str | None = None
@@ -128,10 +117,6 @@ class App:
         self._last_hotkey_hint = ""
         self._region_selector = RegionSelector()
         self._region_selecting = threading.Event()
-        self.camera = CameraLoop(
-            self.settings, self._set_frame, self._handle_command,
-            self.companion_state.gesture_flags if self.companion_state else None,
-            self._region_selecting.is_set)
         self.overlay = Overlay(self.root)
         self.overlay.canvas.bind("<ButtonPress-1>", self._region_press)
         self.overlay.canvas.bind("<B1-Motion>", self._region_drag)
@@ -157,7 +142,7 @@ class App:
     def _on_callback_exception(self, _exc_type, exc_value, exc_tb) -> None:
         # AirPointer.exe runs without a console (pythonw), so the default
         # Tk behaviour of printing to stderr is invisible. Surface failures
-        # (camera/MediaPipe init, gesture handling, delivery, ...) as a
+        # (capture and delivery, ...) as a
         # visible notice and bring the window back so the user can see it.
         import os
         import traceback
@@ -191,30 +176,17 @@ class App:
         shell.pack(fill="both", expand=True)
         ttk.Label(shell, text="AIRPOINTER // v0.3", foreground="#44e5ff",
                   font=("Consolas", 19, "bold")).pack(anchor="w", pady=(0, 4))
-        ttk.Label(shell, text="GESTURE CAPTURE + AGENT REPLAY", foreground="#527f91",
+        ttk.Label(shell, text="SCREEN CONTEXT + AGENT REPLAY", foreground="#527f91",
                   font=("Consolas", 8)).pack(anchor="w", pady=(0, 10))
 
         notebook = ttk.Notebook(shell)
         notebook.pack(fill="both", expand=True)
         frame = ttk.Frame(notebook, padding=(12, 9))
         replay = ttk.Frame(notebook, padding=16)
-        notebook.add(frame, text="Camera")
+        notebook.add(frame, text="Shortcuts")
         notebook.add(replay, text="Agent Replay")
         notebook.bind("<<NotebookTabChanged>>", lambda _event: self._refresh_agents_once(
             notebook.index(notebook.select()) == 1))
-
-        camera_row = ttk.Frame(frame)
-        camera_row.pack(fill="x", pady=5)
-        ttk.Label(camera_row, text="Camera").pack(side="left")
-        camera = ttk.Spinbox(camera_row, from_=0, to=9, width=5,
-                             command=lambda: setattr(self.settings, "camera_index", int(camera.get())))
-        camera.set("0")
-        camera.pack(side="right")
-
-        self.preview = tk.Canvas(frame, width=320, height=180, bg="#02090d",
-                                 highlightbackground="#1d8295", highlightthickness=1)
-        self.preview.pack(pady=(8, 6))
-        self.preview.create_text(160, 90, text="CAMERA OFFLINE", fill="#527f91", font=("Consolas", 10))
 
         self.status = ttk.Label(frame, text="SYSTEM READY", foreground="#74f7c5", font=("Consolas", 9))
         self.status.pack(anchor="w", pady=(8, 6))
@@ -279,17 +251,6 @@ class App:
                         command=self._tracked("Send To: Claude Code", lambda: self._set_delivery_target(self.target_var.get()))
                         ).pack(side="left", padx=(12, 0))
 
-        ttk.Label(frame, text="START MODE", foreground="#44e5ff",
-                  font=("Consolas", 10, "bold")).pack(anchor="w", pady=(14, 4))
-        mode_var = tk.StringVar(value=self.settings.launch_mode)
-        mode_row = ttk.Frame(frame)
-        mode_row.pack(fill="x")
-        ttk.Radiobutton(mode_row, text="Gesture (camera)", variable=mode_var, value="gesture",
-                        command=self._tracked("Start Mode: Gesture", lambda: self._set_launch_mode(mode_var.get()))
-                        ).pack(side="left")
-        ttk.Radiobutton(mode_row, text="Hotkey (no camera)", variable=mode_var, value="hotkey",
-                        command=self._tracked("Start Mode: Hotkey", lambda: self._set_launch_mode(mode_var.get()))
-                        ).pack(side="left", padx=(12, 0))
         # Editing the combos themselves happens from the browser's companion
         # config (see companion_bridge.CompanionState.configure) -- this is
         # just a read-only reminder of whatever's currently bound, local or
@@ -299,10 +260,6 @@ class App:
                                       font=("Consolas", 8), wraplength=320)
         self._hotkey_hint.pack(anchor="w", pady=(2, 0))
 
-        ttk.Label(frame, text="PALM → FIST    CURRENT SCREEN", foreground="#74f7c5",
-                  font=("Consolas", 9)).pack(anchor="w", pady=(18, 3))
-        ttk.Label(frame, text="HOLD PALM      RECENT REPLAY", foreground="#74f7c5",
-                  font=("Consolas", 9)).pack(anchor="w")
         self.buffer_status = ttk.Label(frame, text="BUFFER STOPPED", foreground="#527f91",
                                        font=("Consolas", 9))
         self.buffer_status.pack(anchor="w", pady=(18, 3))
@@ -339,33 +296,23 @@ class App:
         if self._active_mode:
             self._stop_tracking()
         else:
-            self._start_tracking(self.settings.launch_mode)
+            self._start_tracking()
 
-    def _start_tracking(self, mode: str = "gesture") -> None:
-        """`mode` is "gesture" (camera + hand tracking, the original path)
-        or "hotkey" (no camera at all -- RegisterHotKey via HotkeyListener
-        instead). Mutually exclusive, chosen once at launch: this is meant
-        as a genuine alternative for when the camera pipeline is too heavy,
-        not a second trigger path layered on top of the camera."""
-        self._active_mode = mode
+    def _start_tracking(self) -> None:
+        self._active_mode = "hotkey"
         if self.companion_state:
-            self.companion_state.set_running(True, mode)
+            self.companion_state.set_running(True, "hotkey")
         if self.settings.replay_enabled:
             self.screen_buffer.start()
         self.window_tracker.start()
         self.click_tracker.start()
         if self.settings.clipboard_history_enabled:
             self.clipboard_tracker.start()
-        if mode == "hotkey":
-            self.hotkey_listener.start()
-            self.status.config(text="HOTKEY MODE // SHORTCUTS ACTIVE")
-        else:
-            self.camera.start()
-            self.status.config(text="TRACKING // PALM OR FIST TO CAPTURE")
+        self.hotkey_listener.start()
+        self.status.config(text="HOTKEY MODE // SHORTCUTS ACTIVE")
         self.button.config(text="Stop")
 
     def _stop_tracking(self) -> None:
-        self.camera.stop()
         self.hotkey_listener.stop()
         self.screen_buffer.stop(clear=True)
         self.window_tracker.stop(clear=True)
@@ -411,7 +358,7 @@ class App:
 
     def _publish_sent_frames(self, paths: tuple[Path, ...]) -> None:
         """Wired to CaptureController's on_sent -- mirrors what a
-        gesture/hotkey-triggered capture just sent into the browser's own
+        hotkey-triggered capture just sent into the browser's own
         "LOCAL RING BUFFER" grid (replay-workspace.tsx), which otherwise only
         ever shows the browser's own screen-share captures. Called on
         CaptureController's delivery-worker thread, right before it deletes
@@ -448,7 +395,7 @@ class App:
     def _deliver_companion_capture(self, target: str, thread_id: str, prompt: str,
                                     kind: str, frames: list[str]) -> dict:
         """Wired to CompanionState.set_delivery_handler -- runs the browser's
-        own screen-share capture (not a gesture/hotkey trigger) through
+        own screen-share capture through
         DesktopPasteDelivery, same as AirPointer's own captures, instead of
         the web app reimplementing Codex/Claude UI automation in Node. Called
         on CompanionHttpServer's request-handling thread, not the Tk main
@@ -490,7 +437,7 @@ class App:
         window.focus_force() alone can silently no-op when this process
         lacks Windows' "recently interactive" standing -- which is
         exactly the case here, since these windows get raised from a
-        background camera-gesture callback or a companion-bridge socket
+        companion-bridge socket
         command, never a genuine click. See win32_focus.py (the same fix
         desktop_paste.py needs for Codex Desktop's own window)."""
         window.deiconify()
@@ -504,12 +451,9 @@ class App:
     def handle_external_command(self, command: str, token: str = "") -> None:
         if self.companion_state:
             self.companion_state.authorize(token)
-        if command == "start":
+        if command == "start_hotkey":
             self.root.withdraw()
-            self._start_tracking("gesture")
-        elif command == "start_hotkey":
-            self.root.withdraw()
-            self._start_tracking("hotkey")
+            self._start_tracking()
         elif command == "stop":
             self._stop_tracking()
             self.root.withdraw()
@@ -518,21 +462,12 @@ class App:
         elif command == "quit":
             self._close()
 
-    def _set_frame(self, frame, command: CommandView = CommandView(), pose: str = "none") -> None:
-        with self._frame_lock:
-            self._frame = frame
-            self._command = command
-            self._pose = pose
-            self._frame_version += 1
-        if self.companion_state:
-            self.companion_state.publish(frame, pose, command)
-
     def _redraw(self) -> None:
         self.overlay.clear()
         self.overlay.draw_selection(self._selection)
         delivery = self.capture.status()
         buffer = self.screen_buffer.status()
-        self.overlay.draw_command(self._command, delivery, buffer)
+        self.overlay.draw_command(delivery, buffer)
         if self.companion_state:
             # Fixed 30s window regardless of the browser's own "전송 구간"
             # setting -- that picks how much gets sent to the Agent, this is
@@ -540,8 +475,6 @@ class App:
             self.companion_state.publish_scores(self.screen_buffer.recent_scores(30))
         if self._selection.active:
             mode = f"AREA CAPTURE // {self._selection.phase.upper()}"
-        elif self.camera.running:
-            mode = f"TRACKING // {self._pose.upper()}"
         elif self._active_mode == "hotkey":
             mode = "HOTKEY MODE // SHORTCUTS ACTIVE"
         else:
@@ -558,25 +491,11 @@ class App:
         if delivery.last_sent:
             detail += f" • {time.strftime('%H:%M:%S', time.localtime(delivery.last_sent))}"
         self.delivery_status.config(text=delivery.mode + detail)
-        with self._frame_lock:
-            frame = self._frame
-            version = self._frame_version
-        if version != self._drawn_frame_version:
-            self.preview.delete("all")
-            if frame is None:
-                self.preview.create_text(160, 90, text="CAMERA OFFLINE", fill="#527f91",
-                                         font=("Consolas", 10))
-                self._preview_photo = None
-            else:
-                self._preview_photo = ImageTk.PhotoImage(Image.fromarray(frame))
-                self.preview.create_image(160, 90, image=self._preview_photo)
-            self._drawn_frame_version = version
         self.root.after(16, self._redraw)
 
     def _close(self) -> None:
         self._cancel_capture_prompt()
         self._cancel_region_select()
-        self.camera.close()
         self.capture.close()
         self.window_tracker.stop(clear=True)
         self.click_tracker.stop(clear=True)
@@ -585,24 +504,6 @@ class App:
         self.settings.agent_thread_id = self._agent_thread_id
         self.settings.save()
         self.root.destroy()
-
-    def _handle_command(self, event: CommandEvent, _region: None = None) -> None:
-        if event == "replay":
-            try:
-                self.root.after(0, self._begin_capture_prompt, "replay")
-            except tk.TclError:
-                pass
-            return
-        if event == "region_select":
-            try:
-                self.root.after(0, self._begin_region_select)
-            except tk.TclError:
-                pass
-            return
-        try:
-            self.root.after(0, self._begin_capture_prompt, "screenshot")
-        except tk.TclError:
-            pass
 
     def _begin_region_select(self) -> None:
         if self._region_selecting.is_set():
@@ -1100,7 +1001,7 @@ class App:
 
     def _set_replay_enabled(self, enabled: bool) -> None:
         self.settings.replay_enabled = enabled
-        if enabled and self.camera.running:
+        if enabled and self._active_mode:
             self.screen_buffer.start()
         elif not enabled:
             self.screen_buffer.stop(clear=True)
@@ -1127,9 +1028,6 @@ class App:
         self.click_tracker.record_manual("AirPointer", f"Clipboard History {'ON' if enabled else 'OFF'}")
         self._set_clipboard_history_enabled(enabled)
 
-    def _set_launch_mode(self, mode: str) -> None:
-        self.settings.launch_mode = mode
-
     def _set_delivery_target(self, target_name: str) -> None:
         """Swaps the live delivery backend so the change takes effect on
         the very next capture, not just after a restart -- CaptureController
@@ -1151,7 +1049,7 @@ class App:
 
     def _sync_companion_delivery_target(self) -> None:
         """Applies the browser's "보낼 곳" picker (replay-workspace.tsx) to
-        this app's own SEND TO setting, so a hotkey/gesture-triggered
+        this app's own SEND TO setting, so a hotkey-triggered
         capture and the browser's own screen-share capture stop silently
         targeting two different apps. One-way (browser -> native), same
         relationship _resolve_hotkey_bindings already has for hotkeys --
@@ -1199,8 +1097,7 @@ class App:
             pass
 
     def _dispatch_hotkey_action(self, action: str) -> None:
-        # Same handlers the matching hand gesture already calls (see
-        # _handle_command and _region_release) -- only the trigger differs.
+        # Route all shortcuts through the existing capture handlers.
         if action == "replay":
             self._begin_capture_prompt("replay")
         elif action == "region":

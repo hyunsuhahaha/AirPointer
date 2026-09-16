@@ -121,7 +121,7 @@ async function prepareCapsule(request: Request, captureDir: string): Promise<Pre
   }));
   const manifestPath = join(captureDir, "replay-manifest.json");
   const helperPath = join(process.cwd(), "scripts", "replay-frame.mjs");
-  await writeFile(manifestPath, JSON.stringify({ version: 1, createdAt: Date.now(), startedAt: metadata.startedAt, triggeredAt: metadata.triggeredAt, seconds: metadata.seconds, overviewPaths: imagePaths, segments, frameQuery: { helperPath, commandExample: `node "${helperPath}" "${manifestPath}" -0.5`, description: "마지막 숫자는 제스처 기준 상대 초입니다. 음수는 이전 화면이며 여러 값을 한 번에 전달할 수 있습니다." } }, null, 2), "utf8");
+  await writeFile(manifestPath, JSON.stringify({ version: 1, createdAt: Date.now(), startedAt: metadata.startedAt, triggeredAt: metadata.triggeredAt, seconds: metadata.seconds, overviewPaths: imagePaths, segments, frameQuery: { helperPath, commandExample: `node "${helperPath}" "${manifestPath}" -0.5`, description: "마지막 숫자는 전송 시점 기준 상대 초입니다. 음수는 이전 화면이며 여러 값을 한 번에 전달할 수 있습니다." } }, null, 2), "utf8");
   return { threadId: metadata.threadId, mode: "replay", kind: "replay", seconds: metadata.seconds, userPrompt: metadata.userPrompt.trim(), imagePaths, windowHistory: "", capsule: { manifestPath, segmentCount: segments.length, triggeredAt: metadata.triggeredAt } };
 }
 
@@ -159,7 +159,7 @@ Replay Capsule manifest: ${capture.capsule.manifestPath}
 조회 명령: node "${helperPath}" "${capture.capsule.manifestPath}" -0.5
 여러 시점 조회: node "${helperPath}" "${capture.capsule.manifestPath}" -0.5 -1 -1.5
 
-마지막 숫자는 제스처 완료 시점 기준 상대 초입니다. 예를 들어 -0.5는 0.5초 전입니다. 위 요청에 필요한 장면이 개요에 없다면 인접 시점을 추가 조회한 뒤 답하세요. 캡슐은 60분 후 자동 삭제됩니다.`;
+마지막 숫자는 전송 시점 기준 상대 초입니다. 예를 들어 -0.5는 0.5초 전입니다. 위 요청에 필요한 장면이 개요에 없다면 인접 시점을 추가 조회한 뒤 답하세요. 캡슐은 60분 후 자동 삭제됩니다.`;
 }
 
 type AgentPayload = { threadId: string; mode: "current" | "replay"; kind?: CaptureKind; seconds: number; frames: string[]; userPrompt: string; windowHistory?: string };
@@ -169,7 +169,7 @@ function isPayload(value: unknown): value is AgentPayload {
   if (!value || typeof value !== "object") return false;
   const body = value as Record<string, unknown>;
   // Unlike the capsule path, userPrompt may be empty here: AirPointer's
-  // gesture-triggered instant captures (no prompt dialog) send one, and
+  // hotkey-triggered instant captures (no prompt dialog) send one, and
   // makePrompt() fills in a kind-appropriate default when it's blank.
   return typeof body.threadId === "string" && body.threadId.length > 0 && isOptionalPrompt(body.userPrompt)
     && (body.mode === "current" || body.mode === "replay")

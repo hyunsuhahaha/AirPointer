@@ -3,8 +3,7 @@ $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location -LiteralPath $projectRoot
 
-# UPX roughly halves the size of the big native DLLs (cv2, mediapipe's
-# bundled OpenCV, ...), which matters because the built exe needs to stay
+# UPX reduces the size of native DLLs (including cv2), which matters because the built exe needs to stay
 # under GitHub's 100MB per-file limit to be committed directly. Installed
 # via `winget install UPX.UPX`; PyInstaller silently skips compression if
 # it can't find it, so this is best-effort.

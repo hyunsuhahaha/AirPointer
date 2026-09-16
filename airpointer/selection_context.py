@@ -1,7 +1,7 @@
 """Reads what the user had selected right before a capture is taken, so the
 AI receives the exact text instead of having to re-read it off a screenshot.
 Called from main.App._begin_capture_prompt's freeze() thread, at the moment
-the hotkey/gesture fires -- focus is still on whatever app the user was
+the hotkey fires -- focus is still on whatever app the user was
 actually using then; by the time the capture prompt window appears, focus
 has already moved to AirPointer's own UI and this can no longer be read.
 

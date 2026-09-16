@@ -1,4 +1,3 @@
-mediapipe==0.10.21
 opencv-python<5
 Pillow
 pywin32

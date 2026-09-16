@@ -9,79 +9,9 @@ from PIL import Image
 
 from airpointer import codex_delivery
 from airpointer.codex_delivery import CodexAppServerDelivery, CodexBusyError
-from airpointer.command_gesture import CommandGesture
 from airpointer.region_selection import RegionSelector
 from airpointer.screen_buffer import ScreenReplayBuffer, Segment, _evenly_spaced
 from airpointer.settings import Settings
-from tests.test_core import _hand
-
-
-def _fist():
-    points = _hand()
-    for tip, pip in ((8, 6), (12, 10), (16, 14), (20, 18)):
-        points[tip] = points[pip]
-    return points
-
-
-def _pointing():
-    points = _hand()
-    for tip, pip in ((12, 10), (16, 14), (20, 18)):
-        points[tip] = points[pip]
-    return points
-
-
-def test_palm_then_fist_captures_current_screen_once() -> None:
-    gesture = CommandGesture()
-    palm = _hand()
-    assert gesture.update(palm, 0.00).phase == "arming"
-    assert gesture.update(palm, 0.13).phase == "armed"
-    assert gesture.update(_fist(), 0.20).event == "screenshot"
-    assert gesture.update(_fist(), 0.30).event is None
-    assert gesture.update(None, 0.40).phase == "idle"
-
-
-def test_palm_then_transition_frames_then_fist_still_captures_screen() -> None:
-    gesture = CommandGesture()
-    palm = _hand()
-    transition = _pointing()
-    assert gesture.update(palm, 0.00).phase == "arming"
-    assert gesture.update(transition, 0.08).phase == "arming"
-    assert gesture.update(None, 0.16).phase == "arming"
-    assert gesture.update(_fist(), 0.30).event == "screenshot"
-
-
-def test_fist_then_palm_starts_region_selection() -> None:
-    gesture = CommandGesture()
-    assert gesture.update(_fist(), 0.00).phase == "arming"
-    assert gesture.update(_fist(), 0.30).event is None
-    assert gesture.update(_hand(), 0.45).event == "region_select"
-
-
-def test_each_capture_gesture_can_be_disabled_independently() -> None:
-    palm = _hand()
-    gesture = CommandGesture()
-    gesture.configure(replay=False, screenshot=False, region=False)
-    assert gesture.update(palm, 0.0).phase == "idle"
-    assert gesture.update(_fist(), 0.2).phase == "idle"
-
-
-def test_held_palm_exports_replay_once() -> None:
-    gesture = CommandGesture()
-    palm = _hand()
-    gesture.update(palm, 0.00)
-    gesture.update(palm, 0.26)
-    assert gesture.update(palm, 1.21).event is None
-    assert gesture.update(palm, 2.01).event == "replay"
-    assert gesture.update(palm, 1.50).event is None
-
-
-def test_palm_timer_progresses_continuously_over_two_seconds() -> None:
-    gesture = CommandGesture()
-    palm = _hand()
-    assert gesture.update(palm, 0.00).progress == 0.0
-    assert 0.04 <= gesture.update(palm, 0.10).progress <= 0.06
-    assert 0.49 <= gesture.update(palm, 1.00).progress <= 0.51
-
 
 def test_mouse_drag_resizes_region_and_release_confirms_it() -> None:
     selector = RegionSelector()

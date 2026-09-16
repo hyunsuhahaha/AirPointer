@@ -108,25 +108,13 @@ class Overlay:
                                 text=f"{right - left} × {bottom - top}  •  RELEASE TO CAPTURE",
                                 fill=color, font=("Consolas", 10, "bold"), anchor="w")
 
-    def draw_command(self, command, delivery, buffer) -> None:
+    def draw_command(self, delivery, buffer) -> None:
         right, top = self.primary_right, self.primary_top
         if buffer.running:
             seconds = int(buffer.seconds)
             self.canvas.create_text(right - 24, top + 22,
                                     text=f"● BUFFER {seconds // 60:02d}:{seconds % 60:02d}",
                                     fill="#74f7c5", font=("Consolas", 9, "bold"), anchor="e")
-        if command.phase in ("arming", "armed") and command.route == "replay":
-            x, y, radius = right - 68, top + 82, 38
-            progress = command.progress
-            self.canvas.create_oval(x - radius, y - radius, x + radius, y + radius,
-                                    outline="#d7e4ea", width=5)
-            extent = max(10, round(360 * progress))
-            self.canvas.create_arc(x - radius, y - radius, x + radius, y + radius,
-                                   start=90, extent=-extent, outline="#ff6b22", width=8)
-            self.canvas.create_text(x, y - 3, text=f"{progress * 2:.1f}",
-                                    fill="#ffffff", font=("Consolas", 16, "bold"))
-            self.canvas.create_text(x, y + 17, text="PALM · 2 SEC", fill="#ff8a50",
-                                    font=("Consolas", 7, "bold"))
         if delivery.mode not in ("READY",):
             color = "#ff6767" if "FAILED" in delivery.mode or "ERROR" in delivery.mode else "#44e5ff"
             self.canvas.create_text(right - 24, top + 44, text=delivery.mode, fill=color,

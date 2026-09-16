@@ -22,7 +22,7 @@ Panels are flat with one-pixel graphite borders. Work surfaces use 12px corners;
 
 ## Interaction
 
-The authored motion is the orange NOW marker advancing as one-second segments enter the buffer. Buttons depress by one pixel. Gesture arming uses a brief progress sweep; all continuous motion stops under reduced-motion preferences.
+The authored motion is the orange NOW marker advancing as one-second segments enter the buffer. Buttons depress by one pixel; all continuous motion stops under reduced-motion preferences.
 
 ## Responsive
 

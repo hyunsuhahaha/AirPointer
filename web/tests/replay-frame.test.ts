@@ -7,7 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 import ffmpegPath from "ffmpeg-static";
 
-test("Replay Capsule에서 제스처 기준 0.5초 전 원본 프레임을 재조회한다", async () => {
+test("Replay Capsule에서 전송 시점 기준 0.5초 전 원본 프레임을 재조회한다", async () => {
   assert.ok(ffmpegPath);
   const directory = await mkdtemp(join(tmpdir(), "airpointer-replay-test-"));
   try {

@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 const TOKEN_PATTERN = /^[A-Za-z0-9-]{1,128}$/;
 
 // Proxies to AirPointer's companion server (127.0.0.1:47822/sent-frames, see
-// airpointer/companion_bridge.py) -- pulled by useCompanionGesture only when
+// airpointer/companion_bridge.py) -- pulled by useCompanionHotkeys only when
 // the status snapshot's `sentEvent` counter bumps, since these can be
 // several full-size JPEGs and the status poll itself runs every 100ms.
 export async function GET(request: Request) {

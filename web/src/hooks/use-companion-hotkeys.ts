@@ -1,49 +1,32 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { GesturePose, GestureProgress, RegionSelectionView } from "@/lib/gesture";
 import type { OverviewFrame } from "@/lib/replay-buffer";
 
-type GestureActions = { replay: boolean; screenshot: boolean; region: boolean };
 export type HotkeyBindings = { replay: string; screenshot: string; region: string };
 type Options = {
-  enabled: boolean; token: string; agentThreadId: string; gestures: GestureActions; hotkeys: HotkeyBindings;
+  enabled: boolean; token: string; agentThreadId: string; hotkeys: HotkeyBindings;
   // Pushed down to AirPointer's own SEND TO setting (see
-  // App._sync_companion_delivery_target in main.py) so a hotkey/gesture
+  // App._sync_companion_delivery_target in main.py) so a hotkey
   // capture and this page's own screen-share capture target the same app.
   // "" (not yet chosen here) leaves the native side's own setting alone.
   deliveryTarget?: "codex" | "claude" | "";
 };
 type Snapshot = {
   running: boolean;
-  mode: "gesture" | "hotkey" | null;
-  cameraReady: boolean;
-  pose: GesturePose;
-  phase: "idle" | "arming" | "armed" | "cooldown";
-  progress: number;
-  route: "replay" | "screenshot" | null;
-  replayEvent: number;
-  preview: string;
+  mode: "hotkey" | null;
   sentEvent: number;
   scoreHistory: [number, number][];
   scoreThreshold: number;
 };
 
-const IDLE_PROGRESS: GestureProgress = { phase: "idle", value: 0, command: null };
-const IDLE_SELECTION: RegionSelectionView = { phase: "idle", rect: null, pointer: null, progress: 0, captured: null };
-
-export function useCompanionGesture({ enabled, token, agentThreadId, gestures, hotkeys, deliveryTarget = "" }: Options) {
-  const [pose, setPose] = useState<GesturePose>("none");
-  const [progress, setProgress] = useState<GestureProgress>(IDLE_PROGRESS);
-  const [preview, setPreview] = useState("");
+export function useCompanionHotkeys({ enabled, token, agentThreadId, hotkeys, deliveryTarget = "" }: Options) {
   const [sentFrames, setSentFrames] = useState<OverviewFrame[]>([]);
   const [scoreHistory, setScoreHistory] = useState<[number, number][]>([]);
   const [scoreThreshold, setScoreThreshold] = useState(0.02);
   const [error, setError] = useState("");
   const [readyToken, setReadyToken] = useState("");
-  const [activeMode, setActiveMode] = useState<"gesture" | "hotkey" | null>(null);
-  // Distinct from `ready` (companion running AND camera warmed up): this only
-  // tracks whether the companion's status server has ever answered at all,
+  // Distinct from `ready`: this tracks whether the companion's status server has answered,
   // so the UI can tell "AirPointer isn't running" apart from "it's running
   // but hasn't spotted a hand yet" -- both would otherwise look identical
   // (pose stuck at its "none" default).
@@ -86,20 +69,16 @@ export function useCompanionGesture({ enabled, token, agentThreadId, gestures, h
           const configResponse = await fetch(configUrl, {
             method: localProxy ? "PUT" : "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ agentThreadId, gestures, hotkeys, ...(deliveryTarget ? { deliveryTarget } : {}) }),
+            body: JSON.stringify({ agentThreadId, hotkeys, ...(deliveryTarget ? { deliveryTarget } : {}) }),
           });
           if (!configResponse.ok) throw new Error("companion configuration failed");
           syncedAgentThreadId = agentThreadId;
           if (deliveryTarget) syncedDeliveryTarget = deliveryTarget;
         }
         if (cancelled) return;
-        // Hotkey mode never touches the camera, so cameraReady never turns
-        // true there -- readiness in that mode is just "the process says
-        // it's running," same as gesture mode is once the camera warms up.
-        const ready = state.running && (state.mode === "hotkey" || state.cameraReady);
-        firstFailureAt = 0; setError(""); setConnected(true); setReadyToken(ready ? token : ""); setActiveMode(state.mode); setPose(state.pose); setPreview(state.preview);
-        const palmActive = state.route === "replay" && (state.phase === "arming" || state.phase === "armed");
-        setProgress(palmActive ? { phase: "holding", value: state.progress, command: null } : IDLE_PROGRESS);
+        // The process is ready when its hotkey listener is running.
+        const ready = state.running && state.mode === "hotkey";
+        firstFailureAt = 0; setError(""); setConnected(true); setReadyToken(ready ? token : "");
         if (Array.isArray(state.scoreHistory)) setScoreHistory(state.scoreHistory);
         if (typeof state.scoreThreshold === "number") setScoreThreshold(state.scoreThreshold);
         // Only pull the actual images when the counter moves -- they can be
@@ -119,7 +98,7 @@ export function useCompanionGesture({ enabled, token, agentThreadId, gestures, h
         }
         lastSentEvent = state.sentEvent;
       } catch {
-        setReadyToken(""); setActiveMode(null);
+        setReadyToken("");
         if (!firstFailureAt) firstFailureAt = Date.now();
         // A freshly built/downloaded AirPointer.exe is a PyInstaller onefile
         // bundle: Windows extracts it to a temp dir AND, being an unrecognized
@@ -128,26 +107,21 @@ export function useCompanionGesture({ enabled, token, agentThreadId, gestures, h
         // any reasonable "did the process even launch" check. Erroring out
         // early here was a false positive: the exe was still coming up and
         // would connect fine seconds later, self-clearing this same error.
-        if (Date.now() - firstFailureAt >= 180_000 && !cancelled) setError("AirPointer를 시작하지 못했습니다. EXE 파일과 카메라 상태를 확인해 주세요.");
+        if (Date.now() - firstFailureAt >= 180_000 && !cancelled) setError("AirPointer를 시작하지 못했습니다. EXE 파일을 확인해 주세요.");
       } finally {
         if (!cancelled) timer = window.setTimeout(poll, 100);
       }
     };
     void poll();
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [agentThreadId, deliveryTarget, enabled, gestures, hotkeys, token]);
+  }, [agentThreadId, deliveryTarget, enabled, hotkeys, token]);
 
   return {
-    pose: enabled ? pose : "none" as GesturePose,
-    progress: enabled ? progress : IDLE_PROGRESS,
-    preview: enabled ? preview : "",
     sentFrames: enabled ? sentFrames : [],
     scoreHistory: enabled ? scoreHistory : [],
     scoreThreshold,
-    selection: IDLE_SELECTION,
     error: enabled ? error : "",
     ready: enabled && readyToken === token,
     connected: enabled && connected,
-    activeMode: enabled ? activeMode : null,
   };
 }

@@ -10,13 +10,11 @@ from .hotkeys import DEFAULT_BINDINGS, Bindings
 
 @dataclass(slots=True)
 class Settings:
-    camera_index: int = 0
     replay_enabled: bool = True
     replay_minutes: int = 3
     replay_seconds: int = 15
     capture_fps: int = 10
     agent_thread_id: str = ""
-    launch_mode: str = "gesture"  # "gesture" (camera) or "hotkey" (no camera)
     delivery_target: str = "codex"  # "codex" (Codex Desktop) or "claude" (Claude Desktop)
     hotkeys: Bindings = field(default_factory=lambda: dict(DEFAULT_BINDINGS))
     # Off by default: clipboard text is more sensitive than the window/click

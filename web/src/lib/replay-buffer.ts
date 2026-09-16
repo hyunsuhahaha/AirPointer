@@ -13,7 +13,7 @@ export type ReplayCapsule = {
   triggeredAt: number;
 };
 type TimedFrame = { canvas: HTMLCanvasElement; capturedAt: number };
-type PreviewFrame = { dataUrl: string; capturedAt: number };
+export type PreviewFrame = { dataUrl: string; capturedAt: number };
 // The single most notable detected change in a window, for the "방금 뭐가
 // 바뀌었나" before/after UI -- bbox is normalized [0,1] (left, top, right,
 // bottom), see the comment on ChangeTracker.observe's call site below.
@@ -46,7 +46,7 @@ const MAX_CHANGE_EVENTS = 512;
 const REDUNDANCY_LAMBDA = 0.7;
 const LOCALIZED_EXTENT_MAX = 0.05;
 
-type ChangeEvent = {
+export type ChangeEvent = {
   startedAt: number; peakAt: number; endedAt: number; peakScore: number;
   bbox: [number, number, number, number]; // left, top, right, bottom in source pixel coords
   // Fraction of the WHOLE thumbnail that differed (mask mean), never clamped
@@ -127,7 +127,7 @@ function scoreAndBbox(prev: Uint8Array, curr: Uint8Array, width: number, height:
 // Merges consecutive above-threshold frames into one ChangeEvent (so a
 // multi-frame scroll doesn't spam the picker with one event per frame) --
 // see _ChangeTracker in screen_buffer.py for the same state machine.
-class ChangeTracker {
+export class ChangeTracker {
   private prev: Uint8Array | null = null;
   private active = false;
   private quietRun = 0;
@@ -366,6 +366,14 @@ export class BrowserReplayBuffer {
     return { overviewFrames: makeReplayFrames(frames, now, "replay-frame"), segments: [...recent], startedAt: cutoff, triggeredAt: now };
   }
 
+  exportMetadata(capsule: ReplayCapsule): { captures: PreviewFrame[]; events: ChangeEvent[] } {
+    const within = (at: number) => at >= capsule.startedAt && at <= capsule.triggeredAt;
+    return {
+      captures: this.previewFrames.filter((frame) => within(frame.capturedAt)).map((frame) => ({ ...frame })),
+      events: this.changeEvents.filter((event) => within(event.peakAt)).map((event) => ({ ...event, bbox: [...event.bbox] as ChangeEvent["bbox"] })),
+    };
+  }
+
   async framesAtOffsets(capsule: ReplayCapsule, offsetsSeconds: number[], kind: "bookmarked-frame" | "queried-frame" = "queried-frame"): Promise<OverviewFrame[]> {
     const points = replayPointsAtOffsets(capsule.segments, capsule.triggeredAt, offsetsSeconds);
     return makeReplayFrames(await decodeReplayPoints(capsule.segments, points), capsule.triggeredAt, kind);
@@ -584,12 +592,19 @@ async function framesFromBlob(blob: Blob, points: Array<{ ratio: number; capture
     const duration = video.duration && Number.isFinite(video.duration) ? video.duration : 1;
     const frames: TimedFrame[] = [];
     for (const point of points) {
-      video.currentTime = Math.min(Math.max(0, duration * point.ratio), Math.max(0, duration - 0.025));
+      const target = Math.min(Math.max(0, duration * point.ratio), Math.max(0, duration - 0.025));
       await new Promise<void>((resolve) => {
         let settled = false;
         const done = () => { if (!settled) { settled = true; resolve(); } };
         video.onseeked = done;
-        window.setTimeout(done, 180);
+        video.currentTime = target;
+        window.setTimeout(done, 1_500);
+      });
+      if ("requestVideoFrameCallback" in video) await new Promise<void>((resolve) => {
+        let settled = false;
+        const done = () => { if (!settled) { settled = true; resolve(); } };
+        video.requestVideoFrameCallback(done);
+        window.setTimeout(done, 500);
       });
       frames.push({ canvas: frameCanvas(video), capturedAt: point.capturedAt });
     }

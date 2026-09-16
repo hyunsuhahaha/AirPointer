@@ -8,7 +8,7 @@ import { CodexAppServer } from "../src/lib/codex-app-server.ts";
 
 test("실제 Codex Agent가 localImage turn을 받는다", { skip: process.env.CODEX_INTEGRATION !== "1", timeout: 150_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), "airpointer-agent-test-"));
-  const imagePath = join(directory, "gesture-capture.png");
+  const imagePath = join(directory, "screen-capture.png");
   await writeFile(imagePath, solidPng(8, 8, [255, 102, 24]));
   const client = new CodexAppServer();
   try {

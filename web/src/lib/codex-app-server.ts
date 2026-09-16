@@ -100,7 +100,7 @@ export class CodexAppServer {
   private async startTurn(threadId: string, prompt: string, imagePaths: string[]): Promise<{ turnId: string }> {
     const result = await this.request("turn/start", {
       threadId,
-      turnTrigger: "airpointer_gesture",
+      turnTrigger: "airpointer_capture",
       input: [
         { type: "text", text: prompt },
         ...imagePaths.map((path) => ({ type: "localImage", path })),

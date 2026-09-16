@@ -22,7 +22,7 @@ export const DEFAULT_PROMPT_TEMPLATE: PromptTemplate = {
     region: "이 영역을 중심으로 문제를 분석해 주세요.",
     replay: "화면 변화를 분석해 원인과 해결 방법을 알려 주세요.",
   },
-  capsuleIntro: "AirPointer가 사용자가 확정한 질문과, 제스처 시점을 기준으로 최근 {seconds}초 작업 맥락을 Replay Capsule로 보냈습니다.",
+  capsuleIntro: "AirPointer가 사용자가 확정한 질문과 최근 {seconds}초 작업 맥락을 Replay Capsule로 보냈습니다.",
   capsuleInstruction: "먼저 첨부된 개요 타임시트를 시간순으로 확인하세요. 개요만 보고 장면이 없다고 결론 내리지 마세요. 필요한 순간이 없거나 더 자세히 봐야 하면 아래 원본 조회 명령으로 정확한 시점의 전체 해상도 프레임을 복원한 뒤 출력된 framePath를 view_image로 여세요.",
   windowHistoryLabel: "최근 활성 창:",
 };

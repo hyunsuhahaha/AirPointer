@@ -54,11 +54,11 @@ export async function POST(request: Request) {
   } catch {
     return NextResponse.json({ error: "Invalid request." }, { status: 400 });
   }
-  if (!["start", "start_hotkey", "quit"].includes(String(payload.command)) ||
+  if (!["start_hotkey", "quit"].includes(String(payload.command)) ||
       typeof payload.token !== "string" || !TOKEN_PATTERN.test(payload.token)) {
     return NextResponse.json({ error: "Invalid companion command." }, { status: 400 });
   }
-  const command = payload.command as "start" | "start_hotkey" | "quit";
+  const command = payload.command as "start_hotkey" | "quit";
 
   if (command === "quit") {
     const stopped = await sendControlCommand("quit", payload.token);
@@ -70,10 +70,7 @@ export async function POST(request: Request) {
   // practice (multiple overlapping AirPointer windows/overlays). Check here
   // first, authoritatively, so this route never spawns a second process
   // while one is already listening -- only fall through to spawning a fresh
-  // one when nothing answers the control port at all. Sending the exact
-  // command the caller asked for (not always "start") matters here: an
-  // already-running instance still needs to know whether "gesture" or
-  // "hotkey" mode was picked.
+  // one when nothing answers the control port at all.
   if (await sendControlCommand(command, payload.token)) {
     return NextResponse.json({ launched: true }, { status: 202 });
   }
@@ -88,7 +85,8 @@ export async function POST(request: Request) {
     // silently goes stale the moment the source changes).
     const sourceLauncher = resolve(repoRoot, "airpointer_launcher.py");
     if (existsSync(sourceLauncher)) {
-      const child = spawn(process.env.PYTHON_EXECUTABLE || "python", [sourceLauncher, protocolArg], {
+      const venvPython = resolve(repoRoot, ".venv", "Scripts", "python.exe");
+      const child = spawn(process.env.PYTHON_EXECUTABLE || (existsSync(venvPython) ? venvPython : "python"), [sourceLauncher, protocolArg], {
         cwd: repoRoot,
         detached: true,
         stdio: "ignore",
@@ -112,7 +110,7 @@ export async function POST(request: Request) {
   }
 }
 
-function sendControlCommand(command: "start" | "start_hotkey" | "quit", token: string): Promise<boolean> {
+function sendControlCommand(command: "start_hotkey" | "quit", token: string): Promise<boolean> {
   return new Promise((resolveCommand) => {
     const socket = createConnection({ host: "127.0.0.1", port: 47821 });
     let settled = false;
