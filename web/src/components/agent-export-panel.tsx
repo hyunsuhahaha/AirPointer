@@ -11,7 +11,7 @@ import type { WritableDirectory } from "@/lib/export-directory";
 import { buildManualTimeline, manualFrameFile } from "@/lib/manual-frame-picker";
 import type { ManualFrame, ManualTimeline } from "@/lib/manual-frame-picker";
 import type { AgentExportBundle } from "@/lib/browser-agent-export";
-import type { BrowserReplayBuffer } from "@/lib/replay-buffer";
+import type { BrowserReplayBuffer, ReplayCapsule } from "@/lib/replay-buffer";
 import type { InteractiveReplay } from "@/lib/interactive-replay";
 import type { DemoScenario } from "@/lib/demo-replay";
 import styles from "./agent-export-panel.module.css";
@@ -27,6 +27,8 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
   const panel = useRef<HTMLElement>(null);
   const activeNow = useRef(active);
   const shareToken = useRef("");
+  const manualCapsule = useRef<ReplayCapsule | null>(null);
+  const manualGapLoads = useRef<Set<string>>(new Set());
   const [mode, setMode] = useState<DeliveryMode>("link");
   const [exportDirectory, setExportDirectory] = useState<WritableDirectory | null>(null);
   const [result, setResult] = useState<ExportResult | null>(null);
@@ -49,7 +51,7 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
       setManualLoading(true); setManualTimeline(null); setExpandedGaps(new Set()); setSelectedFrames(new Map()); setPreviewFrame(null); setError("");
       try {
         const next = await readManualTimeline(bufferRef.current, demoReplay, seconds);
-        if (!cancelled) setManualTimeline(next);
+        if (!cancelled) { manualCapsule.current = next.capsule; setManualTimeline(next.timeline); }
       } catch (reason) {
         if (!cancelled) setError(reason instanceof Error ? reason.message : "화면 목록을 불러오지 못했습니다.");
       } finally { if (!cancelled) setManualLoading(false); }
@@ -107,9 +109,27 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
   };
   const changeBuffer = (minutes: number) => { resetResult(); onBufferMinutesChange(minutes); };
   const changeWindow = (nextSeconds: number) => { resetResult(); onSecondsChange(nextSeconds); };
-  const toggleGap = (id: string) => setExpandedGaps((current) => {
-    const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next;
-  });
+  const toggleGap = (id: string) => {
+    const opening = !expandedGaps.has(id);
+    if (!opening) {
+      setExpandedGaps((current) => { const next = new Set(current); next.delete(id); return next; });
+      return;
+    }
+    const capsule = manualCapsule.current;
+    const gap = manualTimeline?.gaps.find((candidate) => candidate.id === id);
+    const showGap = () => setExpandedGaps((current) => new Set(current).add(id));
+    if (!capsule || !gap?.frames.length) { showGap(); return; }
+    if (manualGapLoads.current.has(id)) return;
+    manualGapLoads.current.add(id);
+    const offsets = gap.frames.map((frame) => (frame.capturedAt - capsule.triggeredAt) / 1_000);
+    void bufferRef.current.framesAtOffsets(capsule, offsets).then((decoded) => {
+      if (!decoded.length) return;
+      const highResolution = new Map(decoded.flatMap((frame) => frame.capturedAt === undefined ? [] : [[frame.capturedAt, frame.url] as const]));
+      setManualTimeline((current) => current ? { ...current, gaps: current.gaps.map((candidate) => candidate.id === id ? {
+        ...candidate, frames: candidate.frames.map((frame) => ({ ...frame, url: highResolution.get(frame.capturedAt) ?? frame.url })),
+      } : candidate) } : current);
+    }).catch(() => undefined).finally(() => { manualGapLoads.current.delete(id); showGap(); });
+  };
   const toggleFrame = (frame: ManualFrame) => setSelectedFrames((current) => {
     const next = new Map(current); if (next.has(frame.id)) next.delete(frame.id); else next.set(frame.id, frame); return next;
   });
@@ -118,7 +138,7 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
     setManualLoading(true); setError("");
     try {
       const next = await readManualTimeline(bufferRef.current, demoReplay, seconds);
-      setManualTimeline(next); setExpandedGaps(new Set()); setSelectedFrames(new Map()); setPreviewFrame(null);
+      manualCapsule.current = next.capsule; setManualTimeline(next.timeline); setExpandedGaps(new Set()); setSelectedFrames(new Map()); setPreviewFrame(null);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "화면 목록을 불러오지 못했습니다.");
     } finally { setManualLoading(false); }
@@ -219,12 +239,12 @@ async function readManualTimeline(buffer: BrowserReplayBuffer, demoReplay: Inter
     const cutoff = demoReplay.triggeredAt - Math.min(seconds, demoReplay.seconds) * 1_000;
     const previews = demoReplay.scenes.filter((scene) => scene.at >= cutoff).map((scene) => ({ dataUrl: scene.url, capturedAt: scene.at }));
     const overview = demoReplay.overview().filter((frame) => (frame.capturedAt ?? 0) >= cutoff);
-    return buildManualTimeline(previews, overview);
+    return { timeline: buildManualTimeline(previews, overview), capsule: null };
   }
   const capsule = await buffer.recentCapsule(seconds, 12);
   if (!capsule.segments.length) throw new Error("내보낼 화면 기록이 없습니다. 화면을 조금 더 기록해 주세요.");
   const { captures } = buffer.exportMetadata(capsule);
-  return buildManualTimeline(captures, capsule.overviewFrames);
+  return { timeline: buildManualTimeline(captures, capsule.overviewFrames), capsule };
 }
 
 async function copyText(value: string, owner: Document) {
