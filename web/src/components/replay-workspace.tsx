@@ -23,6 +23,7 @@ import type { PromptTemplate } from "@/lib/prompt-template";
 import styles from "./replay-workspace.module.css";
 import { EvidenceTimeMachine, PrivacyZoneEditor, RegionCapture } from "./browser-capture-panel";
 import { AgentExportPanel } from "./agent-export-panel";
+import { ProjectOverview } from "./project-overview";
 import type { InteractiveReplay } from "@/lib/interactive-replay";
 import { RecordedDemoPlayer } from "./recorded-demo-player";
 import { IncidentReview } from "./incident-review";
@@ -310,6 +311,7 @@ export function ReplayWorkspace() {
   const demoPipRequested = useRef(false);
   const [pipSupported, setPipSupported] = useState(false);
   const [pipOpen, setPipOpen] = useState(false);
+  const [overviewOpen, setOverviewOpen] = useState(false);
   // Document PiP has no minimize API, so "minimize" shrinks the window to the
   // status bar and remembers the size to restore. Lives here, not in the
   // export panel, because the panel remounts whenever the share changes.
@@ -1302,7 +1304,11 @@ export function ReplayWorkspace() {
         <a href={AIRPOINTER_DOWNLOAD_URL}>AirPointer 다운로드</a>
       </div>}
 
-      <section hidden={demoArmed || demoActive || Boolean(interactiveReplay)} className={styles.intro} id="top"><div><p>SHOW CONTEXT. GET ANSWERS.</p><h1>방금그거뭐였지<span>상황을 다시 설명하지 않아도 되는 AI</span></h1><div>화면을 공유하고 작은 창에서 AI 내보내기를 누르세요.<br />직전 화면과 변화 기록을 에이전트에게 전달할 수 있습니다.</div></div><span className={styles.introIndex}>01 — 03<br /><b>공유 → 내보내기 → 전달</b></span></section>
+      {overviewOpen && <ProjectOverview onClose={() => setOverviewOpen(false)} onTryDemo={() => {
+        setOverviewOpen(false); setDemoArmed(true);
+        window.requestAnimationFrame(() => stageViewportRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }));
+      }} />}
+      <section hidden={demoArmed || demoActive || Boolean(interactiveReplay)} className={styles.intro} id="top"><div><p>SHOW CONTEXT. GET ANSWERS.</p><h1>방금그거뭐였지<span>상황을 다시 설명하지 않아도 되는 AI</span></h1><button type="button" className={styles.overviewButton} onClick={() => setOverviewOpen(true)}><Play size={15} weight="fill" /> 프로젝트 개요</button></div><span className={styles.introIndex}>01 — 03<br /><b>공유 → 내보내기 → 전달</b></span></section>
       <section hidden={(Boolean(interactiveReplay) && resultFocus) || (Boolean(analysis) && resultFocus && viewMode === "browser")} className={styles.hero}>
         <div className={styles.stageColumn}>
           <div className={styles.stageHeader}><span>{demoActive ? `JUDGE DEMO · ${selectedDemo.label}` : "LIVE DESKTOP"}</span><span>{demoMode === "playing" ? "PLAYING" : demoMode === "ready" ? "REPLAY READY" : stream ? "CAPTURING" : "NOT CONNECTED"}</span></div>
