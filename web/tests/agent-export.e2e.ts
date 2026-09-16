@@ -101,6 +101,37 @@ test("Manual은 0장에서 시작해 대표 사이 화면을 펼치고 확대·�
   const representatives = picker.locator('article[data-representative="true"]');
   await expect(representatives.first()).toBeVisible();
   const representativeCount = await representatives.count();
+  await page.evaluate(() => {
+    const target = document.createElement("div");
+    target.id = "real-drag-target";
+    target.contentEditable = "true";
+    target.style.cssText = "position:fixed;z-index:99999;right:8px;bottom:8px;width:120px;height:60px;background:white;color:black";
+    target.addEventListener("drop", (event) => {
+      const transfer = event.dataTransfer;
+      const snapshot = {
+        types: transfer ? [...transfer.types] : [],
+        strings: transfer ? [...transfer.items].filter((item) => item.kind === "string").map((item) => item.type) : [],
+        text: transfer?.getData("text/plain") ?? "",
+      };
+      setTimeout(() => { (window as Window & { realDrop?: unknown }).realDrop = { ...snapshot, html: target.innerHTML }; });
+    });
+    document.body.append(target);
+  });
+  const sourceBox = await representatives.first().locator("img").boundingBox();
+  const targetBox = await page.locator("#real-drag-target").boundingBox();
+  await page.mouse.move(sourceBox!.x + sourceBox!.width / 2, sourceBox!.y + sourceBox!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(sourceBox!.x + sourceBox!.width / 2 + 12, sourceBox!.y + sourceBox!.height / 2, { steps: 4 });
+  await page.mouse.move(targetBox!.x + targetBox!.width / 2, targetBox!.y + targetBox!.height / 2, { steps: 20 });
+  await page.mouse.up();
+  await expect.poll(() => page.evaluate(() => (window as Window & { realDrop?: unknown }).realDrop)).toBeTruthy();
+  const realDrop = await page.evaluate(() => (window as Window & { realDrop?: { types: string[]; strings: string[]; text: string; html: string } }).realDrop!);
+  expect(realDrop.types).toEqual(["text/uri-list", "text/html"]);
+  expect(realDrop.strings).toEqual(["text/uri-list", "text/html"]);
+  expect(realDrop.text).toBe("");
+  expect(realDrop.html).toContain("<img");
+  expect(realDrop.html).toContain("data:image/jpeg;base64,");
+  await page.locator("#real-drag-target").evaluate((element) => element.remove());
   const gap = picker.getByRole("button", { name: /\d+개 사이 화면/ }).first();
   await gap.click();
   const middle = picker.locator('article[data-representative="false"]');
@@ -110,14 +141,6 @@ test("Manual은 0장에서 시작해 대표 사이 화면을 펼치고 확대·�
   await middle.first().getByRole("button", { name: /화면 크게 보기/ }).click();
   await expect(page.getByRole("dialog", { name: "화면 크게 보기" })).toBeVisible();
   await page.getByRole("button", { name: "크게 보기 닫기" }).click();
-  const dragPayload = await middle.first().evaluate((element) => {
-    const data = new DataTransfer();
-    element.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: data }));
-    return { files: [...data.files].map((file) => ({ name: file.name, type: file.type })), types: [...data.types] };
-  });
-  expect(dragPayload.files[0]?.name).toMatch(/^screen-.*\.jpg$/);
-  expect(dragPayload.files[0]?.type).toBe("image/jpeg");
-  expect(dragPayload.types).toEqual(["Files"]);
 
   await middle.first().getByRole("button", { name: "선택" }).click();
   await representatives.first().getByRole("button", { name: "선택" }).click();
@@ -127,6 +150,18 @@ test("Manual은 0장에서 시작해 대표 사이 화면을 펼치고 확대·�
   await picker.getByRole("button", { name: "선택한 2장 다운로드" }).click();
   await expect.poll(() => downloads.length).toBe(2);
   expect(downloads.every((name) => /^screen-.*\.jpg$/.test(name))).toBe(true);
+
+  const selectedLabel = picker.getByText("선택 2장");
+  const refresh = picker.getByRole("button", { name: "현재 화면으로 갱신" });
+  const [labelBox, refreshBox] = await Promise.all([selectedLabel.boundingBox(), refresh.boundingBox()]);
+  expect(Math.abs(labelBox!.y - refreshBox!.y)).toBeLessThan(8);
+  await page.waitForTimeout(500);
+  await refresh.click();
+  await expect(refresh).toBeEnabled({ timeout: 30_000 });
+  await expect(picker.getByText("선택 0장")).toBeVisible();
+  const refreshedImage = picker.locator('article[data-representative="true"] img').first();
+  await expect(refreshedImage).toHaveAttribute("src", /^data:image\/jpeg;base64,/);
+  expect(await refreshedImage.evaluate((image) => (image as HTMLImageElement).draggable)).toBe(true);
 });
 
 test("Agent Link와 Local Folder가 같은 화면 맥락을 전달한다", async ({ page }) => {

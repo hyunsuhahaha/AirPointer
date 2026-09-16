@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { DragEvent, RefObject } from "react";
-import { Check, CircleNotch, Copy, DownloadSimple, FolderOpen, LinkSimple, MagnifyingGlassPlus, PaperPlaneTilt, Trash, X } from "@phosphor-icons/react";
+import type { RefObject } from "react";
+import { ArrowClockwise, Check, CircleNotch, Copy, DownloadSimple, FolderOpen, LinkSimple, MagnifyingGlassPlus, PaperPlaneTilt, Trash, X } from "@phosphor-icons/react";
 import { createAgentLink, deleteAgentLink } from "@/lib/agent-link";
 import type { AgentLink } from "@/lib/agent-link";
 import { exportAgentContext, exportDemoAgentContext } from "@/lib/browser-agent-export";
@@ -48,17 +48,8 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
     void (async () => {
       setManualLoading(true); setManualTimeline(null); setExpandedGaps(new Set()); setSelectedFrames(new Map()); setPreviewFrame(null); setError("");
       try {
-        if (demoReplay) {
-          const cutoff = demoReplay.triggeredAt - Math.min(seconds, demoReplay.seconds) * 1_000;
-          const previews = demoReplay.scenes.filter((scene) => scene.at >= cutoff).map((scene) => ({ dataUrl: scene.url, capturedAt: scene.at }));
-          const overview = demoReplay.overview().filter((frame) => (frame.capturedAt ?? 0) >= cutoff);
-          if (!cancelled) setManualTimeline(buildManualTimeline(previews, overview));
-        } else {
-          const capsule = await bufferRef.current.recentCapsule(seconds, 12);
-          if (!capsule.segments.length) throw new Error("내보낼 화면 기록이 없습니다. 화면을 조금 더 기록해 주세요.");
-          const { captures } = bufferRef.current.exportMetadata(capsule);
-          if (!cancelled) setManualTimeline(buildManualTimeline(captures, capsule.overviewFrames));
-        }
+        const next = await readManualTimeline(bufferRef.current, demoReplay, seconds);
+        if (!cancelled) setManualTimeline(next);
       } catch (reason) {
         if (!cancelled) setError(reason instanceof Error ? reason.message : "화면 목록을 불러오지 못했습니다.");
       } finally { if (!cancelled) setManualLoading(false); }
@@ -122,15 +113,20 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
   const toggleFrame = (frame: ManualFrame) => setSelectedFrames((current) => {
     const next = new Map(current); if (next.has(frame.id)) next.delete(frame.id); else next.set(frame.id, frame); return next;
   });
+  const refreshManual = async () => {
+    if (manualLoading) return;
+    setManualLoading(true); setError("");
+    try {
+      const next = await readManualTimeline(bufferRef.current, demoReplay, seconds);
+      setManualTimeline(next); setExpandedGaps(new Set()); setSelectedFrames(new Map()); setPreviewFrame(null);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "화면 목록을 불러오지 못했습니다.");
+    } finally { setManualLoading(false); }
+  };
   const downloadSelected = () => {
     for (const frame of [...selectedFrames.values()].sort((left, right) => left.capturedAt - right.capturedAt)) {
       const file = manualFrameFile(frame); download(file, file.name);
     }
-  };
-  const startFrameDrag = (event: DragEvent<HTMLElement>, frame: ManualFrame) => {
-    const file = manualFrameFile(frame);
-    event.dataTransfer.effectAllowed = "copy";
-    event.dataTransfer.items.add(file);
   };
   const windows = [...new Set([5, 15, 30, 60, 180, 300, seconds])].filter((value) => value <= bufferMinutes * 60 && (!demo || value <= Math.ceil(demo.replay.seconds))).sort((left, right) => left - right);
   const ExportIcon = mode === "link" ? LinkSimple : FolderOpen;
@@ -152,7 +148,7 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
       {mode === "folder" && <p className={styles.modeNote}>{exportDirectory ? `저장 위치: …/${exportDirectory.name}` : "처음 한 번 저장할 폴더를 선택합니다."}</p>}
       {mode !== "manual" && <button type="button" className={styles.exportButton} disabled={!active || busy} onClick={() => void doExport()}>{busy ? <CircleNotch className={styles.spin} size={16} /> : <ExportIcon size={17} />}AI Context 생성</button>}
       {mode === "manual" && <ManualPicker timeline={manualTimeline} loading={manualLoading} expandedGaps={expandedGaps} selectedFrames={selectedFrames}
-        onToggleGap={toggleGap} onToggleFrame={toggleFrame} onPreview={setPreviewFrame} onDragStart={startFrameDrag} onDownload={downloadSelected} />}
+        onToggleGap={toggleGap} onToggleFrame={toggleFrame} onPreview={setPreviewFrame} onDownload={downloadSelected} onRefresh={refreshManual} />}
       {error && <p className={styles.error} role="alert">{error}</p>}
       {result && mode !== "manual" && <section className={styles.result} aria-live="polite">
         <p className={styles.success}><Check size={15} weight="bold" />{result.delivery === "link" ? `링크 준비됨 · ${new Date(result.share!.expiresAt).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })} 만료` : result.fileName}</p>
@@ -171,20 +167,20 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
   </main>;
 }
 
-function ManualPicker({ timeline, loading, expandedGaps, selectedFrames, onToggleGap, onToggleFrame, onPreview, onDragStart, onDownload }: {
+function ManualPicker({ timeline, loading, expandedGaps, selectedFrames, onToggleGap, onToggleFrame, onPreview, onDownload, onRefresh }: {
   timeline: ManualTimeline | null; loading: boolean; expandedGaps: Set<string>; selectedFrames: Map<string, ManualFrame>;
   onToggleGap: (id: string) => void; onToggleFrame: (frame: ManualFrame) => void; onPreview: (frame: ManualFrame) => void;
-  onDragStart: (event: DragEvent<HTMLElement>, frame: ManualFrame) => void; onDownload: () => void;
+  onDownload: () => void; onRefresh: () => Promise<void>;
 }) {
   return <section className={styles.manual} aria-label="로컬 버퍼 화면 선택">
-    <div className={styles.manualHeader}><strong>화면 선택</strong><span>선택 {selectedFrames.size}장</span></div>
-    {loading && <p className={styles.manualEmpty}><CircleNotch className={styles.spin} size={14} /> 화면을 불러오는 중</p>}
-    {!loading && timeline && <div className={styles.timeline} aria-label="대표 화면 타임라인">
+    <div className={styles.manualHeader}><strong>화면 선택</strong><span>선택 {selectedFrames.size}장 <button type="button" aria-label="현재 화면으로 갱신" title="현재 화면으로 갱신" disabled={loading} onClick={() => void onRefresh()}><ArrowClockwise className={loading ? styles.spin : undefined} size={13} /></button></span></div>
+    {loading && !timeline && <p className={styles.manualEmpty}><CircleNotch className={styles.spin} size={14} /> 화면을 불러오는 중</p>}
+    {timeline && <div className={styles.timeline} aria-label="대표 화면 타임라인">
       {timeline.representatives.map((frame, index) => <div className={styles.timelinePart} key={frame.id}>
-        <FrameCard frame={frame} selected={selectedFrames.has(frame.id)} onToggle={onToggleFrame} onPreview={onPreview} onDragStart={onDragStart} />
+        <FrameCard frame={frame} selected={selectedFrames.has(frame.id)} onToggle={onToggleFrame} onPreview={onPreview} />
         {timeline.gaps[index] && <>
           <button type="button" className={styles.gapButton} aria-expanded={expandedGaps.has(timeline.gaps[index].id)} aria-label={`${formatGap(timeline.gaps[index].frames)} 사이 화면`} onClick={() => onToggleGap(timeline.gaps[index].id)}>…</button>
-          {expandedGaps.has(timeline.gaps[index].id) && timeline.gaps[index].frames.map((middle) => <FrameCard key={middle.id} frame={middle} selected={selectedFrames.has(middle.id)} onToggle={onToggleFrame} onPreview={onPreview} onDragStart={onDragStart} />)}
+          {expandedGaps.has(timeline.gaps[index].id) && timeline.gaps[index].frames.map((middle) => <FrameCard key={middle.id} frame={middle} selected={selectedFrames.has(middle.id)} onToggle={onToggleFrame} onPreview={onPreview} />)}
         </>}
       </div>)}
     </div>}
@@ -194,14 +190,13 @@ function ManualPicker({ timeline, loading, expandedGaps, selectedFrames, onToggl
   </section>;
 }
 
-function FrameCard({ frame, selected, onToggle, onPreview, onDragStart }: {
+function FrameCard({ frame, selected, onToggle, onPreview }: {
   frame: ManualFrame; selected: boolean; onToggle: (frame: ManualFrame) => void; onPreview: (frame: ManualFrame) => void;
-  onDragStart: (event: DragEvent<HTMLElement>, frame: ManualFrame) => void;
 }) {
-  return <article className={styles.frameCard} data-representative={frame.representative} data-selected={selected} draggable onDragStart={(event) => onDragStart(event, frame)}>
+  return <article className={styles.frameCard} data-representative={frame.representative} data-selected={selected}>
     <button type="button" className={styles.framePreview} onClick={() => onPreview(frame)} aria-label={`${frameTime(frame)} 화면 크게 보기`}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={frame.url} alt="" draggable={false} /><MagnifyingGlassPlus size={14} />
+      <img src={frame.url} alt="" /><MagnifyingGlassPlus size={14} />
     </button>
     <button type="button" className={styles.frameSelect} aria-pressed={selected} onClick={() => onToggle(frame)}>{selected ? <Check size={11} weight="bold" /> : null}<span className={styles.srOnly}>{selected ? "선택 해제" : "선택"}</span></button>
     <time>{frameTime(frame)}</time>{frame.representative && <b>대표</b>}
@@ -210,6 +205,19 @@ function FrameCard({ frame, selected, onToggle, onPreview, onDragStart }: {
 
 function frameTime(frame: ManualFrame) { return new Date(frame.capturedAt).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }); }
 function formatGap(frames: ManualFrame[]) { return frames.length ? `${frames.length}개` : "비어 있는"; }
+
+async function readManualTimeline(buffer: BrowserReplayBuffer, demoReplay: InteractiveReplay | undefined, seconds: number) {
+  if (demoReplay) {
+    const cutoff = demoReplay.triggeredAt - Math.min(seconds, demoReplay.seconds) * 1_000;
+    const previews = demoReplay.scenes.filter((scene) => scene.at >= cutoff).map((scene) => ({ dataUrl: scene.url, capturedAt: scene.at }));
+    const overview = demoReplay.overview().filter((frame) => (frame.capturedAt ?? 0) >= cutoff);
+    return buildManualTimeline(previews, overview);
+  }
+  const capsule = await buffer.recentCapsule(seconds, 12);
+  if (!capsule.segments.length) throw new Error("내보낼 화면 기록이 없습니다. 화면을 조금 더 기록해 주세요.");
+  const { captures } = buffer.exportMetadata(capsule);
+  return buildManualTimeline(captures, capsule.overviewFrames);
+}
 
 async function copyText(value: string, owner: Document) {
   try { await owner.defaultView!.navigator.clipboard.writeText(value); return; }
