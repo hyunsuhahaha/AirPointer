@@ -106,7 +106,7 @@ test("Manual은 0장에서 시작해 대표 사이 화면을 펼치고 확대·�
   await expect(picker.getByText("선택 0장")).toBeVisible({ timeout: 30_000 });
   const representatives = picker.locator('article[data-representative="true"]');
   await expect(representatives.first()).toBeVisible({ timeout: 30_000 });
-  await expect.poll(() => representatives.first().locator("img").evaluate((image) => (image as HTMLImageElement).naturalWidth), { timeout: 30_000 }).toBe(1600);
+  await expect.poll(() => representatives.first().locator("img").evaluate((image) => (image as HTMLImageElement).naturalWidth), { timeout: 30_000 }).toBe(1920);
   const representativeCount = await representatives.count();
   await representatives.first().getByRole("button", { name: /화면 크게 보기/ }).click();
   let lightbox = page.getByRole("dialog", { name: "화면 크게 보기" });
@@ -117,10 +117,10 @@ test("Manual은 0장에서 시작해 대표 사이 화면을 펼치고 확대·�
   await page.mouse.down();
   await page.mouse.move(cropBounds!.x + cropBounds!.width * .75, cropBounds!.y + cropBounds!.height * .75, { steps: 8 });
   await page.mouse.up();
-  await expect.poll(() => lightbox.locator("img").evaluate((image) => (image as HTMLImageElement).naturalWidth), { timeout: 30_000 }).toBe(800);
+  await expect.poll(() => lightbox.locator("img").evaluate((image) => (image as HTMLImageElement).naturalWidth), { timeout: 30_000 }).toBe(960);
   await expect(lightbox.getByRole("button", { name: "선택 취소", exact: true })).toBeEnabled();
   await lightbox.getByRole("button", { name: "크게 보기 닫기" }).click();
-  await expect.poll(() => representatives.first().locator("img").evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBe(800);
+  await expect.poll(() => representatives.first().locator("img").evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBe(960);
   await page.evaluate(() => {
     const target = document.createElement("div");
     target.id = "real-drag-target";
@@ -155,7 +155,7 @@ test("Manual은 0장에서 시작해 대표 사이 화면을 펼치고 확대·�
   await representatives.first().getByRole("button", { name: /화면 크게 보기/ }).click();
   lightbox = page.getByRole("dialog", { name: "화면 크게 보기" });
   await lightbox.getByRole("button", { name: "선택 취소", exact: true }).click();
-  await expect.poll(() => lightbox.locator("img").evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBe(1600);
+  await expect.poll(() => lightbox.locator("img").evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBe(1920);
   await lightbox.getByRole("button", { name: "크게 보기 닫기" }).click();
   const gap = picker.getByRole("button", { name: /\d+개 사이 화면/ }).first();
   await expect(gap).toHaveAccessibleName(/사이 화면 펼치기/);
@@ -163,7 +163,7 @@ test("Manual은 0장에서 시작해 대표 사이 화면을 펼치고 확대·�
   await expect(gap).toHaveAccessibleName(/사이 화면 접기/);
   const middle = picker.locator('article[data-representative="false"]');
   await expect(middle.first()).toBeVisible();
-  await expect.poll(() => middle.first().locator("img").evaluate((image) => (image as HTMLImageElement).naturalWidth), { timeout: 30_000 }).toBe(1600);
+  await expect.poll(() => middle.first().locator("img").evaluate((image) => (image as HTMLImageElement).naturalWidth), { timeout: 30_000 }).toBe(1920);
   await expect(gap).toHaveAttribute("aria-busy", "false");
   expect(await picker.locator("article").count()).toBeGreaterThan(representativeCount);
 

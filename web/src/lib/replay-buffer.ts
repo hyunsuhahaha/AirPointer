@@ -458,7 +458,7 @@ export class BrowserReplayBuffer {
   private recordNext(generation: number) {
     if (!this.active || !this.stream || generation !== this.generation) return;
     const mimeType = supportedMimeType();
-    const recorder = new MediaRecorder(this.stream, mimeType ? { mimeType, videoBitsPerSecond: 2_000_000 } : undefined);
+    const recorder = new MediaRecorder(this.stream, mimeType ? { mimeType, videoBitsPerSecond: 4_000_000 } : undefined);
     const chunks: Blob[] = [];
     const startedAt = Date.now();
     recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
@@ -528,7 +528,7 @@ export function frameFromVideoRegion(video: HTMLVideoElement,
 // so the zoom doesn't hug the edges of whatever actually changed. Used both
 // for the highlight card's "확대" view and as an extra frame sent to the
 // analyze API so small/cut-off text in the changed region reads clearly.
-export async function cropRegion(dataUrl: string, bbox: [number, number, number, number], padding = 0.12): Promise<string> {
+export async function cropRegion(dataUrl: string, bbox: [number, number, number, number], padding = 0.12, quality = 0.82): Promise<string> {
   const image = new Image();
   image.src = dataUrl;
   await image.decode();
@@ -543,7 +543,7 @@ export async function cropRegion(dataUrl: string, bbox: [number, number, number,
   canvas.width = sw;
   canvas.height = sh;
   canvas.getContext("2d")!.drawImage(image, sx, sy, sw, sh, 0, 0, sw, sh);
-  return canvas.toDataURL("image/jpeg", 0.82);
+  return canvas.toDataURL("image/jpeg", quality);
 }
 
 function sampleSegmentPoints(segments: ReplaySegment[], cutoff: number, now: number, intervalMs: number) {
@@ -655,7 +655,7 @@ function thumbnailFromVideo(video: HTMLVideoElement) {
 }
 
 function frameCanvas(video: HTMLVideoElement) {
-  const width = Math.min(1600, Math.max(1, video.videoWidth));
+  const width = Math.max(1, video.videoWidth);
   const height = Math.max(1, Math.round(width * video.videoHeight / Math.max(1, video.videoWidth)));
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -667,7 +667,7 @@ function frameCanvas(video: HTMLVideoElement) {
 function makeReplayFrames(frames: TimedFrame[], triggeredAt: number, kind: "replay-frame" | "bookmarked-frame" | "queried-frame"): OverviewFrame[] {
   return frames.map((frame) => {
     const atSeconds = Math.max(0, (triggeredAt - frame.capturedAt) / 1_000);
-    return { capturedAt: frame.capturedAt, sampleOffsetsSeconds: [atSeconds], url: frame.canvas.toDataURL("image/jpeg", 0.84), atSeconds, kind };
+    return { capturedAt: frame.capturedAt, sampleOffsetsSeconds: [atSeconds], url: frame.canvas.toDataURL("image/jpeg", 0.94), atSeconds, kind };
   });
 }
 

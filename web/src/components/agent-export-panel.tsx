@@ -207,7 +207,7 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
   const applyFrameCrop = useCallback(async (frame: ManualFrame, box: NormalizedBox) => {
     setCropBusy(true);
     try {
-      const url = await cropRegion(frame.originalUrl, box, 0);
+      const url = await cropRegion(frame.originalUrl, box, 0, 0.95);
       manualHighResCache.current.delete(frame.id);
       replaceManualFrame({ ...frame, url, cropped: true });
       setCropMode(false); setCropBox(null);
