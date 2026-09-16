@@ -44,6 +44,19 @@ function nearestPreview(previews: PreviewFrame[], capturedAt: number) {
   ), undefined);
 }
 
+// The frames the strip is actually showing, in the order it shows them:
+// representatives, each followed by the in-between frames of its gap only
+// while that gap is expanded. The enlarged view steps through this list, so
+// "다음 화면" always means the next frame on screen -- the next in-between
+// frame when the user has opened a gap, the next representative when they
+// have not -- rather than the next frame in the underlying buffer.
+export function visibleManualFrames(timeline: ManualTimeline, expandedGaps: ReadonlySet<string>): ManualFrame[] {
+  return timeline.representatives.flatMap((frame, index) => {
+    const gap = timeline.gaps[index];
+    return gap && expandedGaps.has(gap.id) ? [frame, ...gap.frames] : [frame];
+  });
+}
+
 export function manualFrameFile(frame: ManualFrame) {
   const [header, encoded] = frame.url.split(",", 2);
   const type = header.includes("png") ? "image/png" : "image/jpeg";

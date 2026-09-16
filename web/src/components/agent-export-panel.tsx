@@ -1,14 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RefObject } from "react";
-import { ArrowClockwise, CaretUp, Check, CircleNotch, Copy, DownloadSimple, FolderOpen, FrameCorners, LinkSimple, MagnifyingGlassPlus, PaperPlaneTilt, Trash, X } from "@phosphor-icons/react";
+import { ArrowClockwise, CaretLeft, CaretRight, CaretUp, Check, CircleNotch, Copy, DownloadSimple, FolderOpen, FrameCorners, LinkSimple, MagnifyingGlassPlus, PaperPlaneTilt, Trash, X } from "@phosphor-icons/react";
 import { createAgentLink, deleteAgentLink } from "@/lib/agent-link";
 import type { AgentLink } from "@/lib/agent-link";
 import { exportAgentContext, exportDemoAgentContext } from "@/lib/browser-agent-export";
 import { chooseExportDirectory, localExportPath, localFolderPrompt, savedExportDirectory, writeExportFolder } from "@/lib/export-directory";
 import type { WritableDirectory } from "@/lib/export-directory";
-import { buildManualTimeline, manualFrameFile } from "@/lib/manual-frame-picker";
+import { buildManualTimeline, manualFrameFile, visibleManualFrames } from "@/lib/manual-frame-picker";
 import type { ManualFrame, ManualTimeline } from "@/lib/manual-frame-picker";
 import type { AgentExportBundle } from "@/lib/browser-agent-export";
 import { cropRegion } from "@/lib/replay-buffer";
@@ -167,6 +167,34 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
     });
     return completed;
   }, [bufferRef]);
+  // Enlarged-view navigation follows the strip as it currently looks, not the
+  // underlying buffer: with a gap expanded the user steps through its
+  // in-between frames, with it collapsed they jump straight to the next
+  // representative. Same list the strip renders, so the two cannot disagree.
+  const visibleFrames = useMemo(() => manualTimeline ? visibleManualFrames(manualTimeline, expandedGaps) : [], [manualTimeline, expandedGaps]);
+  const previewIndex = previewFrame ? visibleFrames.findIndex((frame) => frame.id === previewFrame.id) : -1;
+  const stepPreview = useCallback((delta: number) => {
+    const next = visibleFrames[previewIndex + delta];
+    if (previewIndex < 0 || !next) return;
+    void prepareManualFrame(next);
+    setCropMode(false); setCropBox(null); setCropBusy(false); cropAnchor.current = null;
+    setPreviewFrame(next);
+  }, [prepareManualFrame, previewIndex, visibleFrames]);
+  // Arrow keys mirror the two buttons -- PRODUCT.md keeps every core action
+  // reachable from the keyboard. Bound on the panel's own document so this
+  // still works while the panel is running inside the PiP window.
+  useEffect(() => {
+    if (!previewFrame || cropMode || cropBusy) return;
+    const owner = panel.current?.ownerDocument;
+    if (!owner) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      stepPreview(event.key === "ArrowRight" ? 1 : -1);
+    };
+    owner.addEventListener("keydown", onKey);
+    return () => owner.removeEventListener("keydown", onKey);
+  }, [cropBusy, cropMode, previewFrame, stepPreview]);
   const toggleGap = (id: string, firstFrame?: ManualFrame) => {
     const opening = !expandedGaps.has(id);
     setExpandedGaps((current) => {
@@ -280,6 +308,12 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
           else { setCropMode(true); setCropBox(null); setError(""); }
         }}>{cropBusy ? <CircleNotch className={styles.spin} size={14} /> : <FrameCorners size={14} />}{cropMode || previewFrame.cropped ? "선택 취소" : "영역 선택"}</button>
       <button type="button" className={styles.lightboxClose} aria-label="크게 보기 닫기" disabled={cropBusy} onClick={closePreview}><X size={18} /></button>
+      <button type="button" className={`${styles.lightboxStep} ${styles.lightboxStepPrev}`} aria-label="이전 화면 보기" title="이전 화면"
+        disabled={cropBusy || previewIndex <= 0}
+        onClick={(event) => { event.stopPropagation(); stepPreview(-1); }}><CaretLeft size={18} weight="bold" /></button>
+      <button type="button" className={`${styles.lightboxStep} ${styles.lightboxStepNext}`} aria-label="다음 화면 보기" title="다음 화면"
+        disabled={cropBusy || previewIndex < 0 || previewIndex >= visibleFrames.length - 1}
+        onClick={(event) => { event.stopPropagation(); stepPreview(1); }}><CaretRight size={18} weight="bold" /></button>
       <div className={styles.cropStage} data-selecting={cropMode} onClick={(event) => event.stopPropagation()}
         onPointerDown={(event) => {
           if (!cropMode || cropBusy || event.button !== 0) return;
@@ -313,6 +347,7 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
         {cropMode && cropBox && <span className={styles.cropSelection} style={{ left: `${cropBox[0] * 100}%`, top: `${cropBox[1] * 100}%`, width: `${(cropBox[2] - cropBox[0]) * 100}%`, height: `${(cropBox[3] - cropBox[1]) * 100}%` }} />}
       </div>
       <time>{frameTime(previewFrame)}</time>
+      {previewIndex >= 0 && <small className={styles.lightboxCount}>{previewIndex + 1} / {visibleFrames.length}</small>}
     </div>}
   </main>;
 }
@@ -326,20 +361,34 @@ function ManualPicker({ timeline, loading, expandedGaps, loadingGaps, selectedFr
   return <section className={styles.manual} aria-label="로컬 버퍼 화면 선택">
     <div className={styles.manualHeader}><strong>화면 선택</strong><span>선택 {selectedFrames.size}장 <button type="button" aria-label="현재 화면으로 갱신" title="현재 화면으로 갱신" disabled={loading} onClick={() => void onRefresh()}><ArrowClockwise className={loading ? styles.spin : undefined} size={13} /></button></span></div>
     {loading && !timeline && <p className={styles.manualEmpty}><CircleNotch className={styles.spin} size={14} /> 화면을 불러오는 중</p>}
+    {/* One horizontal scroller holds both the frames and the time ruler: every
+        slot owns its own ruler segment, so the tick under a frame is the same
+        column as the frame itself, and expanding a gap grows the ruler with it
+        -- there is no second track to keep in sync. Slots sit in frame order
+        rather than proportionally to elapsed time, because a proportional
+        ruler stops lining up with the fixed-width cards; the time the
+        timeline skips shows up as the gap slot's own duration label. */}
     {timeline && <div className={styles.timeline} aria-label="대표 화면 타임라인">
-      {timeline.representatives.map((frame, index) => <div className={styles.timelinePart} key={frame.id}>
-        <FrameCard frame={frame} selected={selectedFrames.has(frame.id)} onToggle={onToggleFrame} onPreview={onPreview} onPrepare={onPrepareFrame} />
-        {timeline.gaps[index] && <>
-          <button type="button" className={styles.gapButton} aria-expanded={expandedGaps.has(timeline.gaps[index].id)} aria-busy={loadingGaps.has(timeline.gaps[index].id)}
-            aria-label={expandedGaps.has(timeline.gaps[index].id) ? `${formatGap(timeline.gaps[index].frames)} 사이 화면 접기` : `${formatGap(timeline.gaps[index].frames)} 사이 화면 펼치기`}
-            title={expandedGaps.has(timeline.gaps[index].id) ? "사이 화면 접기" : "사이 화면 펼치기"}
-            onClick={() => { const gap = timeline.gaps[index]; onToggleGap(gap.id, gap.frames[0]); }}>
-            {loadingGaps.has(timeline.gaps[index].id) ? <CircleNotch className={styles.spin} size={14} />
-              : expandedGaps.has(timeline.gaps[index].id) ? <CaretUp size={14} weight="bold" /> : <span aria-hidden="true">…</span>}
-          </button>
-          {expandedGaps.has(timeline.gaps[index].id) && timeline.gaps[index].frames.map((middle) => <FrameCard key={middle.id} frame={middle} selected={selectedFrames.has(middle.id)} onToggle={onToggleFrame} onPreview={onPreview} onPrepare={onPrepareFrame} />)}
-        </>}
-      </div>)}
+      <div className={styles.track}>
+        {timeline.representatives.map((frame, index) => {
+          const gap = timeline.gaps[index];
+          const expanded = gap ? expandedGaps.has(gap.id) : false;
+          return <Fragment key={frame.id}>
+            <FrameCard frame={frame} selected={selectedFrames.has(frame.id)} onToggle={onToggleFrame} onPreview={onPreview} onPrepare={onPrepareFrame} />
+            {gap && <div className={styles.slot} data-gap="true">
+              <button type="button" className={styles.gapButton} aria-expanded={expanded} aria-busy={loadingGaps.has(gap.id)}
+                aria-label={expanded ? `${formatGap(gap.frames)} 사이 화면 접기` : `${formatGap(gap.frames)} 사이 화면 펼치기`}
+                title={expanded ? "사이 화면 접기" : "사이 화면 펼치기"}
+                onClick={() => onToggleGap(gap.id, gap.frames[0])}>
+                {loadingGaps.has(gap.id) ? <CircleNotch className={styles.spin} size={14} />
+                  : expanded ? <CaretUp size={14} weight="bold" /> : <span aria-hidden="true">…</span>}
+              </button>
+              <div className={styles.rail} data-gap="true" aria-hidden="true"><span className={styles.tick} /><span>{gapSpan(frame, timeline.representatives[index + 1])}</span></div>
+            </div>}
+            {gap && expanded && gap.frames.map((middle) => <FrameCard key={middle.id} frame={middle} selected={selectedFrames.has(middle.id)} onToggle={onToggleFrame} onPreview={onPreview} onPrepare={onPrepareFrame} />)}
+          </Fragment>;
+        })}
+      </div>
     </div>}
     {!loading && timeline && !timeline.representatives.length && <p className={styles.manualEmpty}>표시할 화면이 없습니다.</p>}
     <button type="button" className={styles.downloadSelected} disabled={!selectedFrames.size} onClick={onDownload}><DownloadSimple size={15} />선택한 {selectedFrames.size}장 다운로드</button>
@@ -360,18 +409,36 @@ function FrameCard({ frame, selected, onToggle, onPreview, onPrepare }: {
     observer.observe(card.current);
     return () => observer.disconnect();
   }, [frame, onPrepare]);
-  return <article ref={card} className={styles.frameCard} data-representative={frame.representative} data-selected={selected} onPointerEnter={() => onPrepare(frame)} onFocusCapture={() => onPrepare(frame)}>
-    <button type="button" className={styles.framePreview} onClick={() => { onPrepare(frame); onPreview(frame); }} aria-label={`${frameTime(frame)} 화면 크게 보기`}>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={frame.url} alt="" /><MagnifyingGlassPlus size={14} />
-    </button>
-    <button type="button" className={styles.frameSelect} aria-pressed={selected} onClick={() => onToggle(frame)}>{selected ? <Check size={11} weight="bold" /> : null}<span className={styles.srOnly}>{selected ? "선택 해제" : "선택"}</span></button>
-    <time>{frameTime(frame)}</time>{frame.representative && <b>대표</b>}
-  </article>;
+  return <div className={styles.slot}>
+    <article ref={card} className={styles.frameCard} data-representative={frame.representative} data-selected={selected} onPointerEnter={() => onPrepare(frame)} onFocusCapture={() => onPrepare(frame)}>
+      <button type="button" className={styles.framePreview} onClick={() => { onPrepare(frame); onPreview(frame); }} aria-label={`${frameTime(frame)} 화면 크게 보기`}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={frame.url} alt="" /><MagnifyingGlassPlus size={14} />
+      </button>
+      <button type="button" className={styles.frameSelect} aria-pressed={selected} onClick={() => onToggle(frame)}>{selected ? <Check size={11} weight="bold" /> : null}<span className={styles.srOnly}>{selected ? "선택 해제" : "선택"}</span></button>
+      {frame.representative && <b>대표</b>}
+    </article>
+    {/* The card's own timestamp, moved down onto the shared ruler. Every
+        control above already carries its time in an accessible name, so the
+        rail itself is decorative. */}
+    <div className={styles.rail} data-representative={frame.representative} aria-hidden="true">
+      <span className={styles.tick} /><time dateTime={new Date(frame.capturedAt).toISOString()}>{railTime(frame)}</time>
+    </div>
+  </div>;
 }
 
 function frameTime(frame: ManualFrame) { return new Date(frame.capturedAt).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }); }
+// 24-hour on the ruler: a ruler reads as a column of aligned digits, and
+// 오전/오후 is dead width inside a buffer that maxes out at five minutes.
+function railTime(frame: ManualFrame) { return new Date(frame.capturedAt).toLocaleTimeString("ko-KR", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }); }
 function formatGap(frames: ManualFrame[]) { return frames.length ? `${frames.length}개` : "비어 있는"; }
+// What a collapsed gap slot stands for, so the ruler still reports the time
+// the timeline skips instead of silently compressing it away.
+function gapSpan(frame: ManualFrame, next?: ManualFrame) {
+  const seconds = next ? Math.round((next.capturedAt - frame.capturedAt) / 1_000) : 0;
+  if (!seconds) return "<1초";
+  return seconds < 60 ? `${seconds}초` : `${Math.floor(seconds / 60)}분${seconds % 60 ? ` ${seconds % 60}초` : ""}`;
+}
 
 async function readManualTimeline(buffer: BrowserReplayBuffer, demoReplay: InteractiveReplay | undefined, seconds: number) {
   if (demoReplay) {
