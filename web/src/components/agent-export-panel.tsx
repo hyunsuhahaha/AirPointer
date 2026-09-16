@@ -20,10 +20,11 @@ import styles from "./agent-export-panel.module.css";
 type DeliveryMode = "link" | "folder" | "manual";
 type ExportResult = AgentExportBundle & { delivery: DeliveryMode; share?: AgentLink };
 
-export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinutes, onBufferMinutesChange, onSecondsChange, surface }: {
+export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinutes, onBufferMinutesChange, onSecondsChange, captureIntervalMs, onCaptureIntervalChange, surface }: {
   bufferRef: RefObject<BrowserReplayBuffer>; demo?: { replay: InteractiveReplay; scenario: DemoScenario };
   active: boolean; seconds: number; bufferMinutes: number; surface: string;
   onBufferMinutesChange: (minutes: number) => void; onSecondsChange: (seconds: number) => void;
+  captureIntervalMs: number; onCaptureIntervalChange: (ms: number) => void;
 }) {
   const panel = useRef<HTMLElement>(null);
   const activeNow = useRef(active);
@@ -270,6 +271,7 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
       <div className={styles.headerControls}>
         <label>버퍼 길이<select aria-label="버퍼 길이" value={bufferMinutes} disabled={busy || Boolean(demo)} onChange={(event) => changeBuffer(Number(event.target.value))}><option value={1}>1분</option><option value={3}>3분</option><option value={5}>5분</option></select></label>
         <label>전송 구간<select aria-label="전송 구간" value={seconds} disabled={busy} onChange={(event) => changeWindow(Number(event.target.value))}>{windows.map((value) => <option key={value} value={value}>{value < 60 ? `${value}초` : `${value / 60}분`}</option>)}</select></label>
+        <label title="사이 화면을 몇 초마다 저장할지 정합니다. 화면이 크게 바뀐 순간은 간격과 관계없이 저장됩니다.">캡처 간격<select aria-label="캡처 간격" value={captureIntervalMs} disabled={busy || Boolean(demo)} onChange={(event) => onCaptureIntervalChange(Number(event.target.value))}>{CAPTURE_INTERVALS_MS.map((value) => <option key={value} value={value}>{`${value / 1_000}초`}</option>)}</select></label>
       </div>
       <div className={styles.recordingStatus}><span className={styles.dot} data-active={active} /><strong>{active ? "화면 기록 중" : "화면 공유 대기"}</strong></div>
     </header>
@@ -371,7 +373,9 @@ function ManualPicker({ timeline, loading, expandedGaps, loadingGaps, selectedFr
     {timeline && <div className={styles.timeline} aria-label="대표 화면 타임라인">
       <div className={styles.track}>
         {timeline.representatives.map((frame, index) => {
-          const gap = timeline.gaps[index];
+          // A gap with no in-between captures has nothing to expand, so it gets
+          // no slot at all and the two representatives sit side by side.
+          const gap = timeline.gaps[index]?.frames.length ? timeline.gaps[index] : undefined;
           const expanded = gap ? expandedGaps.has(gap.id) : false;
           return <Fragment key={frame.id}>
             <FrameCard frame={frame} selected={selectedFrames.has(frame.id)} onToggle={onToggleFrame} onPreview={onPreview} onPrepare={onPrepareFrame} />
@@ -431,7 +435,8 @@ function frameTime(frame: ManualFrame) { return new Date(frame.capturedAt).toLoc
 // 24-hour on the ruler: a ruler reads as a column of aligned digits, and
 // 오전/오후 is dead width inside a buffer that maxes out at five minutes.
 function railTime(frame: ManualFrame) { return new Date(frame.capturedAt).toLocaleTimeString("ko-KR", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }); }
-function formatGap(frames: ManualFrame[]) { return frames.length ? `${frames.length}개` : "비어 있는"; }
+const CAPTURE_INTERVALS_MS = [500, 1_000, 2_000, 3_000, 5_000];
+function formatGap(frames: ManualFrame[]) { return `${frames.length}개`; }
 // What a collapsed gap slot stands for, so the ruler still reports the time
 // the timeline skips instead of silently compressing it away.
 function gapSpan(frame: ManualFrame, next?: ManualFrame) {

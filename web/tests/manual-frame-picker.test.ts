@@ -25,3 +25,11 @@ test("확대 보기의 다음 화면은 펼친 구간에서는 사이 화면, �
   assert.deepEqual(visibleManualFrames(timeline, new Set(timeline.gaps.map((gap) => gap.id))).map((frame) => frame.capturedAt),
     [1_000, 2_000, 3_000, 4_000, 5_000]);
 });
+
+test("같은 초에 찍힌 대표 화면은 하나만 남는다", () => {
+  const previews = [1_000, 2_000, 3_000].map((capturedAt) => ({ dataUrl: `frame-${capturedAt}`, capturedAt }));
+  const overview = [1_000, 1_300, 1_900, 3_000].map((capturedAt) => ({ url: `representative-${capturedAt}`, capturedAt, atSeconds: 0 }));
+  const timeline = buildManualTimeline(previews, overview);
+  assert.deepEqual(timeline.representatives.map((frame) => frame.capturedAt), [1_000, 3_000]);
+  assert.deepEqual(timeline.gaps.map((gap) => gap.frames.map((frame) => frame.capturedAt)), [[2_000]]);
+});

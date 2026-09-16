@@ -7,7 +7,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { ArrowClockwise, ArrowCounterClockwise, Camera, CaretDown, Check, CircleNotch, ClipboardText, DotsSixVertical, Gear, LockKey, MagnifyingGlass, PaperPlaneTilt, PictureInPicture, Play, ShieldCheck, Sparkle, Stop, Target, WarningCircle, X } from "@phosphor-icons/react";
 import { useCompanionHotkeys } from "@/hooks/use-companion-hotkeys";
 import type { HotkeyBindings } from "@/hooks/use-companion-hotkeys";
-import { BrowserReplayBuffer, cropRegion, frameFromVideo, replayGapOffsets, surroundingReplayOffsets, withReplayBookmarks } from "@/lib/replay-buffer";
+import { BrowserReplayBuffer, DEFAULT_CAPTURE_INTERVAL_MS, cropRegion, frameFromVideo, replayGapOffsets, surroundingReplayOffsets, withReplayBookmarks } from "@/lib/replay-buffer";
 import type { ChangeHighlight, NormalizedBox, OverviewFrame, ReplayCapsule } from "@/lib/replay-buffer";
 import { DEMO_INCIDENT_CUE_SECONDS, DEMO_OVERVIEW_OFFSETS, DEMO_SCENARIOS, demoFrameAtOffset, demoFramesAtOffsets, demoScenario } from "@/lib/demo-replay";
 import type { DemoScenarioId } from "@/lib/demo-replay";
@@ -210,6 +210,7 @@ export function ReplayWorkspace() {
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [retention, setRetention] = useState(3);
   const [sendSeconds, setSendSeconds] = useState(15);
+  const [captureIntervalMs, setCaptureIntervalMs] = useState(DEFAULT_CAPTURE_INTERVAL_MS);
   const changeRetention = (minutes: number) => {
     setRetention(minutes);
     setSendSeconds((current) => Math.min(current, minutes * 60));
@@ -1121,6 +1122,7 @@ export function ReplayWorkspace() {
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [stream, sendSeconds, proactiveDetectionEnabled]);
   useEffect(() => { buffer.current.setRetention(retention); }, [retention]);
+  useEffect(() => { buffer.current.setCaptureInterval(captureIntervalMs); }, [captureIntervalMs]);
   useEffect(() => () => { analysisController.current?.abort(); buffer.current.stop(); }, []);
   useEffect(() => () => { void closeScreenOcr(); }, []);
   useEffect(() => {
@@ -1215,7 +1217,7 @@ export function ReplayWorkspace() {
   const dockLoadingLabel = "AirPointer 시작 중";
   const dockBadgeLabel = companionEnabled && companionReady ? "HOTKEY · EXE" : "EXE 연결 안 됨";
   const pipelineStages = viewMode === "browser" ? BROWSER_PIPELINE_STAGES : NATIVE_PIPELINE_STAGES;
-  const exportPanel = <AgentExportPanel key={stream?.id ?? demoScenarioId} bufferRef={buffer} demo={demoActive && interactiveReplay ? { replay: interactiveReplay, scenario: selectedDemo } : undefined} active={Boolean(stream) || (demoActive && demoMode === "ready")} seconds={sendSeconds} bufferMinutes={retention} onBufferMinutesChange={changeRetention} onSecondsChange={setSendSeconds} surface={stream?.getVideoTracks()[0]?.getSettings().displaySurface ?? "unknown"} />;
+  const exportPanel = <AgentExportPanel key={stream?.id ?? demoScenarioId} bufferRef={buffer} demo={demoActive && interactiveReplay ? { replay: interactiveReplay, scenario: selectedDemo } : undefined} active={Boolean(stream) || (demoActive && demoMode === "ready")} seconds={sendSeconds} bufferMinutes={retention} onBufferMinutesChange={changeRetention} onSecondsChange={setSendSeconds} captureIntervalMs={captureIntervalMs} onCaptureIntervalChange={setCaptureIntervalMs} surface={stream?.getVideoTracks()[0]?.getSettings().displaySurface ?? "unknown"} />;
 
   useEffect(() => {
     if (!demoActive || status !== "done") return;

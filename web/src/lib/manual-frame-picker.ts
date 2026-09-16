@@ -22,7 +22,11 @@ export function buildManualTimeline(previews: PreviewFrame[], overview: Overview
       const previewUrl = nearestPreview(ordered, capturedAt)?.dataUrl ?? frame.url;
       return [{ id: `representative-${capturedAt}-${index}`, url: frame.url, originalUrl: frame.url, previewUrl, capturedAt, representative: true, highResolution: true }];
     })
-    .sort((left, right) => left.capturedAt - right.capturedAt);
+    .sort((left, right) => left.capturedAt - right.capturedAt)
+    // The ruler labels frames to the second, so two representatives from the
+    // same second read as duplicates (typically right after sharing starts,
+    // before there is enough history to spread them out). Keep the first.
+    .filter((frame, index, all) => index === 0 || Math.floor(frame.capturedAt / 1_000) !== Math.floor(all[index - 1].capturedAt / 1_000));
   const gaps = representatives.slice(0, -1).map((frame, index) => {
     const next = representatives[index + 1];
     return {

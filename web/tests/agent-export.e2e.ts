@@ -157,6 +157,8 @@ test("Manual은 0장에서 시작해 대표 사이 화면을 펼치고 확대·�
   await lightbox.getByRole("button", { name: "선택 취소", exact: true }).click();
   await expect.poll(() => lightbox.locator("img").evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBe(1920);
   await lightbox.getByRole("button", { name: "크게 보기 닫기" }).click();
+  // Only gaps that actually hold in-between captures get a "…" control.
+  await expect(picker.getByRole("button", { name: /^0개 사이 화면/ })).toHaveCount(0);
   const gap = picker.getByRole("button", { name: /\d+개 사이 화면/ }).first();
   await expect(gap).toHaveAccessibleName(/사이 화면 펼치기/);
   await gap.click();

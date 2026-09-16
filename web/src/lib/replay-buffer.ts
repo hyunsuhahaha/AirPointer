@@ -21,7 +21,9 @@ export type ChangeHighlight = { beforeUrl: string; afterUrl: string; bbox: [numb
 
 const SEGMENT_MS = 1_000;
 const PREVIEW_INTERVAL_MS = 250;
-const PREVIEW_STORE_INTERVAL_MS = 1_000;
+// Default cadence for the lightweight in-between thumbnails the Manual
+// picker shows; the user can change it with setCaptureInterval.
+export const DEFAULT_CAPTURE_INTERVAL_MS = 1_000;
 const PRUNE_INTERVAL_MS = 1_000;
 const DECODE_CONCURRENCY = 2;
 const MAX_BYTES = 250 * 1024 * 1024;
@@ -308,12 +310,20 @@ export class BrowserReplayBuffer {
   private active = false;
   private generation = 0;
   private retentionMs: number;
+  private captureIntervalMs = DEFAULT_CAPTURE_INTERVAL_MS;
 
   constructor(retentionMs: number) { this.retentionMs = retentionMs; }
 
   setRetention(minutes: number) {
     this.retentionMs = minutes * 60_000;
     this.prune(Date.now());
+  }
+
+  // Takes effect on the next preview tick. Change detection keeps running
+  // every PREVIEW_INTERVAL_MS regardless, so a notable change between two
+  // stored thumbnails is still kept.
+  setCaptureInterval(ms: number) {
+    this.captureIntervalMs = Math.max(PREVIEW_INTERVAL_MS, ms);
   }
 
   start(stream: MediaStream) {
@@ -415,7 +425,7 @@ export class BrowserReplayBuffer {
       if (!this.active || generation !== this.generation || video.readyState < 2 || !video.videoWidth) return;
       const capturedAt = Date.now();
       let storedPreview = false;
-      if (capturedAt - this.lastPreviewStoredAt >= PREVIEW_STORE_INTERVAL_MS) {
+      if (capturedAt - this.lastPreviewStoredAt >= this.captureIntervalMs) {
         const canvas = thumbnailFromVideo(video);
         this.previewFrames.push({ dataUrl: canvas.toDataURL("image/jpeg", 0.48), capturedAt });
         this.lastPreviewStoredAt = capturedAt;
@@ -426,7 +436,7 @@ export class BrowserReplayBuffer {
       const event = this.changeTracker.observe(video, video.videoWidth, video.videoHeight, capturedAt);
       if (event) {
         // Keep the completed change's visible result even when it lands
-        // between the one-second preview samples.
+        // between the regular preview samples.
         if (!storedPreview) {
           const canvas = thumbnailFromVideo(video);
           this.previewFrames.push({ dataUrl: canvas.toDataURL("image/jpeg", 0.48), capturedAt: event.peakAt });
