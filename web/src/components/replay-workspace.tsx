@@ -4,8 +4,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowClockwise, ArrowCounterClockwise, Camera, CaretDown, Check, CircleNotch, ClipboardText, DotsSixVertical, Gear, LockKey, MagnifyingGlass, PaperPlaneTilt, PictureInPicture, Play, ShieldCheck, Sparkle, Stop, Target, WarningCircle, X } from "@phosphor-icons/react";
+import { ArrowClockwise, ArrowCounterClockwise, Broadcast, Camera, CaretDown, Check, CircleNotch, ClipboardText, DotsSixVertical, Gear, LockKey, MagnifyingGlass, PaperPlaneTilt, PictureInPicture, Pause, Play, ShieldCheck, Sparkle, Stop, Target, WarningCircle, X } from "@phosphor-icons/react";
 import { useCompanionHotkeys } from "@/hooks/use-companion-hotkeys";
+import { useReplayPlayback } from "@/hooks/use-replay-playback";
 import type { HotkeyBindings } from "@/hooks/use-companion-hotkeys";
 import { BrowserReplayBuffer, DEFAULT_CAPTURE_INTERVAL_MS, cropRegion, frameFromVideo, replayGapOffsets, surroundingReplayOffsets, withReplayBookmarks } from "@/lib/replay-buffer";
 import type { ChangeHighlight, NormalizedBox, OverviewFrame, ReplayCapsule } from "@/lib/replay-buffer";
@@ -270,6 +271,10 @@ export function ReplayWorkspace() {
   const [viewMode, setViewMode] = useState<"browser" | "full">("browser");
   const [message, setMessage] = useState("화면 공유를 시작하면 최근 장면이 이 기기에만 쌓입니다.");
   const [elapsed, setElapsed] = useState(0);
+  // Refreshed with `elapsed`: the recorded span and the wall clock the
+  // transport scrubber measures against.
+  const [bufferBounds, setBufferBounds] = useState<{ start: number; end: number } | null>(null);
+  const [clock, setClock] = useState(0);
   const [companionEnabled, setCompanionEnabled] = useState(false);
   // Native default (airpointer/hotkeys.py's DEFAULT_BINDINGS) -- kept in
   // sync by convention, not by import, since the two run in different
@@ -1147,8 +1152,13 @@ export function ReplayWorkspace() {
 
   useEffect(() => {
     if (!stream) return;
-    const timer = window.setInterval(() => setElapsed(buffer.current.status().durationMs), 1_000);
-    return () => window.clearInterval(timer);
+    const tick = () => {
+      setElapsed(buffer.current.status().durationMs);
+      setBufferBounds(buffer.current.timelineBounds());
+      setClock(Date.now());
+    };
+    const timer = window.setInterval(tick, 1_000);
+    return () => { window.clearInterval(timer); setBufferBounds(null); };
   }, [stream]);
   useEffect(() => {
     // Masked at render (`stream &&` on the highlight card below), not reset
@@ -1246,7 +1256,9 @@ export function ReplayWorkspace() {
   const demoIncidentVisible = demoActive && (demoMode !== "playing" || demoElapsed >= DEMO_INCIDENT_CUE_SECONDS * 1_000);
   const effectiveElapsed = interactiveReplay ? interactiveReplay.seconds * 1000 : demoActive ? demoElapsed : elapsed;
   const bufferPercent = Math.min(100, (effectiveElapsed / (retention * 60_000)) * 100);
-  const timeLabel = formatDuration(effectiveElapsed);
+  const { videoRef: replayVideoRef, at: replayAt, previewUrl: replayPreviewUrl, playing: replayPlaying, scrub: scrubReplay, seek: seekReplay, play: playReplay, pause: pauseReplay, goLive } = useReplayPlayback(buffer, Boolean(stream) && !demoActive);
+  const replayAgo = replayAt !== null ? formatDuration(Math.max(0, clock - replayAt)) : "";
+  const timeLabel = replayAt !== null ? `-${replayAgo}` : formatDuration(effectiveElapsed);
   const stateLabel = useMemo(() => ({ idle: "대기", recording: "로컬 기록 중", preparing: "프레임 준비", analyzing: "AI 분석 중", done: "분석 완료", error: "확인 필요" })[status], [status]);
   // companionLaunchIssue comes straight from the local spawn attempt (we know
   // for certain whether AirPointer.exe was even found), so it's authoritative
@@ -1303,6 +1315,13 @@ export function ReplayWorkspace() {
               onDoubleClick={(event) => { if (!(event.target as HTMLElement).closest("button, a")) resetStageBox(); }}
             >
               <video ref={screenVideo} className={`${styles.screenVideo} ${stream ? styles.visible : ""}`} muted playsInline />
+              <video ref={replayVideoRef} className={`${styles.screenVideo} ${replayAt !== null && !replayPreviewUrl ? styles.visible : ""}`} muted playsInline aria-hidden="true" />
+              {replayPreviewUrl && <img className={styles.replayPreview} src={replayPreviewUrl} alt="" />}
+              {replayAt !== null && <div className={styles.replayBar} role="group" aria-label="지난 화면 재생">
+                <span>지난 화면 · {replayAgo} 전</span>
+                <button type="button" onClick={replayPlaying ? pauseReplay : playReplay} aria-label={replayPlaying ? "일시정지" : "재생"}>{replayPlaying ? <Pause size={13} weight="fill" /> : <Play size={13} weight="fill" />}</button>
+                <button type="button" onClick={goLive}><Broadcast size={13} /> LIVE로 돌아가기</button>
+              </div>}
               {demoActive ? <div className={styles.recordedDemo}><RecordedDemoPlayer key={demoScenarioId} scenario={selectedDemo} onProgress={handleRecordedDemoProgress} onReady={handleRecordedDemoReady} onError={handleRecordedDemoError} /><div className={styles.recordedBadge}><span /> 실제 실행 녹화</div><button className={styles.recordedExit} onClick={stopDemo}>체험 종료</button></div> : !stream && <div className={styles.emptyStage}>
                 <span className={styles.sceneNumber}>{demoArmed ? "01 / 사건 발생" : "INTERACTIVE CASE 001"}</span>
                 <strong>{demoArmed ? selectedDemo.title : "눈 깜빡할 사이 사라진 단서."}</strong>
@@ -1326,7 +1345,10 @@ export function ReplayWorkspace() {
           </div>
           <div className={styles.transport}>
             <span className={styles.timecode}>{timeLabel}</span>
-            <div className={styles.bufferTrack} aria-label={`버퍼 ${Math.round(bufferPercent)}퍼센트`}><span style={{ width: `${bufferPercent}%` }} /></div>
+            {stream && !demoActive && bufferBounds
+              ? <ReplayScrubber bounds={bufferBounds} spanMs={retention * 60_000} now={clock} at={replayAt} playing={replayPlaying}
+                onScrub={scrubReplay} onSeek={seekReplay} onLive={goLive} onTogglePlay={replayPlaying ? pauseReplay : playReplay} />
+              : <div className={styles.bufferTrack} aria-label={`버퍼 ${Math.round(bufferPercent)}퍼센트`}><span style={{ width: `${bufferPercent}%` }} /></div>}
             <span>{retention}:00</span>
             {demoActive ? <button className={styles.iconButton} onClick={stopDemo} aria-label="샘플 체험 종료"><Stop size={16} weight="fill" /></button> : stream ? <button className={styles.iconButton} onClick={stopSharing} aria-label="화면 공유 중지"><Stop size={16} weight="fill" /></button> : <button className={styles.iconButton} onClick={() => void startSharing()} aria-label="화면 공유 시작"><Play size={16} weight="fill" /></button>}
           </div>
@@ -1539,6 +1561,52 @@ export function ReplayWorkspace() {
       <footer className={styles.footer}><span>방금그거뭐였지</span><span>AI Championship 2026 Prototype</span><span>Built for moments that disappear.</span></footer>
     </main>
   );
+}
+
+// The transport bar as a scrubber over the rolling buffer. The track spans
+// the retention window starting at the oldest kept segment, so the filled
+// part is what has been recorded and its right edge is live.
+function ReplayScrubber({ bounds, spanMs, now, at, playing, onScrub, onSeek, onLive, onTogglePlay }: {
+  bounds: { start: number; end: number }; spanMs: number; now: number; at: number | null; playing: boolean;
+  onScrub: (at: number) => void; onSeek: (at: number, fromLive?: boolean) => void; onLive: () => void; onTogglePlay: () => void;
+}) {
+  const track = useRef<HTMLDivElement>(null);
+  const dragging = useRef(false);
+  const live = Math.max(bounds.end, Math.min(now, bounds.start + spanMs));
+  const fraction = (time: number) => Math.min(1, Math.max(0, (time - bounds.start) / spanMs));
+  const timeAt = (clientX: number) => {
+    const rect = track.current!.getBoundingClientRect();
+    const time = bounds.start + Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)) * spanMs;
+    return Math.min(time, bounds.end);
+  };
+  // Landing within the last half second means "now": there is no finished
+  // segment there yet, so go back to the live picture instead.
+  const commit = (time: number) => {
+    if (time >= bounds.end - 500) onLive();
+    else onSeek(Math.max(bounds.start, time), at === null);
+  };
+  const current = at ?? live;
+  const agoSeconds = Math.round(Math.max(0, live - current) / 1_000);
+  return <div ref={track} className={styles.scrubber} role="slider" tabIndex={0} aria-label="버퍼 재생 위치"
+    aria-valuemin={0} aria-valuemax={Math.round(spanMs / 1_000)} aria-valuenow={Math.round((current - bounds.start) / 1_000)}
+    aria-valuetext={at === null ? "실시간" : `${agoSeconds}초 전`} data-replaying={at !== null}
+    onPointerDown={(event) => { if (event.button !== 0) return; event.preventDefault(); event.currentTarget.focus(); event.currentTarget.setPointerCapture(event.pointerId); dragging.current = true; onScrub(timeAt(event.clientX)); }}
+    onPointerMove={(event) => { if (dragging.current) onScrub(timeAt(event.clientX)); }}
+    onPointerUp={(event) => { if (!dragging.current) return; dragging.current = false; commit(timeAt(event.clientX)); }}
+    onPointerCancel={() => { dragging.current = false; }}
+    onKeyDown={(event) => {
+      const step = event.shiftKey ? 5_000 : 1_000;
+      if (event.key === "ArrowLeft") onSeek(Math.max(bounds.start, current - step), at === null);
+      else if (event.key === "ArrowRight") commit(current + step);
+      else if (event.key === "Home") onSeek(bounds.start, at === null);
+      else if (event.key === "End") onLive();
+      else if ((event.key === " " || event.key === "k") && at !== null) onTogglePlay();
+      else return;
+      event.preventDefault();
+    }}>
+    <div className={styles.bufferTrack}><span style={{ width: `${fraction(live) * 100}%` }} /></div>
+    <span className={styles.scrubHead} data-playing={playing} style={{ left: `${fraction(current) * 100}%` }} />
+  </div>;
 }
 
 function formatDuration(ms: number) {

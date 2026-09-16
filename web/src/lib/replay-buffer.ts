@@ -383,6 +383,31 @@ export class BrowserReplayBuffer {
     return { overviewFrames: frames, segments: [...recent], startedAt: cutoff, triggeredAt: now };
   }
 
+  // Scrubbing support: the recorded span, the segment to play for a moment
+  // (the one holding it, else the next one), and the stored thumbnail
+  // nearest to it for instant feedback while dragging.
+  timelineBounds(): { start: number; end: number } | null {
+    if (!this.segments.length) return null;
+    const last = this.segments[this.segments.length - 1];
+    return { start: this.segments[0].startedAt, end: last.startedAt + last.durationMs };
+  }
+
+  segmentAt(at: number): ReplaySegment | null {
+    return this.segments.find((segment) => at < segment.startedAt + segment.durationMs) ?? null;
+  }
+
+  segmentAfter(segment: ReplaySegment): ReplaySegment | null {
+    return this.segments.find((candidate) => candidate.startedAt > segment.startedAt) ?? null;
+  }
+
+  previewAt(at: number): string | null {
+    let nearest: PreviewFrame | null = null;
+    for (const frame of this.previewFrames) {
+      if (!nearest || Math.abs(frame.capturedAt - at) < Math.abs(nearest.capturedAt - at)) nearest = frame;
+    }
+    return nearest?.dataUrl ?? null;
+  }
+
   exportMetadata(capsule: ReplayCapsule): { captures: PreviewFrame[]; events: ChangeEvent[] } {
     const within = (at: number) => at >= capsule.startedAt && at <= capsule.triggeredAt;
     return {
