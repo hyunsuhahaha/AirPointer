@@ -227,6 +227,10 @@ test("Agent Link와 Local Folder가 같은 화면 맥락을 전달한다", async
   await page.getByRole("combobox", { name: "버퍼 길이" }).selectOption("1");
   await page.getByRole("combobox", { name: "전송 구간" }).selectOption("30");
 
+  // No delivery mode is preselected, so nothing can be exported yet.
+  await expect(page.getByRole("group", { name: "AI 내보내기 방식" }).locator('button[aria-pressed="true"]')).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "AI Context 생성" })).toHaveCount(0);
+  await page.getByRole("button", { name: /Agent Link/ }).click();
   await page.getByRole("button", { name: "AI Context 생성" }).click();
   const prompt = await page.locator('textarea[readonly]').inputValue({ timeout: 30_000 });
   const agentUrl = prompt.match(/https?:\/\/\S+\/context\/[A-Za-z0-9_-]+\/agent/)?.[0];

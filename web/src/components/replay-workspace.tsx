@@ -733,7 +733,7 @@ export function ReplayWorkspace() {
     }
   }, []);
   useEffect(() => { openCapturePipRef.current = openCapturePip; }, [openCapturePip]);
-  const changePipMinimized = useCallback((next: boolean) => {
+  const changePipMinimized = useCallback((next: boolean, restoreSize?: [number, number]) => {
     const pip = pipWindowRef.current;
     setPipMinimized(next);
     if (!pip || pip.closed) return;
@@ -742,7 +742,7 @@ export function ReplayWorkspace() {
         pipRestoreSize.current = [pip.outerWidth, pip.outerHeight];
         pip.resizeTo(Math.min(pip.outerWidth, 340), 96);
       } else {
-        const [width, height] = pipRestoreSize.current ?? [520, 560];
+        const [width, height] = restoreSize ?? pipRestoreSize.current ?? [520, 560];
         pip.resizeTo(width, height);
       }
     } catch { /* The browser owns PiP sizing; the panel still collapses. */ }

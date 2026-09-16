@@ -18,6 +18,9 @@ import type { DemoScenario } from "@/lib/demo-replay";
 import styles from "./agent-export-panel.module.css";
 
 type DeliveryMode = "link" | "folder" | "manual";
+// PiP allows one resize per click, so the minimized bar's Manual shortcut
+// restores straight to this size instead of restoring and then resizing.
+const MANUAL_WINDOW_SIZE: [number, number] = [520, 560];
 type ExportResult = AgentExportBundle & { delivery: DeliveryMode; share?: AgentLink };
 
 export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinutes, onBufferMinutesChange, onSecondsChange, captureIntervalMs, onCaptureIntervalChange, recording, onStartRecording, onStopRecording, minimized, onMinimizedChange, surface }: {
@@ -27,7 +30,7 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
   captureIntervalMs: number; onCaptureIntervalChange: (ms: number) => void;
   // Screen-share controls. Omitted in the demo, which has no live share.
   recording: boolean; onStartRecording?: () => void; onStopRecording?: () => void;
-  minimized: boolean; onMinimizedChange: (minimized: boolean) => void;
+  minimized: boolean; onMinimizedChange: (minimized: boolean, restoreSize?: [number, number]) => void;
 }) {
   const panel = useRef<HTMLElement>(null);
   const activeNow = useRef(active);
@@ -38,7 +41,8 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
   const manualDecodeQueue = useRef<Promise<void>>(Promise.resolve());
   const manualGeneration = useRef(0);
   const cropAnchor = useRef<[number, number] | null>(null);
-  const [mode, setMode] = useState<DeliveryMode>("link");
+  // Nothing is preselected: the user picks how to hand off the context.
+  const [mode, setMode] = useState<DeliveryMode | null>(null);
   const [exportDirectory, setExportDirectory] = useState<WritableDirectory | null>(null);
   const [result, setResult] = useState<ExportResult | null>(null);
   const [manualTimeline, setManualTimeline] = useState<ManualTimeline | null>(null);
@@ -80,13 +84,13 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
     shareToken.current = "";
   };
   const resetResult = () => { discardShare(); setResult(null); setCopied(false); setError(""); };
-  const selectMode = (next: DeliveryMode) => {
+  const selectMode = (next: DeliveryMode, resize = true) => {
     resetResult(); setMode(next);
-    if (next === "manual") try { panel.current?.ownerDocument.defaultView?.resizeTo(520, 560); } catch { /* Browser owns PiP sizing. */ }
+    if (next === "manual" && resize) try { panel.current?.ownerDocument.defaultView?.resizeTo(...MANUAL_WINDOW_SIZE); } catch { /* Browser owns PiP sizing. */ }
   };
 
   const doExport = async () => {
-    if (!active || busy || mode === "manual") return;
+    if (!active || busy || !mode || mode === "manual") return;
     setError(""); setCopied(false); setBusy(true);
     try {
       const directory = mode === "folder" ? await chooseExportDirectory(exportDirectory) : null;
@@ -280,7 +284,9 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
     onClick={() => onMinimizedChange(!minimized)}>{minimized ? <CornersOut size={13} /> : <Minus size={13} weight="bold" />}</button>;
 
   if (minimized) return <main ref={panel} className={styles.panel} data-minimized="true" aria-label="AI 맥락 내보내기">
-    <header><div className={styles.headerControls}>{recordingControls}{minimizeButton}</div></header>
+    <header><div className={styles.headerControls}>{recordingControls}
+      <button type="button" className={styles.recordToggle} onClick={() => { onMinimizedChange(false, MANUAL_WINDOW_SIZE); selectMode("manual", false); }}>Manual</button>
+      {minimizeButton}</div></header>
   </main>;
 
   return <main ref={panel} className={styles.panel} aria-label="AI 맥락 내보내기">
@@ -308,7 +314,7 @@ export function AgentExportPanel({ bufferRef, demo, active, seconds, bufferMinut
           finally { setBusy(false); }
         })()}><FolderOpen size={12} />폴더 선택</button>
       </div>}
-      {mode !== "manual" && <button type="button" className={styles.exportButton} disabled={!active || busy} onClick={() => void doExport()}>{busy ? <CircleNotch className={styles.spin} size={16} /> : <ExportIcon size={17} />}AI Context 생성</button>}
+      {mode && mode !== "manual" && <button type="button" className={styles.exportButton} disabled={!active || busy} onClick={() => void doExport()}>{busy ? <CircleNotch className={styles.spin} size={16} /> : <ExportIcon size={17} />}AI Context 생성</button>}
       {mode === "manual" && <ManualPicker timeline={manualTimeline} loading={manualLoading} expandedGaps={expandedGaps} loadingGaps={loadingGaps} selectedFrames={selectedFrames}
         onToggleGap={toggleGap} onToggleFrame={toggleFrame} onPreview={openPreview} onPrepareFrame={prepareManualFrame} onDownload={downloadSelected} onRefresh={refreshManual} />}
       {error && <p className={styles.error} role="alert">{error}</p>}
