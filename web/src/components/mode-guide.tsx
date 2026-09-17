@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { Play } from "@phosphor-icons/react";
+import { Play, Timer } from "@phosphor-icons/react";
 import { DELIVERY_MODE_NAMES, examplesFor } from "./usage-examples/usage-examples";
 import type { DeliveryMode } from "./usage-examples/usage-examples";
+import { ModeQuickGuide } from "./mode-quick-guide";
 import styles from "./mode-guide.module.css";
 
 // Shown before screen sharing starts: one tab per delivery mode, each
@@ -61,6 +62,7 @@ const MODES: Mode[] = [
 
 export function ModeGuide({ onShowExamples }: { onShowExamples: (mode: DeliveryMode) => void }) {
   const [active, setActive] = useState(0);
+  const [quickOpen, setQuickOpen] = useState(false);
   const mode = MODES[active];
   return <section className={styles.guide} aria-label="전달 방식 안내">
     <div className={styles.tabs} role="tablist" aria-label="전달 방식">
@@ -84,10 +86,15 @@ export function ModeGuide({ onShowExamples }: { onShowExamples: (mode: DeliveryM
       <ul className={styles.when}>{mode.when.map((line) => <li key={line}>{line}</li>)}</ul>
       <h3>작동 방식</h3>
       <ol>{mode.how.map((line, index) => <li key={line}><b>{String(index + 1).padStart(2, "0")}</b>{line}</li>)}</ol>
+      <button type="button" className={styles.quickGuide} onClick={() => setQuickOpen(true)}>
+        <Timer size={14} weight="bold" />
+        <span><b>{mode.name} 10초 사용법</b><small>버튼을 어떤 순서로 누르는지 영상으로 보기</small></span>
+      </button>
       <button type="button" className={styles.examples} onClick={() => onShowExamples(mode.id)}>
         <Play size={14} weight="fill" />
         <span><b>{DELIVERY_MODE_NAMES[mode.id]} 실제 활용 예시 보기</b><small>{examplesFor(mode.id).map((example) => example.role).join(" · ")}</small></span>
       </button>
     </div>
+    {quickOpen && <ModeQuickGuide mode={mode.id} onClose={() => setQuickOpen(false)} />}
   </section>;
 }
