@@ -1,0 +1,59 @@
+{
+  "name": "whatwas-desktop",
+  "productName": "방금그거뭐였지",
+  "version": "0.1.0",
+  "description": "방금그거뭐였지 데스크톱 앱: 화면 기록에 작업 기록을 더하고, 내보내기를 한 번에",
+  "author": "hyunsuhahaha",
+  "private": true,
+  "main": "out/main.js",
+  "scripts": {
+    "build": "tsc -p .",
+    "start": "npm run build && electron .",
+    "dev": "npm run build && cross-env WHATWAS_URL=http://localhost:3000 electron .",
+    "test": "npm run build && node --test out/*.test.js",
+    "dist": "npm run build && electron-builder --win --publish never",
+    "release": "npm run build && electron-builder --win --publish always"
+  },
+  "build": {
+    "appId": "app.whatwas.desktop",
+    "productName": "방금그거뭐였지",
+    "artifactName": "whatwas-setup.${ext}",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*.js",
+      "!out/**/*.test.js",
+      "assets/**/*"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "shortcutName": "방금그거뭐였지"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "hyunsuhahaha",
+      "repo": "AirPointer",
+      "releaseType": "release"
+    },
+    "executableName": "whatwas"
+  },
+  "dependencies": {
+    "koffi": "^3.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.5",
+    "cross-env": "^10.1.0",
+    "electron": "^44.4.1",
+    "electron-builder": "^26.15.3",
+    "typescript": "^7.0.2"
+  },
+  "allowScripts": {
+    "koffi@3.3.0": true
+  }
+}

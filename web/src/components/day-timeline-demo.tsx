@@ -98,7 +98,7 @@ export function DayTimelineDemo({ onClose }: { onClose: () => void }) {
   const toggle = () => { if (clock.current >= script.DURATION) restart(); else setPlaying((value) => !value); };
 
   return createPortal(
-    <div ref={dialog} className={styles.overlay} role="dialog" aria-modal="true" aria-label="타임라인 사용 예시" tabIndex={-1}
+    <div ref={dialog} className={`${styles.overlay} theme-fixed`} role="dialog" aria-modal="true" aria-label="타임라인 사용 예시" tabIndex={-1}
       onKeyDown={(event) => {
         if (event.key === "Escape") onClose();
         else if (event.key === " ") toggle();

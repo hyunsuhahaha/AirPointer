@@ -4,8 +4,8 @@
 .tabs button b { font: 10px var(--font-mono); color: var(--accent-soft); }
 .tabs button:hover { color: var(--ink); }
 .tabs button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 2px; }
-.tabs button[aria-selected=true] { background: var(--accent); color: #150a04; }
-.tabs button[aria-selected=true] b { color: #150a04; }
+.tabs button[aria-selected=true] { background: var(--accent); color: var(--t-panel, #150a04); }
+.tabs button[aria-selected=true] b { color: var(--t-panel, #150a04); }
 .panel { padding-top: 22px; animation: fade .2s ease-out; }
 @keyframes fade { from { opacity: 0; transform: translateY(4px); } }
 .panel h2 { margin: 0 0 20px; font-size: 22px; line-height: 1.4; letter-spacing: -.05em; }
@@ -19,7 +19,7 @@
 .examples { display: flex; align-items: center; gap: 12px; width: 100%; margin-top: 4px; padding: 12px 16px; border: 1px solid var(--accent); border-radius: 12px; background: transparent; color: var(--ink); font: inherit; text-align: left; cursor: pointer; transition: background .15s; }
 .examples:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .examples:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 2px; }
-.examples > svg { flex: none; width: 30px; height: 30px; padding: 8px; border-radius: 50%; background: var(--accent); color: #150a04; }
+.examples > svg { flex: none; width: 30px; height: 30px; padding: 8px; border-radius: 50%; background: var(--accent); color: var(--t-panel, #150a04); }
 .examples b, .examples small { display: block; }
 .examples b { font-size: 14px; }
 .examples small { margin-top: 2px; color: var(--muted); font-size: 12px; }

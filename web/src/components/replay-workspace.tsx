@@ -27,6 +27,7 @@ import type { DeliveryMode } from "./usage-examples/usage-examples";
 import { IncidentReview } from "./incident-review";
 import type { Incident } from "@/lib/incident-report";
 import { ModeGuide } from "./mode-guide";
+import { ThemePicker } from "./theme-picker";
 import { ScreenMemoryWorkbench } from "./screen-memory-workbench";
 import { DayTimeline } from "./day-timeline";
 import { DayTimelineDemo } from "./day-timeline-demo";
@@ -78,6 +79,8 @@ function startPipStyleSync(source: Document, target: Document): () => void {
   sync();
   const observer = new MutationObserver(sync);
   observer.observe(source.head, { attributes: true, childList: true, characterData: true, subtree: true });
+  // Theme changes only touch <html>'s classes.
+  observer.observe(source.documentElement, { attributes: true, attributeFilter: ["class"] });
   // Next's dev runtime can replace CSS rules through CSSOM without changing
   // a DOM node. Production styles are static, so polling there only burns CPU.
   const timer = process.env.NODE_ENV === "development" ? window.setInterval(sync, 2_000) : null;
@@ -333,8 +336,17 @@ export function ReplayWorkspace() {
   // there too) before this flips post-mount -- an inline/lazy-initializer
   // check would read `window` during the client's very first render and
   // mismatch the server-rendered markup instead.
+  // Document PiP freezes the page inside the desktop app, which has its own tray and shortcut instead.
   // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { setPipSupported(typeof window !== "undefined" && "documentPictureInPicture" in window); }, []);
+  useEffect(() => { setPipSupported(typeof window !== "undefined" && "documentPictureInPicture" in window && !window.whatwasNative); }, []);
+  // The desktop app grants the screen without a picker and signals when the page may start.
+  const startSharingRef = useRef<() => Promise<void>>(async () => undefined);
+  useEffect(() => {
+    const start = () => { void startSharingRef.current(); };
+    window.addEventListener("whatwas-native-ready", start);
+    void window.whatwasNative?.pageReady();
+    return () => window.removeEventListener("whatwas-native-ready", start);
+  }, []);
   const [promptTemplate, setPromptTemplate] = useState<PromptTemplate | null>(null);
   const [promptSettingsState, setPromptSettingsState] = useState<"idle" | "loading" | "saving" | "error">("idle");
   const [promptSettingsMessage, setPromptSettingsMessage] = useState("");
@@ -467,6 +479,7 @@ export function ReplayWorkspace() {
       return false;
     }
   }, [retention]);
+  useEffect(() => { startSharingRef.current = async () => { if (!stream) await startSharing(); }; }, [startSharing, stream]);
   const startTimeline = useCallback(async () => {
     if (!stream && !await startSharing()) return;
     void requestPersistence();
@@ -698,6 +711,7 @@ export function ReplayWorkspace() {
       setPipOpen(true);
       return true;
     }
+    if (window.whatwasNative) return false;
     if (!window.documentPictureInPicture) {
       setPipMessage("이 브라우저는 항상 위 캡처 창을 지원하지 않습니다.");
       return false;
@@ -715,7 +729,7 @@ export function ReplayWorkspace() {
       pipWindow.document.title = "AI 내보내기";
       pipWindow.document.documentElement.lang = "ko";
       pipWindow.document.documentElement.className = document.documentElement.className;
-      pipWindow.document.body.style.cssText = "margin:0;background:#111210;color-scheme:dark";
+      pipWindow.document.body.style.cssText = "margin:0;background:var(--t-panel, #111210)";
       // The portal shares React state, but PiP has its own document. Keep the
       // compiled CSS in sync because Next dev replaces CSS modules during HMR.
       pipStyleCleanupRef.current?.();
@@ -1254,7 +1268,7 @@ export function ReplayWorkspace() {
           <button type="button" role="tab" aria-selected={viewMode === "browser"} data-active={viewMode === "browser"} onClick={() => setViewMode("browser")}>리플레이 작업대</button>
           <button type="button" role="tab" aria-selected={viewMode === "full"} data-active={viewMode === "full"} onClick={() => setViewMode("full")}>확장 기능</button>
         </div>
-        <div className={styles.navMeta}><span className={styles.localBadge}><LockKey size={14} weight="bold" /> LOCAL BUFFER</span><a href="#how">작동 원리</a><a href="#timeline">오늘 타임라인</a><a href="#pipeline">파이프라인</a></div>
+        <div className={styles.navMeta}><ThemePicker /><span className={styles.localBadge}><LockKey size={14} weight="bold" /> LOCAL BUFFER</span><a href="#how">작동 원리</a><a href="#timeline">오늘 타임라인</a><a href="#pipeline">파이프라인</a></div>
       </header>
       {viewMode === "full" && !companionEnabled && <div className={styles.modeNotice}>
         <span>Full Access는 별도 프로그램(AirPointer) 설치가 필요합니다 — 설치 전에도 아래에서 미리 둘러볼 수 있어요.</span>

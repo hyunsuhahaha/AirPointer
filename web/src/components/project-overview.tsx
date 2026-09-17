@@ -111,7 +111,7 @@ export function ProjectOverview({ onClose, onShowExamples }: { onClose: () => vo
   const reviewSeconds = Math.round(Math.min(1, (t - AI_BEAT.start) / (AI_BEAT.clockEnd - AI_BEAT.start)) * 900);
 
   return createPortal(
-    <div ref={dialog} className={styles.overlay} role="dialog" aria-modal="true" aria-label="프로젝트 개요" tabIndex={-1}
+    <div ref={dialog} className={`${styles.overlay} theme-fixed`} role="dialog" aria-modal="true" aria-label="프로젝트 개요" tabIndex={-1}
       onKeyDown={(event) => {
         if (event.key === "Escape") onClose();
         else if (event.key === " ") togglePlaying();

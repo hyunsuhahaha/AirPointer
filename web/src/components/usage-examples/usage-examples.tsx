@@ -132,7 +132,7 @@ export function UsageExamples({ onClose, mode }: { onClose: () => void; mode?: D
   const pickedRole = hoverIndex ?? exampleIndex;
 
   return createPortal(
-    <div ref={dialog} className={styles.overlay} role="dialog" aria-modal="true" aria-label="실제 활용 예시" tabIndex={-1}
+    <div ref={dialog} className={`${styles.overlay} theme-fixed`} role="dialog" aria-modal="true" aria-label="실제 활용 예시" tabIndex={-1}
       onKeyDown={(event) => {
         if (event.key === "Escape") onClose();
         else if (event.key === " ") togglePlaying();

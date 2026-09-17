@@ -13,3 +13,8 @@ portable/
 .logs/
 airpointer-runtime-check.png
 AirPointer-dev-cert.cer
+
+# Desktop app
+desktop/node_modules/
+desktop/out/
+desktop/release/

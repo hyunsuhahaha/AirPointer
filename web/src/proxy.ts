@@ -6,7 +6,9 @@ export function proxy(request: NextRequest) {
   const policy = [
     "default-src 'self'",
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' 'wasm-unsafe-eval'${development ? " 'unsafe-eval'" : ""}`,
-    `style-src 'self' 'nonce-${nonce}'`,
+    // Next's dev overlay injects <style> tags without the nonce; a nonce would
+    // also make browsers ignore 'unsafe-inline', so dev drops it.
+    `style-src 'self' ${development ? "'unsafe-inline'" : `'nonce-${nonce}'`}`,
     "style-src-attr 'unsafe-inline'",
     "img-src 'self' blob: data:",
     "media-src 'self' blob:",
@@ -24,7 +26,10 @@ export function proxy(request: NextRequest) {
   const response = NextResponse.next({ request: { headers } });
   response.headers.set("Content-Security-Policy", policy);
   response.headers.set("Referrer-Policy", "no-referrer");
-  response.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  // The desktop app captures the screen through Chromium's camera path, which
+  // needs the page itself to be allowed; browsers keep camera fully off.
+  const desktopApp = /Electron\//.test(request.headers.get("user-agent") ?? "");
+  response.headers.set("Permissions-Policy", `camera=${desktopApp ? "(self)" : "()"}, microphone=(), geolocation=()`);
   response.headers.set("X-Content-Type-Options", "nosniff");
   return response;
 }

@@ -7,6 +7,47 @@
 }
 * { box-sizing: border-box; }
 html { background: var(--base); color-scheme: dark; }
+
+/* Themes. Component styles read var(--t-*, <original color>), so with no theme
+   class everything renders in the original dark/orange design. */
+:root.accent-blue { --t-accent: #4f8cff; }
+:root.accent-green { --t-accent: #2fbf71; }
+:root.accent-violet { --t-accent: #9b7bff; }
+:root.accent-pink { --t-accent: #ff5fa2; }
+:root.accent-mono { --t-accent: #e6e4dd; }
+:root[class*="accent-"] {
+  --t-accent-soft: color-mix(in srgb, var(--t-accent) 55%, #fff);
+  --t-accent-deep: color-mix(in srgb, var(--t-accent) 35%, #111);
+  --t-accent-bg: color-mix(in srgb, var(--t-accent) 12%, #0b0b0a);
+  --accent: var(--t-accent); --accent-soft: var(--t-accent-soft);
+}
+:root.theme-light {
+  color-scheme: light;
+  --t-base: #f4f3ef; --t-panel: #ffffff; --t-raised: #faf9f6; --t-field: #eeede8;
+  --t-line: #e2e0d9; --t-line-strong: #cbc8bf; --t-dim: #9a978e; --t-muted: #6b6861;
+  --t-soft-ink: #3e3c37; --t-ink: #1b1a17;
+  --t-accent-soft: color-mix(in srgb, var(--t-accent, #ff6b22) 72%, #000);
+  --t-accent-deep: color-mix(in srgb, var(--t-accent, #ff6b22) 24%, #fff);
+  --t-accent-bg: color-mix(in srgb, var(--t-accent, #ff6b22) 9%, #fff);
+  --t-success: #3b7a2b; --t-success-deep: #d3e7c5; --t-success-bg: #edf6e7; --t-danger-soft: #c2372a;
+  --ink: #1b1a17; --muted: #6b6861; --dim: #9a978e; --line: #e2e0d9;
+  --panel: #ffffff; --panel-raised: #faf9f6; --base: #f4f3ef;
+  --accent-soft: var(--t-accent-soft); --success: #3b7a2b;
+}
+:root.theme-light.accent-mono { --t-accent: #1b1a17; }
+/* Showcase animations (overview, usage examples) keep the original look:
+   `initial` makes every token invalid, so each var() falls back. */
+.theme-fixed {
+  color-scheme: dark;
+  --t-base: initial; --t-panel: initial; --t-raised: initial; --t-field: initial; --t-line: initial;
+  --t-line-strong: initial; --t-dim: initial; --t-muted: initial; --t-soft-ink: initial; --t-ink: initial;
+  --t-accent: initial; --t-accent-soft: initial; --t-accent-deep: initial; --t-accent-bg: initial;
+  --t-success: initial; --t-success-deep: initial; --t-success-bg: initial; --t-danger-soft: initial;
+  --ink: #f2efe9; --muted: #96948f; --dim: #5e5d59; --line: #34332f;
+  --panel: #171715; --panel-raised: #1e1d1a; --base: #0d0d0c;
+  --accent: #ff6b22; --accent-soft: #ffb38c; --success: #9fcf8a;
+  color: var(--ink);
+}
 body { margin: 0; min-height: 100vh; background: var(--base); color: var(--ink); font-family: var(--font-sans), sans-serif; }
 button, select { font: inherit; }
 button { color: inherit; }

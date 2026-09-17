@@ -7,6 +7,8 @@ import { createAgentLink, deleteAgentLink } from "@/lib/agent-link";
 import { DEFAULT_LINK_TTL, LINK_TTL_OPTIONS, MAX_UNLIMITED_LINKS, UNLIMITED, linkTtlLabel, parseLinkTtl } from "@/lib/link-ttl";
 import type { LinkTtl } from "@/lib/link-ttl";
 import { forgetLink, readMyLinks, rememberLink, unlimitedLinkCount } from "@/lib/my-links";
+import { nativeApp, nativeFolderPrompt, shortcutLabel } from "@/lib/native-bridge";
+import type { NativeSettings } from "@/lib/native-bridge";
 import type { AgentLink } from "@/lib/agent-link";
 import { exportAgentContext } from "@/lib/browser-agent-export";
 import { chooseExportDirectory, createExportDirectory, localExportPath, localFolderPrompt, savedExportDirectory, writeExportFolder } from "@/lib/export-directory";
@@ -83,6 +85,11 @@ export function AgentExportPanel({ bufferRef, active, seconds, bufferMinutes, on
 
   useEffect(() => { activeNow.current = active; }, [active]);
   useEffect(() => { void savedExportDirectory().then(setExportDirectory); }, []);
+  // Inside the desktop app: a fixed export folder and a global shortcut.
+  const [nativeSettings, setNativeSettings] = useState<NativeSettings | null>(null);
+  const exportRef = useRef<(mode?: DeliveryMode) => Promise<void>>(async () => undefined);
+  useEffect(() => { void nativeApp()?.settings().then(setNativeSettings); }, []);
+  useEffect(() => nativeApp()?.onExportShortcut(() => { void exportRef.current(); }), []);
   useEffect(() => {
     if (mode !== "manual" || !active) return;
     const generation = ++manualGeneration.current;
@@ -109,16 +116,20 @@ export function AgentExportPanel({ bufferRef, active, seconds, bufferMinutes, on
     if (next === "manual" && resize) try { panel.current?.ownerDocument.defaultView?.resizeTo(...MANUAL_WINDOW_SIZE); } catch { /* Browser owns PiP sizing. */ }
   };
 
-  const doExport = async () => {
-    if (!active || busy || !mode || mode === "manual") return;
+  // The shortcut exports the way the panel is set, or to the folder by default.
+  const doExport = async (requested?: DeliveryMode) => {
+    const native = nativeApp();
+    const target = requested ?? (mode === "link" || mode === "folder" ? mode : native ? "folder" : null);
+    if (!active || busy || !target || target === "manual") return;
+    if (target !== mode) { setMode(target); if (minimized) onMinimizedChange(false); }
     setError(""); setCopied(false); setBusy(true);
     try {
-      const directory = mode === "folder" ? await chooseExportDirectory(exportDirectory) : null;
+      const directory = target === "folder" && !native ? await chooseExportDirectory(exportDirectory) : null;
       if (directory) setExportDirectory(directory);
-      const next = await exportAgentContext(bufferRef.current, "complete", seconds, surface);
+      const next = await exportAgentContext(bufferRef.current, "complete", seconds, surface, native && ((since, until) => native.activity(since, until)));
       if (!activeNow.current) throw new Error("화면 공유가 끝나 Context를 만들지 않았습니다.");
       let share: AgentLink | undefined;
-      if (mode === "link") {
+      if (target === "link") {
         if (linkTtl === UNLIMITED && unlimitedLinkCount(readMyLinks()) >= MAX_UNLIMITED_LINKS) {
           throw new Error(`무제한 링크는 ${MAX_UNLIMITED_LINKS}개까지 둘 수 있어요. 내 링크에서 하나를 삭제해 주세요.`);
         }
@@ -126,17 +137,26 @@ export function AgentExportPanel({ bufferRef, active, seconds, bufferMinutes, on
         rememberLink(share); setMyLinks(readMyLinks());
         next.fileName = "Agent Link";
         next.prompt = `최근 ${seconds}초 화면 기록을 확인해서 제가 무엇을 하고 있었는지 파악해 주세요.\n\n${share.url}`;
+      } else if (native) {
+        const files = await Promise.all(next.files.map(async (file) => ({ path: file.name, data: new Uint8Array(await file.arrayBuffer()) })));
+        const folder = await native.writeContext(next.fileName, files);
+        next.prompt = nativeFolderPrompt(folder);
+        next.fileName = folder;
       } else {
         await writeExportFolder(directory!, next.fileName, next.files);
         next.prompt = localFolderPrompt(directory!.name, next.fileName);
         next.fileName = localExportPath(directory!.name, next.fileName);
       }
-      setResult({ ...next, delivery: mode, share });
+      setResult({ ...next, delivery: target, share });
+      // In the app one press does it all: the prompt is ready to paste.
+      if (native) await copyText(next.prompt, panel.current?.ownerDocument ?? document).then(() => setCopied(true), () => undefined);
       try { panel.current?.ownerDocument.defaultView?.resizeTo(390, 470); } catch { /* Browser owns PiP sizing. */ }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "내보내기에 실패했습니다.");
     } finally { setBusy(false); }
   };
+
+  useEffect(() => { exportRef.current = doExport; });
 
   const createFolder = async () => {
     const name = newFolderName.trim();
@@ -341,7 +361,18 @@ export function AgentExportPanel({ bufferRef, active, seconds, bufferMinutes, on
         <button type="button" aria-pressed={mode === "link"} disabled={busy} onClick={() => selectMode("link")}><b>Agent Link</b><small>URL 하나 전달</small></button>
         <button type="button" aria-pressed={mode === "folder"} disabled={busy} onClick={() => selectMode("folder")}><b>Local Folder</b><small>로컬 Agent가 검색</small></button>
       </div>
-      {mode === "folder" && <div className={styles.modeNoteRow}>
+      {mode === "folder" && nativeSettings && <>
+        <div className={styles.modeNoteRow}>
+          <p className={styles.modeNote} title={nativeSettings.exportDir}>저장 위치: {nativeSettings.exportDir}</p>
+          <button type="button" className={styles.directoryButton} disabled={busy} onClick={() => void nativeApp()?.chooseExportDir().then((dir) => { if (dir) setNativeSettings({ ...nativeSettings, exportDir: dir }); })}><FolderOpen size={12} />바꾸기</button>
+        </div>
+        <div className={styles.modeNoteRow}>
+          <p className={styles.modeNote} title={nativeSettings.watchDir ?? undefined}>{nativeSettings.watchDir ? `파일 저장 기록: ${nativeSettings.watchDir}` : "작업 폴더를 지정하면 파일 저장 시각도 함께 남아요."}</p>
+          <button type="button" className={styles.directoryButton} disabled={busy} onClick={() => void nativeApp()?.chooseWatchDir().then((dir) => { if (dir) setNativeSettings({ ...nativeSettings, watchDir: dir }); })}><FolderPlus size={12} />작업 폴더</button>
+        </div>
+        <p className={styles.shortcutNote}><kbd>{shortcutLabel(nativeSettings.shortcut)}</kbd> 어디서든 누르면 바로 저장하고 프롬프트까지 복사해요.</p>
+      </>}
+      {mode === "folder" && !nativeSettings && <div className={styles.modeNoteRow}>
         <p className={styles.modeNote}>{exportDirectory ? `저장 위치: …/${exportDirectory.name}` : "저장 위치를 선택해 주세요."}</p>
         <button type="button" className={styles.directoryButton} disabled={busy} onClick={() => void (async () => {
           setBusy(true); setError("");
@@ -379,7 +410,7 @@ export function AgentExportPanel({ bufferRef, active, seconds, bufferMinutes, on
           })()}><Trash size={12} /></button>
         </li>)}
       </ul>}
-      {mode === "folder" && creatingFolder && <form className={styles.newFolderRow} onSubmit={(event) => { event.preventDefault(); void createFolder(); }}>
+      {mode === "folder" && !nativeSettings && creatingFolder && <form className={styles.newFolderRow} onSubmit={(event) => { event.preventDefault(); void createFolder(); }}>
         <input aria-label="새 폴더 이름" placeholder={exportDirectory ? `${exportDirectory.name} 안에 만들 폴더 이름` : "폴더 이름 (만들 위치를 다음에 선택)"} value={newFolderName}
           autoFocus disabled={busy} onChange={(event) => setNewFolderName(event.target.value)} />
         <button type="submit" className={styles.directoryButton} disabled={busy || !newFolderName.trim()}>만들기</button>

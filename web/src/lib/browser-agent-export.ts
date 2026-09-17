@@ -1,5 +1,7 @@
 import { selectNotable } from "./replay-buffer.ts";
 import type { BrowserReplayBuffer, ChangeEvent, OverviewFrame, PreviewFrame, ReplayCapsule } from "./replay-buffer";
+import { activityMarkdown } from "./native-bridge.ts";
+import type { NativeActivity } from "./native-bridge";
 
 export type AgentExportMode = "complete" | "attach";
 
@@ -17,18 +19,18 @@ function imageBlob(dataUrl: string) {
 }
 
 export function exportContextDocument(capsule: ReplayCapsule, frames: OverviewFrame[], events: ChangeEvent[],
-  mode: AgentExportMode, batchName = "") {
+  mode: AgentExportMode, batchName = "", activity?: NativeActivity) {
   const start = new Date(capsule.startedAt).toISOString();
   const end = new Date(capsule.triggeredAt).toISOString();
   const images = frames.map((frame, index) =>
     `- ${new Date(frame.capturedAt ?? capsule.triggeredAt).toISOString()} · ${mode === "complete" ? "captures/" : `${batchName}-`}${String(index + 1).padStart(2, "0")}-${stamp(frame.capturedAt ?? capsule.triggeredAt)}.jpg`);
   const changes = events.map((event) =>
     `- ${new Date(event.peakAt).toISOString()} · 화면 변화 감지 (강도 ${event.peakScore.toFixed(3)}, 영역 ${event.bbox.map((n) => n.toFixed(2)).join(", ")})`);
-  return `# 화면 맥락 기록\n\n기록 구간: ${start} ~ ${end}\n\n## 화면 변화\n\n${changes.join("\n") || "- 감지된 화면 변화 없음"}\n\n## 대표 화면\n\n${images.join("\n") || "- 대표 화면 없음"}${mode === "complete" ? "\n\n## 전체 자료\n\n- events.json: 화면 변화 기록\n- captures/preview/: 실제 주기 화면\n- captures/: 프리뷰에서 선별한 대표 화면\n- recording/: WebM 영상 조각\n" : "\n"}`;
+  return `# 화면 맥락 기록\n\n기록 구간: ${start} ~ ${end}\n\n## 화면 변화\n\n${changes.join("\n") || "- 감지된 화면 변화 없음"}\n\n## 대표 화면\n\n${images.join("\n") || "- 대표 화면 없음"}${mode === "complete" ? "\n\n## 전체 자료\n\n- events.json: 화면 변화 기록\n- captures/preview/: 실제 주기 화면\n- captures/: 프리뷰에서 선별한 대표 화면\n- recording/: WebM 영상 조각\n" : "\n"}${activity ? `\n${activityMarkdown(activity, capsule.startedAt)}` : ""}`;
 }
 
 async function bundleSnapshot(mode: AgentExportMode,
-  capsule: ReplayCapsule, captures: PreviewFrame[], events: ChangeEvent[], frames: OverviewFrame[]): Promise<AgentExportBundle> {
+  capsule: ReplayCapsule, captures: PreviewFrame[], events: ChangeEvent[], frames: OverviewFrame[], activity?: NativeActivity): Promise<AgentExportBundle> {
   if (!frames.length) throw new Error("대표 화면을 읽지 못했습니다. 잠시 후 다시 눌러 주세요.");
   if (mode === "attach" && frames.length < 6) throw new Error("파일 첨부에는 화면 6장이 필요합니다. 화면을 조금 더 기록한 뒤 다시 눌러 주세요.");
   const batchName = `Export-${stamp(capsule.triggeredAt)}`;
@@ -39,7 +41,8 @@ async function bundleSnapshot(mode: AgentExportMode,
   }
   if (mode === "complete") {
     files.push({ name: "events.json", data: new Blob([JSON.stringify({ source: "visual_change", startedAt: capsule.startedAt, triggeredAt: capsule.triggeredAt,
-      events: events.map(({ startedAt, peakAt, endedAt, peakScore, bbox, extent }) => ({ startedAt, peakAt, endedAt, peakScore, bbox, extent })) }, null, 2)], { type: "application/json" }) });
+      events: events.map(({ startedAt, peakAt, endedAt, peakScore, bbox, extent }) => ({ startedAt, peakAt, endedAt, peakScore, bbox, extent })),
+      ...(activity ? { activity } : {}) }, null, 2)], { type: "application/json" }) });
     for (const capture of captures) {
       files.push({ name: `captures/preview/${stamp(capture.capturedAt)}.jpg`, data: imageBlob(capture.dataUrl) });
     }
@@ -47,7 +50,7 @@ async function bundleSnapshot(mode: AgentExportMode,
       files.push({ name: `recording/${String(index + 1).padStart(3, "0")}-${stamp(segment.startedAt)}.webm`, data: segment.blob });
     }
   }
-  files.unshift({ name: `${mode === "complete" ? "" : `${batchName}-`}context.md`, data: new Blob([exportContextDocument(capsule, frames, events, mode, batchName)], { type: "text/markdown;charset=utf-8" }) });
+  files.unshift({ name: `${mode === "complete" ? "" : `${batchName}-`}context.md`, data: new Blob([exportContextDocument(capsule, frames, events, mode, batchName, mode === "complete" ? activity : undefined)], { type: "text/markdown;charset=utf-8" }) });
   return {
     fileName,
     imageCount: frames.length,
@@ -59,7 +62,7 @@ async function bundleSnapshot(mode: AgentExportMode,
 }
 
 export async function exportAgentContext(buffer: BrowserReplayBuffer,
-  mode: AgentExportMode, seconds: number, _surface: string): Promise<AgentExportBundle> {
+  mode: AgentExportMode, seconds: number, _surface: string, activitySource?: (since: number, until: number) => Promise<NativeActivity>): Promise<AgentExportBundle> {
   void _surface;
   const capsule = await buffer.recentCapsule(seconds, 12);
   if (!capsule.segments.length) throw new Error("내보낼 화면 기록이 없습니다. 화면을 공유한 뒤 다시 눌러 주세요.");
@@ -68,7 +71,9 @@ export async function exportAgentContext(buffer: BrowserReplayBuffer,
   // because decoding short WebM segments can occasionally produce black frames.
   const notable = selectNotable(captures, events, 12);
   const frames = notable.length >= 6 ? await upgradeFrames(buffer, capsule, notable) : capsule.overviewFrames;
-  return bundleSnapshot(mode, capsule, captures, events, frames);
+  // The desktop app's window and file-save log is a bonus; never block the export on it.
+  const activity = activitySource ? await activitySource(capsule.startedAt, capsule.triggeredAt).catch(() => undefined) : undefined;
+  return bundleSnapshot(mode, capsule, captures, events, frames, activity);
 }
 
 // Previews are small, low-quality thumbnails. Swap each for a full-resolution
