@@ -14,7 +14,7 @@ const hasSun = (page: Page) => game(page).locator('circle[fill="#ffd43b"]').coun
 test("실제 활용 예시 01: 원인을 좁혀 말해도 캡처만 요구하던 AI가, Agent Link로 저장 직후 화면을 보고 안 눌리는 버튼을 고친다", async ({ page }) => {
   test.setTimeout(120_000);
   await page.goto(url);
-  await page.getByRole("button", { name: "실제 활용 예시" }).click();
+  await page.getByRole("button", { name: "실제 활용 예시", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "실제 활용 예시" });
   // Nothing plays until a role is picked in the middle of the screen.
   const chooser = dialog.getByRole("region", { name: "직업 고르기" });
@@ -48,13 +48,13 @@ test("실제 활용 예시 01: 원인을 좁혀 말해도 캡처만 요구하던
   await expect(dialog.getByRole("region", { name: "코드 에디터" }).getByText(/pointer-events: none/)).toBeVisible({ timeout: 6_000 });
   await expect(dialog.getByRole("region", { name: "브라우저" }).getByText("users.csv")).toBeVisible({ timeout: 6_000 });
   await expect(dialog.getByRole("button", { name: /다시 보기/ })).toBeVisible({ timeout: 10_000 });
-  await expect(dialog.getByText("안 눌리는 버튼, 한 번에 해결")).toBeVisible();
+  await expect(dialog.getByText("“버튼이 안 눌려요”, 한 번에 해결")).toBeVisible();
 });
 
 test("실제 활용 예시 디자이너: 캡처에 안 찍히는 번쩍임을 링크 하나로 팀 전원이 같이 보고, 개발자의 AI가 원인을 찾는다", async ({ page }) => {
   test.setTimeout(120_000);
   await page.goto(url);
-  await page.getByRole("button", { name: "실제 활용 예시" }).click();
+  await page.getByRole("button", { name: "실제 활용 예시", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "실제 활용 예시" });
   await dialog.getByRole("region", { name: "직업 고르기" }).getByRole("button", { name: /디자이너/ }).click();
   await expect(dialog.getByRole("navigation", { name: "직업 선택" }).getByRole("button", { name: "디자이너" })).toHaveAttribute("aria-pressed", "true");
@@ -76,39 +76,7 @@ test("실제 활용 예시 디자이너: 캡처에 안 찍히는 번쩍임을 �
   await expect(chat.getByText("01:24:07 · 라이트로 그려진 첫 화면")).toBeVisible({ timeout: 8_000 });
   await expect(dialog.getByRole("region", { name: "스테이징 사이트" }).getByText("새 배포")).toBeVisible({ timeout: 6_000 });
   await expect(dialog.getByRole("button", { name: /다시 보기/ })).toBeVisible({ timeout: 10_000 });
-  await expect(dialog.getByText("팀원은 못 보는 번쩍임, 한 번에 해결")).toBeVisible();
-});
-
-test("실제 활용 예시 02: 404와 CORS 설정까지 알려줘도 CORS만 고치던 AI가, Agent Link로 스쳐 간 Request URL을 보고 진짜 원인을 고친다", async ({ page }) => {
-  test.setTimeout(120_000);
-  await page.goto(url);
-  await page.getByRole("button", { name: "실제 활용 예시" }).click();
-  const dialog = page.getByRole("dialog", { name: "실제 활용 예시" });
-  await dialog.getByRole("region", { name: "직업 고르기" }).getByRole("button", { name: /풀스택 개발자/ }).click();
-  await expect(dialog.getByRole("navigation", { name: "직업 선택" }).getByRole("button", { name: "풀스택 개발자" })).toHaveAttribute("aria-pressed", "true");
-  const chat = dialog.getByRole("region", { name: "Claudy 대화" });
-  const browser = dialog.getByRole("region", { name: "브라우저" });
-
-  // 1. The request fails; the Network headers flash the undefined URL.
-  await expect(browser.getByText("사용자를 불러오지 못했습니다.")).toBeVisible({ timeout: 8_000 });
-  await expect(browser.getByText("http://localhost:3000/undefined/api/users")).toBeVisible({ timeout: 6_000 });
-
-  // 2. A precise report, yet the AI keeps fixing CORS.
-  await expect(chat.getByText(/CORS는 이미 열어둠/)).toBeVisible({ timeout: 8_000 });
-  await expect(chat.getByText(/CORS 문제예요/)).toBeVisible({ timeout: 6_000 });
-  await expect(chat.getByText(/Preflight가 막힌 거예요/)).toBeVisible({ timeout: 10_000 });
-
-  // 3. The minimized bar's 2 opens Agent Link and the link prompt is sent.
-  const pip = dialog.getByRole("region", { name: "방금그거뭐였지 작은 창" });
-  await expect(pip.getByText("링크 준비됨 · 오전 04:07 만료")).toBeVisible({ timeout: 10_000 });
-  await expect(chat.getByText(/whatwas\.vercel\.app\/context\//).first()).toBeVisible({ timeout: 6_000 });
-
-  // 4. The AI points at the Network panel, the CORS code is reverted and the list loads.
-  await expect(chat.getByText(/Network › Headers/).first()).toBeVisible({ timeout: 8_000 });
-  await expect(dialog.getByRole("region", { name: "코드 에디터" }).getByText("파일 삭제 · 24줄")).toBeVisible({ timeout: 8_000 });
-  await expect(browser.getByText("minji@acme.dev")).toBeVisible({ timeout: 8_000 });
-  await expect(dialog.getByRole("button", { name: /다시 보기/ })).toBeVisible({ timeout: 10_000 });
-  await expect(dialog.getByText("CORS 아닌 CORS 에러, 한 번에 해결")).toBeVisible();
+  await expect(dialog.getByText("“이 번쩍임, 저만 보여요?”, 한 번에 해결")).toBeVisible();
 });
 
 test("실제 활용 예시 03: 캡처는 놓치고, 말로 설명하면 노란 것만 다 사라지고, Manual로 자른 화면을 끌어다 주면 노란 네모가 사라진다", async ({ page }) => {
@@ -119,7 +87,7 @@ test("실제 활용 예시 03: 캡처는 놓치고, 말로 설명하면 노란 �
 
   // The stage no longer offers the recorded 30-second demo.
   await expect(page.getByRole("button", { name: "30초 체험하기" })).toHaveCount(0);
-  await page.getByRole("button", { name: "실제 활용 예시" }).click();
+  await page.getByRole("button", { name: "실제 활용 예시", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "실제 활용 예시" });
   await expect(dialog).toBeVisible();
   await dialog.getByRole("region", { name: "직업 고르기" }).getByRole("button", { name: /게임 개발자/ }).click();

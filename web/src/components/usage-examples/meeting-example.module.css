@@ -1,0 +1,99 @@
+/* Planner example (Manual): a video meeting, the recording detour and the
+   Manual picker. Coordinates match usage-example-meeting.ts. */
+.work { position: absolute; overflow: hidden; border-radius: 10px; background: #1b1d24; box-shadow: 0 20px 50px rgba(0,0,0,.45), 0 0 0 1px #34353d; }
+.work em { font-style: normal; }
+.keyGroup { display: inline-flex; align-items: center; gap: 8px; }
+@keyframes rise { from { transform: translateY(6px); opacity: 0; } }
+@keyframes fade { from { opacity: 0; } }
+@keyframes pop { from { transform: scale(.92); opacity: 0; } }
+
+/* Meeting */
+.meeting { position: absolute; inset: 0; color: #e5e7eb; }
+.meeting > header { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 12px; background: #111318; font-size: 12px; }
+.meeting > header svg { color: #22c55e; }
+.meeting > header small { color: #9ca3af; }
+.meeting > header em { margin-left: auto; color: #9ca3af; font-variant-numeric: tabular-nums; }
+.slide { position: absolute; overflow: hidden; border-radius: 6px; }
+.slide svg { display: block; width: 100%; height: 100%; animation: fade .15s ease-out; }
+.tile { position: absolute; left: 564px; width: 144px; height: 76px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; border-radius: 6px; background: #2a2d36; }
+.tile[data-speaking=true] { box-shadow: inset 0 0 0 2px #22c55e; }
+.tile i { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 50%; color: #fff; font-size: 14px; font-style: normal; font-weight: 800; }
+.tile small { display: flex; align-items: center; gap: 4px; color: #d1d5db; font-size: 11px; }
+.liveCaption { position: absolute; left: 12px; top: 384px; width: 418px; height: 116px; display: flex; gap: 8px; margin: 0; padding: 12px; border-radius: 6px; background: #111318; font-size: 15px; line-height: 1.5; }
+.liveCaption svg { flex: none; color: #9ca3af; }
+.liveCaption b { display: block; margin-bottom: 2px; color: #22c55e; font-size: 12px; }
+.meetChat { position: absolute; left: 440px; top: 384px; width: 268px; height: 204px; padding: 10px 12px; border-radius: 6px; background: #111318; font-size: 12.5px; }
+.meetChat > b { display: block; margin-bottom: 6px; color: #9ca3af; font-size: 11px; }
+.meetChat p { margin: 0 0 6px; color: #e5e7eb; line-height: 1.4; animation: rise .2s ease-out; }
+.meetChat p small { display: block; color: #9ca3af; font-size: 10.5px; }
+.meetChat p[data-me=true] { padding: 6px 8px; border-radius: 6px; background: #14532d; }
+.meetInput { position: absolute; left: 10px; right: 10px; bottom: 8px; height: 32px; overflow: hidden; padding: 0 10px; border: 1px solid #374151; border-radius: 6px; line-height: 30px; white-space: nowrap; text-overflow: ellipsis; }
+.meetInput[data-empty=true] { color: #6b7280; }
+.caret { display: inline-block; width: 2px; height: 1.05em; margin-left: 1px; vertical-align: -.15em; background: currentColor; animation: blink .8s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.snipResult { position: absolute; right: 290px; top: 300px; z-index: 3; display: flex; align-items: center; gap: 12px; width: 280px; padding: 10px; border-radius: 12px; background: #f3f3f3; color: #1d1d1f; box-shadow: 0 16px 40px rgba(0,0,0,.5); animation: pop .25s ease-out; }
+.snipResult > span { flex: none; width: 110px; height: 70px; overflow: hidden; border-radius: 6px; }
+.snipResult svg { display: block; width: 100%; height: 100%; }
+.snipResult p { margin: 0; }
+.snipResult b { display: block; font-size: 15px; }
+.snipResult small { display: block; margin-top: 4px; color: #d33b2c; font-size: 13px; font-weight: 700; }
+
+/* Recording detour */
+.recording { position: absolute; z-index: 5; overflow: hidden; border-radius: 12px; background: #0b0b0d; color: #e5e7eb; box-shadow: 0 30px 80px rgba(0,0,0,.65), 0 0 0 1px #3f3f46; animation: pop .25s ease-out; }
+.recording > header { position: relative; display: flex; align-items: center; gap: 8px; height: 56px; padding: 0 18px; background: #18181b; font-size: 16px; }
+.recording > header svg { color: #a1a1aa; }
+.fileChip { position: absolute; width: 180px; height: 28px; overflow: hidden; padding: 0 10px; border: 1px solid #52525b; border-radius: 6px; background: #27272a; color: #e4e4e7; font-size: 12px; line-height: 26px; white-space: nowrap; text-overflow: ellipsis; }
+.player { position: relative; height: 220px; margin: 0 30px; overflow: hidden; border-radius: 6px; }
+.player svg { display: block; width: 100%; height: 100%; filter: blur(1.5px); }
+.searching { position: absolute; left: 50%; top: 50%; display: flex; align-items: center; gap: 6px; margin: 0; padding: 8px 14px; border-radius: 999px; background: rgba(0,0,0,.8); font-size: 14px; font-weight: 700; transform: translate(-50%, -50%); }
+.scrubber { position: absolute; height: 6px; border-radius: 3px; background: #3f3f46; }
+.scrubber i { display: block; height: 100%; border-radius: 3px; background: #ef4444; }
+.clock { position: absolute; left: 30px; bottom: 16px; display: flex; align-items: center; gap: 6px; margin: 0; color: #a1a1aa; font-size: 13px; font-variant-numeric: tabular-nums; }
+.fileGhost { position: absolute; z-index: 8; display: flex; align-items: center; gap: 6px; margin: 8px 0 0 8px; padding: 8px 12px; border-radius: 8px; background: #27272a; color: #fff; font-size: 13px; box-shadow: 0 12px 30px rgba(0,0,0,.5); opacity: .92; }
+.uploadError { position: absolute; z-index: 6; display: flex; align-items: center; gap: 10px; margin: 0; padding: 10px 12px; border-radius: 10px; background: #fef2f2; color: #991b1b; font-size: 12.5px; box-shadow: 0 0 0 1px #fca5a5, 0 10px 24px rgba(0,0,0,.25); animation: pop .2s ease-out; }
+.uploadError svg { flex: none; color: #dc2626; }
+.uploadError b { display: block; color: #7f1d1d; }
+
+/* Manual picker inside the shared PiP frame */
+.stripLabel { position: absolute; left: 16px; right: 16px; margin: 0; font-size: 12px; font-weight: 700; }
+.stripLabel em { color: #ff9360; font-size: 11px; font-style: normal; }
+.strip { position: absolute; left: 0; right: 0; height: 96px; overflow: hidden; }
+.frame, .gap { position: absolute; top: 0; height: 62px; animation: rise .25s ease-out; }
+.frame { overflow: visible; border: 1px solid #777a70; border-radius: 4px; background: #050505; }
+.frame svg { display: block; width: 100%; height: 100%; border-radius: 3px; }
+.frame[data-middle=true] { border-color: #ff6b22; }
+.frame time { position: absolute; left: 0; right: 0; top: 70px; color: #dcded5; font: 600 9px var(--font-mono), monospace; text-align: center; }
+.gap { top: 13px; height: 36px; display: grid; place-items: center; border: 1px dashed #55584f; border-radius: 4px; background: #1b1c19; color: #c8c9c1; font-size: 15px; }
+.gap[data-expanded=true] { border-color: #ff6b22; color: #ff9360; }
+.lightbox { position: absolute; left: 0; right: 0; top: 30px; bottom: 0; background: #080908; animation: fade .2s ease-out; }
+.cropButton { position: absolute; width: 96px; height: 28px; display: flex; align-items: center; justify-content: center; gap: 4px; border: 1px solid #4a4c45; border-radius: 4px; background: #1b1c19; font-size: 11px; }
+.cropButton[data-pressed=true] { border-color: #ff6b22; background: #2a1b14; color: #ff9360; }
+.lightboxClose { position: absolute; right: 12px; top: 10px; width: 28px; height: 28px; display: grid; place-items: center; border: 1px solid #4a4c45; border-radius: 4px; background: #1b1c19; }
+.lightboxImage { position: absolute; overflow: hidden; border-radius: 4px; }
+.lightboxImage svg { display: block; width: 100%; height: 100%; }
+.privacy { position: absolute; display: flex; align-items: flex-start; justify-content: flex-end; padding: 3px 5px; border: 2px dashed #ef4444; border-radius: 4px; background: rgba(239,68,68,.18); color: #fff; font-size: 10px; animation: fade .2s ease-out; }
+.cropRect { position: absolute; border: 1.5px solid #ff6b22; background: #ff6b221a; box-shadow: 0 0 0 999px rgba(0,0,0,.55); }
+.cropped { position: absolute; overflow: hidden; border: 2px solid #ff6b22; border-radius: 4px; animation: pop .2s ease-out; transition: opacity .2s; }
+.cropped svg { display: block; width: 100%; height: 100%; }
+.cropped[data-dragging=true] { opacity: .35; }
+.lightboxTime { position: absolute; left: 0; right: 0; bottom: 10px; display: flex; align-items: center; justify-content: center; gap: 4px; margin: 0; color: #d8d9d1; font-size: 11px; }
+.dragGhost { position: absolute; z-index: 8; width: 150px; height: 87px; margin: -44px 0 0 -75px; overflow: hidden; border: 2px solid #ff6b22; border-radius: 6px; box-shadow: 0 16px 36px rgba(0,0,0,.5); opacity: .92; rotate: -3deg; }
+.dragGhost svg { display: block; width: 100%; height: 100%; }
+
+/* Closing comparison */
+.board { position: absolute; inset: 0; z-index: 6; display: flex; flex-direction: column; justify-content: center; gap: 22px; padding: 0 120px; background: #0b0b0d; animation: fade .3s ease-out; }
+.board header b { color: #fff; font-size: 36px; letter-spacing: -.04em; }
+.path small { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; color: #9ca3af; font-size: 14px; font-weight: 700; }
+.path[data-kind=manual] small { color: #fb923c; }
+.path ol { display: flex; flex-wrap: wrap; gap: 8px; min-height: 44px; margin: 0; padding: 0; list-style: none; }
+.path li { position: relative; display: flex; align-items: center; gap: 6px; padding: 10px 16px; border-radius: 8px; background: #1f2024; color: #9ca3af; font-size: 16px; font-weight: 600; animation: rise .2s ease-out; }
+.path li + li::before { content: "→"; position: absolute; left: -9px; color: #4b5563; font-size: 12px; transform: translateX(-50%); }
+.path[data-kind=recording] li { text-decoration: line-through; text-decoration-color: #6b7280; }
+.path li[data-fail=true] { background: #2a1414; color: #fca5a5; }
+.path li em { display: inline-flex; align-items: center; gap: 2px; padding: 1px 6px; border-radius: 4px; background: #dc2626; color: #fff; font-size: 11px; font-style: normal; text-decoration: none; }
+.path[data-kind=manual] li { background: #2a1d15; color: #fff; font-size: 18px; }
+.path[data-kind=manual] li[data-done=true] { background: #ff6b22; color: #150a04; }
+
+@media (prefers-reduced-motion: reduce) {
+  .slide svg, .meetChat p, .caret, .snipResult, .recording, .uploadError, .frame, .gap, .lightbox, .privacy, .cropped, .board, .path li { animation: none; }
+}

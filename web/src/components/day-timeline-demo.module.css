@@ -1,0 +1,33 @@
+/* The timeline usage example: a full-screen player around the real timeline. */
+.overlay { position: fixed; inset: 0; z-index: 90; display: flex; flex-direction: column; background: #0b0b0a; color: var(--ink); outline: none; animation: fade .2s ease-out; }
+.bar { display: flex; flex: none; align-items: center; gap: 12px; height: 60px; padding: 0 24px; border-bottom: 1px solid var(--line); }
+.bar b { font-size: 16px; }
+.bar > div { display: flex; gap: 8px; margin-left: auto; }
+.bar button { display: grid; width: 36px; height: 36px; place-items: center; border: 1px solid var(--line); border-radius: 50%; background: var(--panel); color: var(--ink); cursor: pointer; }
+.bar button:hover { border-color: #5a5953; }
+.fast { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border: 1px solid #6b3a28; border-radius: 999px; background: #2a1810; color: var(--accent-soft); font-size: 12px; font-weight: 700; animation: fade .2s ease-out; }
+.stage { position: relative; flex: 1; overflow: hidden; }
+.screen { position: absolute; left: 50%; top: 28px; width: 1200px; transform-origin: top center; transition: transform .6s cubic-bezier(.2, .8, .2, 1); }
+
+.md { position: absolute; z-index: 5; top: 24px; left: 50%; width: min(560px, calc(100% - 32px)); max-height: calc(100% - 130px); margin-left: calc(min(560px, calc(100% - 32px)) / -2); overflow: hidden; border-radius: 12px; background: #fdfcf9; color: #1f1e1b; box-shadow: 0 30px 80px rgba(0,0,0,.65); animation: rise .35s ease-out; }
+.md > header { display: flex; align-items: center; gap: 8px; height: 42px; padding: 0 18px; border-bottom: 1px solid #e7e5df; color: #57534e; font: 600 13px var(--font-mono), monospace; }
+.md > header svg { color: var(--accent); }
+.md > div { padding: 16px 22px 20px; }
+.md p { margin: 0 0 6px; font-size: 14px; line-height: 1.45; animation: fade .2s ease-out; }
+.md p[data-kind=h1] { font-size: 21px; font-weight: 800; letter-spacing: -.02em; }
+.md p[data-kind=h2] { margin-top: 12px; padding-bottom: 4px; border-bottom: 1px solid #e7e5df; font-size: 16px; font-weight: 800; }
+.md p[data-kind=text] { color: #57534e; }
+.md p[data-kind=item]::before { content: "•"; margin-right: 8px; color: var(--accent); }
+.md p[data-kind=sub] { margin-top: -3px; padding-left: 18px; color: #78716c; font-size: 12.5px; }
+.md p[data-kind=table] { color: #44403c; font: 13px var(--font-mono), monospace; white-space: pre; }
+
+.caption { position: absolute; left: 50%; bottom: 34px; z-index: 6; margin: 0; padding: 12px 22px; border-radius: 999px; background: #000000d9; color: #fff; font-size: 20px; font-weight: 800; letter-spacing: -.02em; white-space: nowrap; transform: translateX(-50%); box-shadow: 0 10px 30px rgba(0,0,0,.5); animation: rise .25s ease-out; }
+.progress { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: #ffffff14; }
+.progress span { display: block; height: 100%; background: var(--accent); }
+
+@keyframes fade { from { opacity: 0; } }
+@keyframes rise { from { transform: translateY(10px); opacity: 0; } }
+.caption { animation-name: captionRise; }
+@keyframes captionRise { from { transform: translate(-50%, 10px); opacity: 0; } }
+@media (max-width: 720px) { .caption { font-size: 15px; white-space: normal; width: calc(100% - 32px); text-align: center; } .md { left: 12px; right: 12px; width: auto; } }
+@media (prefers-reduced-motion: reduce) { .overlay, .fast, .md, .md p, .caption { animation: none; } }

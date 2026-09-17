@@ -51,6 +51,10 @@ test("캡처하려 하면 화면이 멈춰 공격이 안 보이고, 캡처가 �
   }
   assert.ok(snip.attackKeys.every((at) => snipAt(at + 0.1).key === "attack" && snipAt(at + 0.1).overlay));
   assert.equal(snipAt(snip.shortcut + 0.1).key, "shortcut");
+  // Every attack press lands while the game is frozen and marked as blocked.
+  assert.ok(snip.attackKeys.length >= 5 && snip.attackKeys.every((at) => snipAt(at).blocked && gameAt(at + 0.1).swing === null));
+  assert.equal(snipAt(snip.blocked[1] - 0.01).presses, snip.attackKeys.length);
+  assert.ok(snip.catch22[0] > snip.result[1] && snip.catch22[1] <= BEATS.prompt1[0] && snipAt(snip.catch22[0] + 0.1).catch22);
   assert.equal(snipAt(snip.shot).flash, 1);
   assert.equal(snipAt(snip.result[0] + 0.1).result, true);
   assert.ok(TAUNT_ATTACK > snip.close && TAUNT_ATTACK < snip.result[1]);

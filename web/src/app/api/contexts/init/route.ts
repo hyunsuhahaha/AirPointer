@@ -11,9 +11,9 @@ export async function POST(request: Request) {
   try {
     const origin = request.headers.get("origin");
     if (origin && origin !== new URL(request.url).origin) return Response.json({ error: "같은 사이트에서만 Context를 만들 수 있습니다." }, { status: 403 });
-    const body = await request.json() as { seconds?: number; files?: { path: string; type: string; size: number }[] };
+    const body = await request.json() as { seconds?: number; ttlMinutes?: number; files?: { path: string; type: string; size: number }[] };
     const files = validateContextFiles(body.files ?? []);
-    const context = newContextIdentity(Number(body.seconds));
+    const context = newContextIdentity(Number(body.seconds), body.ttlMinutes);
     return Response.json({ storage: "blob", ...context, files }, { headers: { "Cache-Control": "no-store" } });
   } catch (reason) {
     return Response.json({ error: reason instanceof Error ? reason.message : "Context를 준비하지 못했습니다." }, { status: 400 });

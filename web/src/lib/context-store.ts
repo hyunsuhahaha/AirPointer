@@ -1,12 +1,12 @@
 import "server-only";
 
-import { del, get, head, put } from "@vercel/blob";
+import { del, get, head, list, put } from "@vercel/blob";
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { MAX_LINK_TTL_MS, isExpired, linkTtlMs } from "./link-ttl";
 
-const CONTEXT_TTL_MS = 20 * 60 * 1_000;
 const MAX_CONTEXT_BYTES = 250 * 1024 * 1024;
 const MAX_CONTEXT_FILES = 400;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{40,64}$/;
@@ -17,7 +17,8 @@ export type StoredContextFile = { path: string; type: string; size: number };
 export type StoredContext = {
   token: string;
   createdAt: number;
-  expiresAt: number;
+  // null: kept until someone deletes it.
+  expiresAt: number | null;
   seconds: number;
   files: StoredContextFile[];
 };
@@ -42,12 +43,13 @@ export function blobContextStorageEnabled() {
   return Boolean(process.env.BLOB_READ_WRITE_TOKEN || (process.env.VERCEL_OIDC_TOKEN && process.env.BLOB_STORE_ID));
 }
 
-export function newContextIdentity(seconds: number) {
+export function newContextIdentity(seconds: number, ttlMinutes?: unknown) {
   const now = Date.now();
+  const ttl = linkTtlMs(ttlMinutes);
   return {
     token: randomBytes(32).toString("base64url"),
     createdAt: now,
-    expiresAt: now + CONTEXT_TTL_MS,
+    expiresAt: ttl === null ? null : now + ttl,
     seconds: Math.max(1, Math.min(300, Math.round(seconds))),
   };
 }
@@ -69,8 +71,9 @@ export function validateContextFiles(files: StoredContextFile[]) {
   return checked;
 }
 
-export async function finalizeBlobStoredContext(input: { token: string; createdAt: number; expiresAt: number; seconds: number; files: StoredContextFile[] }) {
-  if (!blobContextStorageEnabled() || !TOKEN_PATTERN.test(input.token) || input.expiresAt <= Date.now() || input.expiresAt > Date.now() + CONTEXT_TTL_MS) {
+export async function finalizeBlobStoredContext(input: { token: string; createdAt: number; expiresAt: number | null; seconds: number; files: StoredContextFile[] }) {
+  const badExpiry = input.expiresAt !== null && (typeof input.expiresAt !== "number" || input.expiresAt <= Date.now() || input.expiresAt > Date.now() + MAX_LINK_TTL_MS);
+  if (!blobContextStorageEnabled() || !TOKEN_PATTERN.test(input.token) || badExpiry) {
     throw new Error("Context 생성 정보가 올바르지 않습니다.");
   }
   const files = validateContextFiles(input.files);
@@ -96,14 +99,14 @@ async function cleanExpiredContexts(now = Date.now()) {
   await Promise.all(entries.filter((entry) => entry.isDirectory()).map(async (entry) => {
     try {
       const manifest = JSON.parse(await readFile(path.join(root, entry.name, "manifest.json"), "utf8")) as StoredContext;
-      if (manifest.expiresAt <= now) await rm(path.join(root, entry.name), { recursive: true, force: true });
+      if (isExpired(manifest.expiresAt, now)) await rm(path.join(root, entry.name), { recursive: true, force: true });
     } catch {
       if (entry.name.endsWith(".tmp")) await rm(path.join(root, entry.name), { recursive: true, force: true });
     }
   }));
 }
 
-export async function createStoredContext(input: { seconds: number; files: { path: string; type: string; bytes: Uint8Array }[] }) {
+export async function createStoredContext(input: { seconds: number; ttlMinutes?: unknown; files: { path: string; type: string; bytes: Uint8Array }[] }) {
   await cleanExpiredContexts();
   if (input.files.length > MAX_CONTEXT_FILES) throw new Error("Context 파일이 너무 많습니다.");
   const files = input.files.map((file) => {
@@ -120,10 +123,11 @@ export async function createStoredContext(input: { seconds: number; files: { pat
   const finalDirectory = contextDirectory(token)!;
   const temporaryDirectory = `${finalDirectory}.tmp`;
   const now = Date.now();
+  const ttl = linkTtlMs(input.ttlMinutes);
   const manifest: StoredContext = {
     token,
     createdAt: now,
-    expiresAt: now + CONTEXT_TTL_MS,
+    expiresAt: ttl === null ? null : now + ttl,
     seconds: Math.max(1, Math.min(300, Math.round(input.seconds))),
     files: files.map((file) => ({ path: file.path, type: file.type || "application/octet-stream", size: file.bytes.byteLength })),
   };
@@ -151,7 +155,7 @@ export async function readStoredContext(token: string) {
       const result = await get(contextBlobPath(token, "manifest.json"), { access: "private", useCache: false });
       if (!result || result.statusCode !== 200 || !result.stream) return null;
       const manifest = JSON.parse(await new Response(result.stream).text()) as StoredContext;
-      if (manifest.token !== token || manifest.expiresAt <= Date.now()) {
+      if (manifest.token !== token || isExpired(manifest.expiresAt)) {
         await deleteStoredContext(token);
         return null;
       }
@@ -160,7 +164,7 @@ export async function readStoredContext(token: string) {
   }
   try {
     const manifest = JSON.parse(await readFile(path.join(directory, "manifest.json"), "utf8")) as StoredContext;
-    if (manifest.token !== token || manifest.expiresAt <= Date.now()) {
+    if (manifest.token !== token || isExpired(manifest.expiresAt)) {
       await rm(directory, { recursive: true, force: true });
       return null;
     }
@@ -210,4 +214,33 @@ async function readStoredContextWithoutExpiry(token: string) {
     if (!result || result.statusCode !== 200 || !result.stream) return null;
     return JSON.parse(await new Response(result.stream).text()) as StoredContext;
   } catch { return null; }
+}
+
+// Links expire lazily when opened; this sweep (run daily by Vercel Cron) also
+// removes the ones nobody opened again, and uploads that were never finalized.
+const ABANDONED_UPLOAD_MS = 60 * 60 * 1_000;
+export async function sweepExpiredContexts(now = Date.now()) {
+  if (!blobContextStorageEnabled()) { await cleanExpiredContexts(now); return { checked: 0, deleted: 0 }; }
+  let checked = 0, deleted = 0;
+  let cursor: string | undefined;
+  do {
+    const page = await list({ prefix: `${blobPrefix}/`, mode: "folded", cursor });
+    for (const folder of page.folders) {
+      const token = folder.slice(blobPrefix.length + 1).replace(/\/$/, "");
+      if (!TOKEN_PATTERN.test(token)) continue;
+      checked += 1;
+      const manifest = await readStoredContextWithoutExpiry(token);
+      if (manifest) {
+        if (isExpired(manifest.expiresAt, now) && await deleteStoredContext(token)) deleted += 1;
+        continue;
+      }
+      const { blobs } = await list({ prefix: folder });
+      if (blobs.length && blobs.every((blob) => now - new Date(blob.uploadedAt).getTime() > ABANDONED_UPLOAD_MS)) {
+        await del(blobs.map((blob) => blob.pathname));
+        deleted += 1;
+      }
+    }
+    cursor = page.hasMore ? page.cursor : undefined;
+  } while (cursor);
+  return { checked, deleted };
 }

@@ -6,22 +6,26 @@ import { createPortal } from "react-dom";
 import { ArrowCounterClockwise, Pause, Play, SpeakerHigh, SpeakerSlash, X } from "@phosphor-icons/react";
 import { createOverviewSound } from "@/lib/overview-sound";
 import type { OverviewSound } from "@/lib/overview-sound";
+import * as bisectScript from "@/lib/usage-example-bisect";
 import * as classScript from "@/lib/usage-example-class";
-import * as corsScript from "@/lib/usage-example-cors";
 import * as flashScript from "@/lib/usage-example-flash";
 import * as game from "@/lib/usage-example-game";
+import * as installScript from "@/lib/usage-example-install";
+import * as meetingScript from "@/lib/usage-example-meeting";
+import * as motionScript from "@/lib/usage-example-motion";
 import * as qaScript from "@/lib/usage-example-qa";
 import { STAGE } from "@/lib/usage-example-timeline";
 import * as toastScript from "@/lib/usage-example-toast";
 import type { CueSound } from "@/lib/usage-example-timeline";
-import * as vmScript from "@/lib/usage-example-vm";
+import { BisectExample } from "./bisect-example";
 import { ClassExample } from "./class-example";
-import { CorsExample } from "./cors-example";
 import { FlashExample } from "./flash-example";
 import { GameExample } from "./game-example";
+import { InstallExample } from "./install-example";
+import { MeetingExample } from "./meeting-example";
+import { MotionExample } from "./motion-example";
 import { QaExample } from "./qa-example";
 import { ToastExample } from "./toast-example";
-import { VmExample } from "./vm-example";
 import styles from "./usage-examples.module.css";
 
 export type DeliveryMode = "manual" | "link" | "folder";
@@ -33,16 +37,24 @@ type Example = {
   Scene: (props: { t: number }) => ReactNode;
 };
 
+// "라면" after a vowel, "이라면" after a final consonant (직장인이라면).
+export const ramyeon = (word: string) => {
+  const code = word.charCodeAt(word.length - 1) - 0xac00;
+  return code >= 0 && code <= 11171 && code % 28 !== 0 ? "이라면" : "라면";
+};
+
 // New examples are added here; the top bar reads "당신이 {role}라면?" and
-// lists the roles in order. Roles end in a vowel so "라면" always fits.
+// lists the roles in order.
 const EXAMPLES: Example[] = [
-  { id: "toast", role: "웹 개발자", title: "안 눌리는 버튼", mode: "link", duration: toastScript.DURATION, speed: toastScript.SPEED, sounds: toastScript.SOUND_CUES, typing: toastScript.TYPING, Scene: ToastExample },
-  { id: "flash", role: "디자이너", title: "팀원은 못 보는 번쩍임", mode: "link", duration: flashScript.DURATION, speed: flashScript.SPEED, sounds: flashScript.SOUND_CUES, typing: flashScript.TYPING, Scene: FlashExample },
-  { id: "qa", role: "QA 엔지니어", title: "18분짜리 이슈 작성", mode: "link", duration: qaScript.DURATION, speed: qaScript.SPEED, sounds: qaScript.SOUND_CUES, typing: qaScript.TYPING, Scene: QaExample },
-  { id: "class", role: "코딩 강사", title: "끝없는 “아까 그거” 질문", mode: "link", duration: classScript.DURATION, speed: classScript.SPEED, sounds: classScript.SOUND_CUES, typing: classScript.TYPING, Scene: ClassExample },
-  { id: "cors", role: "풀스택 개발자", title: "CORS 아닌 CORS 에러", mode: "link", duration: corsScript.DURATION, speed: corsScript.SPEED, sounds: corsScript.SOUND_CUES, typing: corsScript.TYPING, Scene: CorsExample },
-  { id: "game", role: "게임 개발자", title: "공격하면 번쩍이는 노란 네모", mode: "manual", duration: game.DURATION, speed: game.SPEED, sounds: game.SOUND_CUES, typing: game.TYPING, Scene: GameExample },
-  { id: "vm", role: "인프라 엔지니어", title: "이유 없이 안 켜지는 VM", mode: "folder", duration: vmScript.DURATION, speed: vmScript.SPEED, sounds: vmScript.SOUND_CUES, typing: vmScript.TYPING, Scene: VmExample },
+  { id: "toast", role: "웹 개발자", title: "“버튼이 안 눌려요”", mode: "link", duration: toastScript.DURATION, speed: toastScript.SPEED, sounds: toastScript.SOUND_CUES, typing: toastScript.TYPING, Scene: ToastExample },
+  { id: "flash", role: "디자이너", title: "“이 번쩍임, 저만 보여요?”", mode: "link", duration: flashScript.DURATION, speed: flashScript.SPEED, sounds: flashScript.SOUND_CUES, typing: flashScript.TYPING, Scene: FlashExample },
+  { id: "meeting", role: "회의하는 직장인", title: "“방금 그 차트 뭐였죠?”", mode: "manual", duration: meetingScript.DURATION, speed: meetingScript.SPEED, sounds: meetingScript.SOUND_CUES, typing: meetingScript.TYPING, Scene: MeetingExample },
+  { id: "motion", role: "퍼블리셔", title: "“이거랑 똑같이 해줘”", mode: "manual", duration: motionScript.DURATION, speed: motionScript.SPEED, sounds: motionScript.SOUND_CUES, typing: motionScript.TYPING, Scene: MotionExample },
+  { id: "qa", role: "QA 엔지니어", title: "“재현 절차 좀 적어주세요”", mode: "link", duration: qaScript.DURATION, speed: qaScript.SPEED, sounds: qaScript.SOUND_CUES, typing: qaScript.TYPING, Scene: QaExample },
+  { id: "class", role: "코딩 강사", title: "“아까 그 명령어 뭐였죠?”", mode: "link", duration: classScript.DURATION, speed: classScript.SPEED, sounds: classScript.SOUND_CUES, typing: classScript.TYPING, Scene: ClassExample },
+  { id: "game", role: "게임 개발자", title: "“이 노란 네모 뭐야?”", mode: "manual", duration: game.DURATION, speed: game.SPEED, sounds: game.SOUND_CUES, typing: game.TYPING, Scene: GameExample },
+  { id: "install", role: "인프라 엔지니어", title: "“가이드대로 했는데 왜 안 돼?”", mode: "folder", duration: installScript.DURATION, speed: installScript.SPEED, sounds: installScript.SOUND_CUES, typing: installScript.TYPING, Scene: InstallExample },
+  { id: "vibe", role: "바이브 코더", title: "“뭘 고치다 버튼이 사라졌지?”", mode: "folder", duration: bisectScript.DURATION, speed: bisectScript.SPEED, sounds: bisectScript.SOUND_CUES, typing: bisectScript.TYPING, Scene: BisectExample },
 ];
 
 const MAX_TYPING_CLICKS_PER_SECOND = 14;
@@ -135,7 +147,7 @@ export function UsageExamples({ onClose, mode }: { onClose: () => void; mode?: D
               {item.role}
             </button>)}
           </nav>
-          <span>라면?</span>
+          <span>{ramyeon(example.role)}?</span>
         </div>}
         <div className={styles.controls}>
           <button type="button" onClick={toggleMuted} aria-label={muted ? "소리 켜기" : "소리 끄기"}>{muted ? <SpeakerSlash size={16} /> : <SpeakerHigh size={16} />}</button>
@@ -148,7 +160,7 @@ export function UsageExamples({ onClose, mode }: { onClose: () => void; mode?: D
       </header>
       {!example && <section className={styles.chooser} aria-label="직업 고르기">
         {mode && <p className={styles.chooserMode}>{DELIVERY_MODE_NAMES[mode]} 활용 예시</p>}
-        <h2>당신이 <span className={styles.blank} data-filled={pickedRole !== null}>{pickedRole === null ? "?" : examples[pickedRole].role}</span> 라면?</h2>
+        <h2>당신이 <span className={styles.blank} data-filled={pickedRole !== null}>{pickedRole === null ? "?" : examples[pickedRole].role}</span> {pickedRole === null ? "라면" : ramyeon(examples[pickedRole].role)}?</h2>
         <div className={styles.roleCards}>
           {examples.map((item, index) => <button key={item.id} type="button" onClick={() => selectExample(index)}
             onPointerEnter={() => setHoverIndex(index)} onPointerLeave={() => setHoverIndex(null)} onFocus={() => setHoverIndex(index)} onBlur={() => setHoverIndex(null)}>
@@ -161,7 +173,7 @@ export function UsageExamples({ onClose, mode }: { onClose: () => void; mode?: D
           style={{ width: STAGE.width, height: STAGE.height, transform: `translate(-50%, -50%) scale(${scale})` }}>
           <example.Scene t={t} />
           {ended && <div className={styles.endCard}>
-            <small>당신이 {example.role}라면</small>
+            <small>당신이 {example.role}{ramyeon(example.role)}</small>
             <strong>{example.title}, 한 번에 해결</strong>
             <div>
               <button type="button" className={styles.primary} onClick={restart}><ArrowCounterClockwise size={16} /> 다시 보기</button>

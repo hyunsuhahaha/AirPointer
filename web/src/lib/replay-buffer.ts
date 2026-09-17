@@ -408,6 +408,11 @@ export class BrowserReplayBuffer {
     return nearest?.dataUrl ?? null;
   }
 
+  // Changes that finished after `at`; the day timeline polls this.
+  changesEndedAfter(at: number): ChangeEvent[] {
+    return this.changeEvents.filter((event) => event.endedAt > at);
+  }
+
   exportMetadata(capsule: ReplayCapsule): { captures: PreviewFrame[]; events: ChangeEvent[] } {
     const within = (at: number) => at >= capsule.startedAt && at <= capsule.triggeredAt;
     return {

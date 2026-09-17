@@ -30,6 +30,12 @@ export function GameExample({ t }: { t: number }) {
           <GameScene hair={state.hair} sun={state.sun} swing={state.swing} square={state.square} slash={state.slash} enemyHit={state.enemyHit} />
         </div>
         {state.zoom > 1.3 && <span className={styles.huh}>???</span>}
+        {snip.blocked && <div className={styles.blocked} data-pressed={snip.pressedNow} role="status">
+          <b>⏸ 게임 멈춤</b>
+          <strong>🚫 입력 무시됨</strong>
+          <small>캡처 도구가 화면을 잡고 있어서 공격 키가 게임에 안 들어가요</small>
+          <em>공격 키 ×{snip.presses}</em>
+        </div>}
       </div>
     </section>
 
@@ -48,11 +54,17 @@ export function GameExample({ t }: { t: number }) {
     </div>}
     <ShutterFlash opacity={snip.flash} />
     {snip.key && <Keycaps>
-      {snip.key === "shortcut" ? <><kbd>⊞ Win</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd></> : <><kbd>Space</kbd><span>공격! …화면이 멈춰 있어 아무 반응 없음</span></>}
+      {snip.key === "shortcut" ? <><kbd>⊞ Win</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd></> : <><kbd>Space</kbd><span>공격! ✕ 반응 없음</span></>}
     </Keycaps>}
     {snip.result && <div className={styles.snipResult} role="status">
       <span><GameScene hair sun swing={null} square={false} /></span>
       <div><b>캡처 완료</b><small>노란 네모가 안 찍혔다…</small></div>
+    </div>}
+    {snip.catch22 && <div className={styles.catch22} role="note">
+      <p><span>🗡 공격해야</span><b>→</b><span data-bug="true">🟨 노란 네모가 뜬다</span></p>
+      <i>하지만</i>
+      <p><span>✂ 캡처를 켜면</span><b>→</b><span data-stop="true">⏸ 공격이 안 된다</span></p>
+      <small>그래서 이 버그는 캡처로 보여줄 수가 없다</small>
     </div>}
     {cursor.dragging && <div className={styles.dragGhost} style={{ left: cursor.x, top: cursor.y }}>{croppedFrame()}</div>}
     <Pointer {...cursor} />

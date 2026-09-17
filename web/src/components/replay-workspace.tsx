@@ -28,6 +28,10 @@ import { IncidentReview } from "./incident-review";
 import type { Incident } from "@/lib/incident-report";
 import { ModeGuide } from "./mode-guide";
 import { ScreenMemoryWorkbench } from "./screen-memory-workbench";
+import { DayTimeline } from "./day-timeline";
+import { DayTimelineDemo } from "./day-timeline-demo";
+import { useDayLogRecorder, useDayTimelineSettings } from "@/hooks/use-day-log-recorder";
+import { requestPersistence } from "@/lib/day-log-store";
 import type { AnalysisModelId, CaptureMetadata, CaptureSnapshot } from "@/lib/analysis-payload";
 import type { AnalysisMode, AnalysisTiming, EvidenceItem, ExplorationProgress } from "./browser-capture-panel";
 
@@ -230,6 +234,12 @@ export function ReplayWorkspace() {
   const [analysisRevision, setAnalysisRevision] = useState(0);
   const [incident, setIncident] = useState<Incident | undefined>();
   const [memoryEnabled, setMemoryEnabled] = useState(false);
+  const timeline = useDayTimelineSettings();
+  // The day timeline records only after its own start button, and only while sharing.
+  const [timelineOn, setTimelineOn] = useState(false);
+  const [timelineExampleOpen, setTimelineExampleOpen] = useState(false);
+  const timelineActive = timelineOn && Boolean(stream);
+  const { bookmark: bookmarkToday, status: labelerStatus } = useDayLogRecorder({ enabled: timelineActive, retention: timeline.retention, interval: timeline.interval, stream, videoRef: screenVideo, bufferRef: buffer });
   const [workQuestion, setWorkQuestion] = useState("");
   const [captureContext, setCaptureContext] = useState("");
   const [analysisEvidence, setAnalysisEvidence] = useState<EvidenceItem[]>([]);
@@ -419,16 +429,17 @@ export function ReplayWorkspace() {
     setMessage("순환 버퍼를 비웠습니다. 분석 결과와 직접 저장한 기록은 별도로 관리됩니다.");
     setRegionImage(null);
     setReplayBookmarks([]);
+    setTimelineOn(false);
   }, [stream]);
 
   const startSharing = useCallback(async () => {
     analysisController.current?.abort(); retryCapture.current = null;
     if (!navigator.mediaDevices?.getDisplayMedia) {
-      setStatus("error"); setMessage("이 브라우저는 화면 공유를 지원하지 않습니다. 최신 Chrome 또는 Edge를 사용해 주세요."); return;
+      setStatus("error"); setMessage("이 브라우저는 화면 공유를 지원하지 않습니다. 최신 Chrome 또는 Edge를 사용해 주세요."); return false;
     }
     try {
       const nextStream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 15, max: 24 } }, audio: false });
-      if (!screenVideo.current) return;
+      if (!screenVideo.current) return false;
       // Chrome restores transient activation after the display picker closes.
       // Request PiP immediately, before awaiting video playback or doing any
       // setup work, so the same explicit "화면 공유 시작" click can authorize
@@ -443,17 +454,24 @@ export function ReplayWorkspace() {
       nextStream.getVideoTracks()[0].addEventListener("ended", () => {
         analysisController.current?.abort(); retryCapture.current = null; replayCapsuleRef.current = null; buffer.current.stop(); setStream(null); setElapsed(0); setStatus("idle"); setMessage("화면 공유가 종료되어 버퍼를 비웠습니다.");
         setHighlight(null); setHighlightZoomUrl(""); setRegionImage(null);
-        setReplayBookmarks([]);
+        setReplayBookmarks([]); setTimelineOn(false);
       }, { once: true });
       setStream(nextStream);
       setReplayBookmarks([]);
       setFrames([]); setAnalysis(""); setIncident(undefined); setAnalysisEvidence([]); setAnalysisEvidencePreview(null); setExploration(undefined); setStatus("recording"); setMessage("기록 중입니다. 트리거 전에는 어떤 화면도 서버로 보내지 않습니다.");
       await pipPromise;
+      return true;
     } catch (reason) {
       const denied = reason instanceof DOMException && reason.name === "NotAllowedError";
       setStatus("error"); setMessage(denied ? "화면 공유가 취소되었습니다. 준비되면 다시 시작해 주세요." : "화면 공유를 시작하지 못했습니다.");
+      return false;
     }
   }, [retention]);
+  const startTimeline = useCallback(async () => {
+    if (!stream && !await startSharing()) return;
+    void requestPersistence();
+    setTimelineOn(true);
+  }, [startSharing, stream]);
 
   const captureFrames = useCallback(async (mode: Mode) => {
     if (!stream || !screenVideo.current) throw new Error("먼저 화면 공유를 시작해 주세요.");
@@ -1225,7 +1243,7 @@ export function ReplayWorkspace() {
   const dockLoadingLabel = "AirPointer 시작 중";
   const dockBadgeLabel = companionEnabled && companionReady ? "HOTKEY · EXE" : "EXE 연결 안 됨";
   const pipelineStages = viewMode === "browser" ? BROWSER_PIPELINE_STAGES : NATIVE_PIPELINE_STAGES;
-  const exportPanel = <AgentExportPanel key={stream?.id ?? "idle"} bufferRef={buffer} active={Boolean(stream)} seconds={sendSeconds} bufferMinutes={retention} onBufferMinutesChange={changeRetention} onSecondsChange={setSendSeconds} captureIntervalMs={captureIntervalMs} onCaptureIntervalChange={setCaptureIntervalMs} recording={Boolean(stream)} onStartRecording={() => void startSharing()} onStopRecording={stopSharing} minimized={pipMinimized} onMinimizedChange={changePipMinimized} halfScreen={pipHalfScreen} onHalfScreenChange={pipContainer ? changePipHalfScreen : undefined} surface={stream?.getVideoTracks()[0]?.getSettings().displaySurface ?? "unknown"} />;
+  const exportPanel = <AgentExportPanel key={stream?.id ?? "idle"} bufferRef={buffer} active={Boolean(stream)} seconds={sendSeconds} bufferMinutes={retention} onBufferMinutesChange={changeRetention} onSecondsChange={setSendSeconds} captureIntervalMs={captureIntervalMs} onCaptureIntervalChange={setCaptureIntervalMs} recording={Boolean(stream)} onStartRecording={() => void startSharing()} onStopRecording={stopSharing} minimized={pipMinimized} onMinimizedChange={changePipMinimized} halfScreen={pipHalfScreen} onHalfScreenChange={pipContainer ? changePipHalfScreen : undefined} surface={stream?.getVideoTracks()[0]?.getSettings().displaySurface ?? "unknown"} onBookmark={timelineActive ? bookmarkToday : undefined} />;
 
   return (
     <main className={styles.shell}>
@@ -1236,7 +1254,7 @@ export function ReplayWorkspace() {
           <button type="button" role="tab" aria-selected={viewMode === "browser"} data-active={viewMode === "browser"} onClick={() => setViewMode("browser")}>리플레이 작업대</button>
           <button type="button" role="tab" aria-selected={viewMode === "full"} data-active={viewMode === "full"} onClick={() => setViewMode("full")}>확장 기능</button>
         </div>
-        <div className={styles.navMeta}><span className={styles.localBadge}><LockKey size={14} weight="bold" /> LOCAL BUFFER</span><a href="#how">작동 원리</a><a href="#privacy">개인정보</a><a href="#pipeline">파이프라인</a></div>
+        <div className={styles.navMeta}><span className={styles.localBadge}><LockKey size={14} weight="bold" /> LOCAL BUFFER</span><a href="#how">작동 원리</a><a href="#timeline">오늘 타임라인</a><a href="#pipeline">파이프라인</a></div>
       </header>
       {viewMode === "full" && !companionEnabled && <div className={styles.modeNotice}>
         <span>Full Access는 별도 프로그램(AirPointer) 설치가 필요합니다 — 설치 전에도 아래에서 미리 둘러볼 수 있어요.</span>
@@ -1389,10 +1407,8 @@ export function ReplayWorkspace() {
 
       {viewMode === "full" && <section className={styles.memoryOptIn}><label className={styles.switch}><input type="checkbox" checked={memoryEnabled} onChange={event => setMemoryEnabled(event.target.checked)} /><span /><b>화면 기록을 이 브라우저에 영구 보관 (선택)</b></label><p>켜면 OCR과 화면 이미지가 기기에 저장됩니다. 공유를 중지해도 남습니다.</p>{memoryEnabled && <ScreenMemoryWorkbench recording={Boolean(stream)} companionConnected={companionConnected} companionToken={companionToken} onAddToReplay={addMemoryFrameToReplay} />}</section>}
 
-      <section className={styles.gestureSection} id="privacy">
-        <div className={styles.gestureCopy}><p className={styles.eyebrow}>SCREEN CONTEXT</p><h2>상황을 다시<br />설명하지 않아도 됩니다.</h2><p>화면 공유를 시작하면 최근 장면을 잠깐 보관합니다. 작은 창에서 내보내기를 누르면 직전 흐름과 화면 변화 기록을 에이전트에 전달할 수 있습니다.</p></div>
-        <div className={styles.privacyList}><div><strong>01</strong><p><b>기기 안에서만</b><span>최근 1~5분은 브라우저 메모리에만 존재합니다.</span></p></div><div><strong>02</strong><p><b>필요한 순간만</b><span>선택한 최근 구간을 에이전트에게 보여줍니다.</span></p></div><div><strong>03</strong><p><b>공유 종료 즉시</b><span>화면 공유를 끄면 순환 버퍼도 바로 비웁니다.</span></p></div></div>
-      </section>
+      <DayTimeline active={timelineActive} recorder={labelerStatus} onStart={() => void startTimeline()} onStop={() => setTimelineOn(false)} onShowExample={() => setTimelineExampleOpen(true)} />
+      {timelineExampleOpen && <DayTimelineDemo onClose={() => setTimelineExampleOpen(false)} />}
 
 
       <AnimatePresence>

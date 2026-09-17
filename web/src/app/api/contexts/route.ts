@@ -23,7 +23,7 @@ export async function POST(request: Request) {
       if (!(upload instanceof File)) throw new Error("Context 파일이 올바르지 않습니다.");
       return { path: paths[index] as string, type: upload.type, bytes: new Uint8Array(await upload.arrayBuffer()) };
     }));
-    const context = await createStoredContext({ seconds, files });
+    const context = await createStoredContext({ seconds, ttlMinutes: form.get("ttlMinutes"), files });
     return Response.json({ token: context.token, expiresAt: context.expiresAt, agentPath: `/context/${context.token}/agent` }, {
       status: 201,
       headers: { "Cache-Control": "no-store" },

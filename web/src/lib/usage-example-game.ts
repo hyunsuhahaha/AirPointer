@@ -12,7 +12,7 @@ export { CHAT, CHAT_INPUT, SEND_BUTTON, STAGE, typed } from "./usage-example-tim
 
 // The failed screenshot beat sits between the bug and the prompt; every beat
 // after it is written as its original time plus this offset.
-const SNIP_SECONDS = 4.4;
+const SNIP_SECONDS = 6.4;
 const after = (seconds: number) => seconds + SNIP_SECONDS;
 export const DURATION = after(34.5);
 // Playback runs faster than script time.
@@ -77,7 +77,13 @@ const inputTarget = INPUT_TARGET;
 // Beats. Each is [start, end] in seconds.
 export const BEATS = {
   bug: [0.4, 4.8],
-  snip: { shortcut: 5, open: 5.2, attackKeys: [5.8, 6.8], drag: [7.2, 7.8], shot: 7.95, close: 8.1, result: [8.2, 9.4] },
+  // The screenshot tool freezes the game, so the attack key does nothing:
+  // five presses, a blocked stamp, then a capture without the square and a
+  // card spelling out the catch-22.
+  snip: {
+    shortcut: 5, open: 5.2, attackKeys: [5.8, 6.1, 6.4, 6.7, 7.0], blocked: [5.8, 7.4],
+    drag: [7.6, 8.2], shot: 8.35, close: 8.5, result: [8.6, 9.8], catch22: [9.9, 11.3],
+  },
   prompt1: [after(5), after(7.6)],
   send1: after(7.9),
   reply1: { thinking: after(8.3), text: [after(9.3), after(10.4)], tool: after(10.6), done: after(11.3) },
@@ -102,7 +108,7 @@ export const BEATS = {
 } as const;
 
 // The 8.3 swing lands right after the screenshot tool closes, just to taunt.
-export const TAUNT_ATTACK = 8.3;
+export const TAUNT_ATTACK = 8.7;
 export const FIXED_ATTACK = after(29.5);
 export const ATTACKS = [1, 2.4, 3.6, TAUNT_ATTACK, after(12.6), after(13.9), FIXED_ATTACK, after(30.7), after(31.9)];
 const SWING_SECONDS = 0.35;
@@ -192,10 +198,14 @@ export const CROP = { start: cropStart, end: cropEnd };
 export function snipAt(t: number) {
   const snip = BEATS.snip;
   const key = t >= snip.shortcut && t < snip.shortcut + 0.7 ? "shortcut"
-    : snip.attackKeys.some((at) => t >= at && t < at + 0.5) ? "attack" : null;
+    : snip.attackKeys.some((at) => t >= at && t < at + 0.3) ? "attack" : null;
   const [dragStart, dragEnd] = snip.drag;
   return {
     key: key as "shortcut" | "attack" | null,
+    blocked: t >= snip.blocked[0] && t < snip.blocked[1],
+    presses: snip.attackKeys.filter((at) => t >= at).length,
+    pressedNow: snip.attackKeys.some((at) => t >= at && t < at + 0.12),
+    catch22: t >= snip.catch22[0] && t < snip.catch22[1],
     overlay: t >= snip.open && t < snip.close,
     selection: t < dragStart ? 0 : Math.min(1, (t - dragStart) / (dragEnd - dragStart)),
     flash: Math.max(0, 1 - Math.abs(t - snip.shot) / 0.18),
@@ -208,10 +218,10 @@ export function snipAt(t: number) {
 const CURSOR_KEYS: CursorKey[] = [
   { t: 0, x: 640, y: 640 },
   { t: 5.3, x: 640, y: 640 },
-  { t: 6.9, ...SNIP_RECT.start },
+  { t: 7.3, ...SNIP_RECT.start },
   { t: BEATS.snip.drag[0], ...SNIP_RECT.start },
   { t: BEATS.snip.drag[1], ...SNIP_RECT.end },
-  { t: 8.7, ...SNIP_RECT.end },
+  { t: 9.1, ...SNIP_RECT.end },
   { t: after(4.85), ...inputTarget },
   { t: after(7.55), ...inputTarget },
   { t: after(7.85), ...SEND_BUTTON },
@@ -253,8 +263,9 @@ export function cursorAt(t: number) {
 
 export const CAPTIONS: Caption[] = [
   { text: "공격할 때마다 이상한 노란 네모가 번쩍…", start: 0.5, end: 4.8 },
-  { text: "캡처하려고 공격 키를 눌러봐도…", start: 5, end: 8.1 },
-  { text: "…캡처 중엔 공격을 못 한다!", start: 8.2, end: 9.3 },
+  { text: "캡처 도구를 켜고 공격 키를 눌러봐도…", start: 5, end: 8.5 },
+  { text: "…캡처 중엔 게임이 멈춰서 공격이 안 된다", start: 8.6, end: 9.8 },
+  { text: "공격해야 보이는 버그인데, 캡처 중엔 공격이 안 된다", start: 9.9, end: 11.3 },
   { text: "결국 말로 설명해 봅니다", start: after(5.1), end: after(8) },
   { text: "…네모는 그대로, 노란 건 다 사라졌다", start: after(12.4), end: after(15.6) },
   { text: "방금그거뭐였지 Manual로 그 순간을 찾아서", start: after(16.2), end: after(21.7) },
@@ -272,6 +283,8 @@ export const SOUND_CUES: { at: number; sound: SoundName }[] = [
   ...[0, 0.08, 0.16].map((offset) => ({ at: BEATS.snip.shortcut + offset, sound: "click" as const })),
   ...BEATS.snip.attackKeys.map((at) => ({ at, sound: "click" as const })),
   { at: BEATS.snip.shot, sound: "shutter" },
+  { at: BEATS.snip.blocked[0] + 0.05, sound: "boing" },
+  { at: BEATS.snip.catch22[0], sound: "whoosh" },
   { at: BEATS.send1 + 0.1, sound: "pop" },
   { at: BEATS.reply1.text[0], sound: "pop" },
   { at: BEATS.bald + 0.4, sound: "boing" },

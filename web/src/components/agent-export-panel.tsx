@@ -2,8 +2,11 @@
 
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, RefObject } from "react";
-import { ArrowClockwise, ArrowDownLeft, ArrowUpRight, CaretLeft, CaretRight, CaretUp, Check, CircleNotch, Copy, CornersOut, DownloadSimple, FolderOpen, FolderPlus, FrameCorners, LinkSimple, MagnifyingGlassPlus, Minus, PaperPlaneTilt, Play, Stop, Trash, X } from "@phosphor-icons/react";
+import { ArrowClockwise, ArrowDownLeft, ArrowUpRight, BookmarkSimple, CaretLeft, CaretRight, CaretUp, Check, CircleNotch, Copy, CornersOut, DownloadSimple, FolderOpen, FolderPlus, FrameCorners, LinkSimple, MagnifyingGlassPlus, Minus, PaperPlaneTilt, Play, Stop, Trash, X } from "@phosphor-icons/react";
 import { createAgentLink, deleteAgentLink } from "@/lib/agent-link";
+import { DEFAULT_LINK_TTL, LINK_TTL_OPTIONS, MAX_UNLIMITED_LINKS, UNLIMITED, linkTtlLabel, parseLinkTtl } from "@/lib/link-ttl";
+import type { LinkTtl } from "@/lib/link-ttl";
+import { forgetLink, readMyLinks, rememberLink, unlimitedLinkCount } from "@/lib/my-links";
 import type { AgentLink } from "@/lib/agent-link";
 import { exportAgentContext } from "@/lib/browser-agent-export";
 import { chooseExportDirectory, createExportDirectory, localExportPath, localFolderPrompt, savedExportDirectory, writeExportFolder } from "@/lib/export-directory";
@@ -34,13 +37,14 @@ const QUICK_MODES: { mode: DeliveryMode; label: string; size: [number, number] }
 ];
 type ExportResult = AgentExportBundle & { delivery: DeliveryMode; share?: AgentLink };
 
-export function AgentExportPanel({ bufferRef, active, seconds, bufferMinutes, onBufferMinutesChange, onSecondsChange, captureIntervalMs, onCaptureIntervalChange, recording, onStartRecording, onStopRecording, minimized, onMinimizedChange, halfScreen, onHalfScreenChange, surface }: {
+export function AgentExportPanel({ bufferRef, active, seconds, bufferMinutes, onBufferMinutesChange, onSecondsChange, captureIntervalMs, onCaptureIntervalChange, recording, onStartRecording, onStopRecording, minimized, onMinimizedChange, halfScreen, onHalfScreenChange, surface, onBookmark }: {
   bufferRef: RefObject<BrowserReplayBuffer>;
   active: boolean; seconds: number; bufferMinutes: number; surface: string;
   onBufferMinutesChange: (minutes: number) => void; onSecondsChange: (seconds: number) => void;
   captureIntervalMs: number; onCaptureIntervalChange: (ms: number) => void;
   recording: boolean; onStartRecording: () => void; onStopRecording: () => void;
   minimized: boolean; onMinimizedChange: (minimized: boolean, restoreSize?: [number, number]) => void;
+  onBookmark?: () => void;
   // Only provided inside the PiP window, the one place a resize does anything.
   halfScreen: boolean; onHalfScreenChange?: (halfScreen: boolean) => void;
 }) {
@@ -56,7 +60,12 @@ export function AgentExportPanel({ bufferRef, active, seconds, bufferMinutes, on
   const [mode, setMode] = useState<DeliveryMode | null>(null);
   const [exportDirectory, setExportDirectory] = useState<WritableDirectory | null>(null);
   const [creatingFolder, setCreatingFolder] = useState(false);
+  const [bookmarked, setBookmarked] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
+  const [linkTtl, setLinkTtl] = useState<LinkTtl>(DEFAULT_LINK_TTL);
+  const [myLinks, setMyLinks] = useState<AgentLink[]>([]);
+  const [showMyLinks, setShowMyLinks] = useState(false);
+  const [copiedLink, setCopiedLink] = useState("");
   const [result, setResult] = useState<ExportResult | null>(null);
   const [manualTimeline, setManualTimeline] = useState<ManualTimeline | null>(null);
   const [manualLoading, setManualLoading] = useState(false);
@@ -96,6 +105,7 @@ export function AgentExportPanel({ bufferRef, active, seconds, bufferMinutes, on
   const resetResult = () => { setResult(null); setCopied(false); setError(""); };
   const selectMode = (next: DeliveryMode, resize = true) => {
     resetResult(); setMode(next);
+    if (next === "link") setMyLinks(readMyLinks());
     if (next === "manual" && resize) try { panel.current?.ownerDocument.defaultView?.resizeTo(...MANUAL_WINDOW_SIZE); } catch { /* Browser owns PiP sizing. */ }
   };
 
@@ -109,7 +119,11 @@ export function AgentExportPanel({ bufferRef, active, seconds, bufferMinutes, on
       if (!activeNow.current) throw new Error("화면 공유가 끝나 Context를 만들지 않았습니다.");
       let share: AgentLink | undefined;
       if (mode === "link") {
-        share = await createAgentLink(next.files, seconds);
+        if (linkTtl === UNLIMITED && unlimitedLinkCount(readMyLinks()) >= MAX_UNLIMITED_LINKS) {
+          throw new Error(`무제한 링크는 ${MAX_UNLIMITED_LINKS}개까지 둘 수 있어요. 내 링크에서 하나를 삭제해 주세요.`);
+        }
+        share = await createAgentLink(next.files, seconds, linkTtl);
+        rememberLink(share); setMyLinks(readMyLinks());
         next.fileName = "Agent Link";
         next.prompt = `최근 ${seconds}초 화면 기록을 확인해서 제가 무엇을 하고 있었는지 파악해 주세요.\n\n${share.url}`;
       } else {
@@ -143,7 +157,7 @@ export function AgentExportPanel({ bufferRef, active, seconds, bufferMinutes, on
   };
   const removeLink = async () => {
     if (!result?.share) return;
-    try { await deleteAgentLink(result.share.token); setResult(null); setCopied(false); }
+    try { await deleteAgentLink(result.share.token); forgetLink(result.share.token); setMyLinks(readMyLinks()); setResult(null); setCopied(false); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "Agent Link를 삭제하지 못했습니다."); }
   };
   const changeBuffer = (minutes: number) => { resetResult(); onBufferMinutesChange(minutes); };
@@ -299,6 +313,8 @@ export function AgentExportPanel({ bufferRef, active, seconds, bufferMinutes, on
       ? <button type="button" className={styles.recordToggle} data-recording="true" disabled={busy} onClick={() => { if (minimized) onMinimizedChange(false); setConfirmStop(true); }}><Stop size={10} weight="fill" />중지</button>
       : <button type="button" className={styles.recordToggle} disabled={busy} onClick={onStartRecording}><Play size={10} weight="fill" />기록 시작</button>)}
   </div>;
+  const bookmarkButton = onBookmark && active && <button type="button" className={styles.bookmarkButton} data-done={bookmarked} aria-label="지금 화면 북마크" title="오늘 타임라인에 북마크"
+    onClick={() => { onBookmark(); setBookmarked(true); window.setTimeout(() => setBookmarked(false), 1_200); }}>{bookmarked ? <Check size={12} weight="bold" /> : <BookmarkSimple size={12} weight="bold" />}</button>;
   const minimizeButton = <button type="button" className={styles.minimizeButton} aria-label={minimized ? "창 펼치기" : "창 최소화"} title={minimized ? "펼치기" : "최소화"}
     onClick={() => onMinimizedChange(!minimized)}>{minimized ? <CornersOut size={13} /> : <Minus size={13} weight="bold" />}</button>;
 
@@ -306,7 +322,7 @@ export function AgentExportPanel({ bufferRef, active, seconds, bufferMinutes, on
     <header><div className={styles.headerControls}>{recordingControls}
       {QUICK_MODES.map((quick, index) => <button key={quick.mode} type="button" className={styles.quickMode} aria-label={quick.label} title={quick.label}
         onClick={() => { onMinimizedChange(false, quick.size); selectMode(quick.mode, false); }}>{index + 1}</button>)}
-      {minimizeButton}</div></header>
+      {bookmarkButton}{minimizeButton}</div></header>
   </main>;
 
   return <main ref={panel} className={styles.panel} aria-label="AI 맥락 내보내기">
@@ -316,7 +332,7 @@ export function AgentExportPanel({ bufferRef, active, seconds, bufferMinutes, on
         <label>전송 구간<select aria-label="전송 구간" value={seconds} disabled={busy} onChange={(event) => changeWindow(Number(event.target.value))}>{windows.map((value) => <option key={value} value={value}>{value < 60 ? `${value}초` : `${value / 60}분`}</option>)}</select></label>
         <label title="사이 화면을 몇 초마다 저장할지 정합니다. 화면이 크게 바뀐 순간은 간격과 관계없이 저장됩니다.">캡처 간격<select aria-label="캡처 간격" value={captureIntervalMs} disabled={busy} onChange={(event) => onCaptureIntervalChange(Number(event.target.value))}>{CAPTURE_INTERVALS_MS.map((value) => <option key={value} value={value}>{`${value / 1_000}초`}</option>)}</select></label>
         {recordingControls}
-        {minimizeButton}
+        {bookmarkButton}{minimizeButton}
       </div>
     </header>
     <div className={styles.body}>
@@ -335,6 +351,34 @@ export function AgentExportPanel({ bufferRef, active, seconds, bufferMinutes, on
         })()}><FolderOpen size={12} />폴더 선택</button>
         <button type="button" className={styles.directoryButton} disabled={busy} onClick={() => { setNewFolderName(""); setCreatingFolder((open) => !open); }}><FolderPlus size={12} />새 폴더</button>
       </div>}
+      {mode === "link" && <div className={styles.modeNoteRow}>
+        <label className={styles.linkTtl}>링크 유지<select aria-label="링크 유지 시간" value={linkTtl} disabled={busy} onChange={(event) => setLinkTtl(parseLinkTtl(event.target.value))}>
+          {LINK_TTL_OPTIONS.map((value) => <option key={value} value={value}>{linkTtlLabel(value)}</option>)}
+        </select></label>
+        <button type="button" className={styles.directoryButton} aria-expanded={showMyLinks} onClick={() => { setMyLinks(readMyLinks()); setShowMyLinks((open) => !open); }}>
+          <LinkSimple size={12} />내 링크 {myLinks.length}
+        </button>
+      </div>}
+      {mode === "link" && <p className={styles.linkWarning} data-strong={linkTtl === UNLIMITED}>
+        {linkTtl === UNLIMITED
+          ? `삭제할 때까지 링크를 가진 누구나 볼 수 있어요. 무제한 링크는 이 브라우저에서 ${MAX_UNLIMITED_LINKS}개까지 (${unlimitedLinkCount(myLinks)}/${MAX_UNLIMITED_LINKS}).`
+          : `${linkTtlLabel(linkTtl)}이 지나면 자동으로 삭제됩니다.`}
+      </p>}
+      {mode === "link" && showMyLinks && <ul className={styles.myLinks} aria-label="내 링크">
+        {myLinks.length === 0 && <li className={styles.myLinksEmpty}>이 브라우저에서 만든 링크가 없어요.</li>}
+        {myLinks.map((link) => <li key={link.token}>
+          <span><b>최근 {link.seconds < 60 ? `${link.seconds}초` : `${link.seconds / 60}분`}</b><small>{new Date(link.createdAt).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })} 생성 · {link.expiresAt === null ? "삭제할 때까지" : `${new Date(link.expiresAt).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })} 만료`}</small></span>
+          <button type="button" aria-label="링크 복사" title="링크 복사" onClick={() => void copyText(link.url, panel.current?.ownerDocument ?? document).then(() => setCopiedLink(link.token), () => setError("링크를 복사하지 못했습니다."))}>
+            {copiedLink === link.token ? <Check size={12} /> : <Copy size={12} />}
+          </button>
+          <button type="button" aria-label="링크 삭제" title="링크 삭제" onClick={() => void (async () => {
+            try {
+              await deleteAgentLink(link.token); forgetLink(link.token); setMyLinks(readMyLinks());
+              if (result?.share?.token === link.token) { setResult(null); setCopied(false); }
+            } catch (reason) { setError(reason instanceof Error ? reason.message : "Agent Link를 삭제하지 못했습니다."); }
+          })()}><Trash size={12} /></button>
+        </li>)}
+      </ul>}
       {mode === "folder" && creatingFolder && <form className={styles.newFolderRow} onSubmit={(event) => { event.preventDefault(); void createFolder(); }}>
         <input aria-label="새 폴더 이름" placeholder={exportDirectory ? `${exportDirectory.name} 안에 만들 폴더 이름` : "폴더 이름 (만들 위치를 다음에 선택)"} value={newFolderName}
           autoFocus disabled={busy} onChange={(event) => setNewFolderName(event.target.value)} />
@@ -345,7 +389,7 @@ export function AgentExportPanel({ bufferRef, active, seconds, bufferMinutes, on
         onToggleGap={toggleGap} onToggleFrame={toggleFrame} onPreview={openPreview} onPrepareFrame={prepareManualFrame} onDownload={downloadSelected} onRefresh={refreshManual} />}
       {error && <p className={styles.error} role="alert">{error}</p>}
       {result && mode !== "manual" && <section className={styles.result} aria-live="polite">
-        <p className={styles.success}><Check size={15} weight="bold" />{result.delivery === "link" ? `링크 준비됨 · ${new Date(result.share!.expiresAt).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })} 만료` : result.fileName}</p>
+        <p className={styles.success}><Check size={15} weight="bold" />{result.delivery === "link" ? `링크 준비됨 · ${result.share!.expiresAt === null ? "삭제할 때까지 유지" : `${new Date(result.share!.expiresAt).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })} 만료`}` : result.fileName}</p>
         <p className={styles.steps}>{result.delivery === "link" ? "이 프롬프트만 AI에 붙여넣으세요." : "로컬 파일 접근이 가능한 Agent에 프롬프트를 붙여넣으세요."}</p>
         <label className={styles.prompt}>에이전트에 붙여넣을 프롬프트<textarea readOnly value={prompt} onFocus={(event) => event.currentTarget.select()} /></label>
         <button type="button" className={styles.copyButton} onClick={() => void copyPrompt()}>{copied ? <Check size={15} /> : <Copy size={15} />}{copied ? "복사되었습니다" : "프롬프트 복사"}<PaperPlaneTilt size={14} /></button>
