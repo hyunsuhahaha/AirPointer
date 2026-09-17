@@ -31,6 +31,13 @@ test("저장 토스트는 내보내기 버튼을 덮고, 사라진 뒤에도 수
     assert.equal(state.toastOpacity, 0);
     assert.equal(state.toastGhost, true);
   }
+  // The dead clicks last a while: slow ones, a puzzled pause, then a burst.
+  const clicks = BEATS.deadClicks;
+  assert.ok(clicks.length >= 10 && clicks.at(-1)! - clicks[0] >= 2.5);
+  assert.ok(BEATS.puzzled[0] > clicks[2] && BEATS.puzzled[1] < clicks[3]);
+  assert.equal(browserAt(clicks.at(-1)!).deadClicks, clicks.length);
+  assert.ok(browserAt(clicks.at(-1)! + 0.05).deadPops.length >= 2);
+  assert.equal(browserAt(BEATS.devtools).deadClicks, 0);
   assert.equal(browserAt(BEATS.exportWorks).toastGhost, false);
   assert.equal(browserAt(BEATS.exportWorks - 0.01).exportRequest, false);
   assert.equal(browserAt(BEATS.downloaded).downloaded, true);

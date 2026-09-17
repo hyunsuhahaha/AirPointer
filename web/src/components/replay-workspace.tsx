@@ -25,6 +25,7 @@ import { ProjectOverview } from "./project-overview";
 import { UsageExamples } from "./usage-examples/usage-examples";
 import { IncidentReview } from "./incident-review";
 import type { Incident } from "@/lib/incident-report";
+import { ModeGuide } from "./mode-guide";
 import { ScreenMemoryWorkbench } from "./screen-memory-workbench";
 import type { AnalysisModelId, CaptureMetadata, CaptureSnapshot } from "@/lib/analysis-payload";
 import type { AnalysisMode, AnalysisTiming, EvidenceItem, ExplorationProgress } from "./browser-capture-panel";
@@ -1267,7 +1268,7 @@ export function ReplayWorkspace() {
                 <strong>눈 깜빡할 사이 사라진 단서.</strong>
                 <span>실제로 어떻게 쓰이는지 먼저 보거나, 내 화면에서 바로 시작해 보세요.</span>
                 <div className={styles.emptyActions}><button className={styles.primary} onClick={() => setExamplesOpen(true)}><Play size={18} weight="fill" /> 실제 활용 예시</button><button className={styles.demoStart} onClick={() => void startSharing()} aria-label="화면 공유 시작">내 화면에서 사용하기 ↗</button></div>
-                <small>게임 개발 등 실제 상황을 애니메이션으로 보여드려요</small>
+                <small>웹·게임 개발자라면 어떻게 쓰는지 애니메이션으로 보여드려요</small>
               </div>}
               {stream && <div className={styles.liveFlag}><span /> REC</div>}
               <div hidden={!stream} className={styles.nowLine} style={{ left: `${Math.max(2, bufferPercent)}%` }}><span>NOW</span></div>
@@ -1323,7 +1324,7 @@ export function ReplayWorkspace() {
           </>}
           </details>}
           <>
-            {!stream && <div className={styles.welcomeSteps}><h2>사라졌어도,<br />찾을 수 있으니까.</h2><ol><li><b>01</b> 잠깐 나타난 오류를 놓치세요.</li><li><b>02</b> AI가 과거 화면에서 단서를 찾습니다.</li><li><b>03</b> 근거와 함께 사건을 기록하세요.</li></ol></div>}
+            {!stream && <ModeGuide />}
             {stream && viewMode === "browser" && !pipContainer && exportPanel}
             {stream && viewMode === "browser" && pipContainer && <p>항상 위에 뜬 작은 창에서 모드를 고르고 AI 내보내기를 누르세요.</p>}
             {stream && viewMode === "full" && <><textarea className={styles.workQuestion} aria-label="추가 질문 (선택)" placeholder="질문 없이 버튼만 눌러도 됩니다. 더 궁금한 내용은 여기에 적으세요." value={workQuestion} onChange={event => setWorkQuestion(event.target.value)} maxLength={500} />

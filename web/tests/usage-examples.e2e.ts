@@ -16,7 +16,15 @@ test("실제 활용 예시 01: 원인을 좁혀 말해도 캡처만 요구하던
   await page.goto(url);
   await page.getByRole("button", { name: "실제 활용 예시" }).click();
   const dialog = page.getByRole("dialog", { name: "실제 활용 예시" });
-  await expect(dialog.getByRole("button", { name: /01\s*웹 개발/ })).toHaveAttribute("aria-pressed", "true");
+  // Nothing plays until a role is picked in the middle of the screen.
+  const chooser = dialog.getByRole("region", { name: "직업 고르기" });
+  await expect(chooser.getByRole("heading", { name: /당신이\s*\?\s*라면\?/ })).toBeVisible();
+  await expect(dialog.getByRole("region", { name: "브라우저" })).toHaveCount(0);
+  await chooser.getByRole("button", { name: /웹 개발자/ }).hover();
+  await expect(chooser.getByRole("heading", { name: /당신이\s*웹 개발자\s*라면\?/ })).toBeVisible();
+  await chooser.getByRole("button", { name: /웹 개발자/ }).click();
+  await expect(chooser).toHaveCount(0);
+  await expect(dialog.getByRole("navigation", { name: "직업 선택" }).getByRole("button", { name: "웹 개발자" })).toHaveAttribute("aria-pressed", "true");
   const chat = dialog.getByRole("region", { name: "Claudy 대화" });
   const browser = dialog.getByRole("region", { name: "브라우저" });
 
@@ -43,13 +51,41 @@ test("실제 활용 예시 01: 원인을 좁혀 말해도 캡처만 요구하던
   await expect(dialog.getByText("안 눌리는 버튼, 한 번에 해결")).toBeVisible();
 });
 
+test("실제 활용 예시 디자이너: 캡처에 안 찍히는 번쩍임을 링크 하나로 팀 전원이 같이 보고, 개발자의 AI가 원인을 찾는다", async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto(url);
+  await page.getByRole("button", { name: "실제 활용 예시" }).click();
+  const dialog = page.getByRole("dialog", { name: "실제 활용 예시" });
+  await dialog.getByRole("region", { name: "직업 고르기" }).getByRole("button", { name: /디자이너/ }).click();
+  await expect(dialog.getByRole("navigation", { name: "직업 선택" }).getByRole("button", { name: "디자이너" })).toHaveAttribute("aria-pressed", "true");
+  const chat = dialog.getByRole("region", { name: "팀 채팅" });
+
+  // 1. Screenshots miss the flash; the developer can't see it.
+  await expect(dialog.getByText("…번쩍임은 안 찍힘")).toBeVisible({ timeout: 8_000 });
+  await expect(chat.getByText(/제 쪽에선 안 보여요/)).toBeVisible({ timeout: 8_000 });
+  await expect(chat.getByText(/코드상 다크모드 처리는 정상/)).toBeVisible({ timeout: 8_000 });
+
+  // 2. One link in the channel: the whole team opens the same screen.
+  const shared = dialog.getByRole("region", { name: "공유된 화면" });
+  await expect(shared.getByText("지금 보는 중 3명")).toBeVisible({ timeout: 10_000 });
+  await expect(chat.getByText("3명이 이 화면을 봤어요")).toBeVisible();
+  await expect(chat.getByText(/이제 이해됨/)).toBeVisible({ timeout: 4_000 });
+  await expect(chat.getByText(/안드로이드 크롬에서도/)).toBeVisible({ timeout: 4_000 });
+
+  // 3. The developer's AI reads the same link and the fix ships.
+  await expect(chat.getByText("01:24:07 · 라이트로 그려진 첫 화면")).toBeVisible({ timeout: 8_000 });
+  await expect(dialog.getByRole("region", { name: "스테이징 사이트" }).getByText("새 배포")).toBeVisible({ timeout: 6_000 });
+  await expect(dialog.getByRole("button", { name: /다시 보기/ })).toBeVisible({ timeout: 10_000 });
+  await expect(dialog.getByText("팀원은 못 보는 번쩍임, 한 번에 해결")).toBeVisible();
+});
+
 test("실제 활용 예시 02: 404와 CORS 설정까지 알려줘도 CORS만 고치던 AI가, Agent Link로 스쳐 간 Request URL을 보고 진짜 원인을 고친다", async ({ page }) => {
   test.setTimeout(120_000);
   await page.goto(url);
   await page.getByRole("button", { name: "실제 활용 예시" }).click();
   const dialog = page.getByRole("dialog", { name: "실제 활용 예시" });
-  await dialog.getByRole("button", { name: /02\s*API 연동/ }).click();
-  await expect(dialog.getByRole("button", { name: /02\s*API 연동/ })).toHaveAttribute("aria-pressed", "true");
+  await dialog.getByRole("region", { name: "직업 고르기" }).getByRole("button", { name: /풀스택 개발자/ }).click();
+  await expect(dialog.getByRole("navigation", { name: "직업 선택" }).getByRole("button", { name: "풀스택 개발자" })).toHaveAttribute("aria-pressed", "true");
   const chat = dialog.getByRole("region", { name: "Claudy 대화" });
   const browser = dialog.getByRole("region", { name: "브라우저" });
 
@@ -86,8 +122,8 @@ test("실제 활용 예시 03: 캡처는 놓치고, 말로 설명하면 노란 �
   await page.getByRole("button", { name: "실제 활용 예시" }).click();
   const dialog = page.getByRole("dialog", { name: "실제 활용 예시" });
   await expect(dialog).toBeVisible();
-  await dialog.getByRole("button", { name: /03\s*게임 개발/ }).click();
-  await expect(dialog.getByRole("button", { name: /03\s*게임 개발/ })).toHaveAttribute("aria-pressed", "true");
+  await dialog.getByRole("region", { name: "직업 고르기" }).getByRole("button", { name: /게임 개발자/ }).click();
+  await expect(dialog.getByRole("navigation", { name: "직업 선택" }).getByRole("button", { name: "게임 개발자" })).toHaveAttribute("aria-pressed", "true");
   const chat = dialog.getByRole("region", { name: "Claudy 대화" });
 
   // 1. Attacking flashes the stray square while the hero still has hair.

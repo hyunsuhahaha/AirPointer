@@ -90,6 +90,14 @@ function Browser({ state }: { state: toast.BrowserState }) {
     </div>
     <span className={styles.button} data-kind="primary" style={{ left: toast.SAVE_BUTTON.x - toast.WORK.x - 60, top: toast.SAVE_BUTTON.y - toast.WORK.y - 17 }}>{state.saved ? "저장됨" : "저장"}</span>
     <span className={styles.button} style={{ left: toast.EXPORT_BUTTON.x - toast.WORK.x - 60, top: toast.EXPORT_BUTTON.y - toast.WORK.y - 17 }}><DownloadSimple size={14} />내보내기</span>
+    {state.deadPops.map((pop) => <b key={pop.id} className={styles.deadPop}
+      style={{ left: toast.EXPORT_BUTTON.x - toast.WORK.x - 30 + ((pop.id * 53) % 120) - 60, top: toast.EXPORT_BUTTON.y - toast.WORK.y - 40 - pop.age * 80, opacity: 1 - pop.age / toast.DEAD_POP_SECONDS }}>
+      <X size={11} weight="bold" />무반응
+    </b>)}
+    {state.deadClicks > 0 && <span className={styles.clickCount} style={{ left: toast.EXPORT_BUTTON.x - toast.WORK.x - 60, top: toast.EXPORT_BUTTON.y - toast.WORK.y + 26 }}>
+      클릭 {state.deadClicks}번째 · 반응 없음
+    </span>}
+    {state.puzzled && <span className={styles.puzzled} style={{ left: toast.EXPORT_BUTTON.x - toast.WORK.x + 40, top: toast.EXPORT_BUTTON.y - toast.WORK.y - 64 }}>?</span>}
     {state.toastOpacity > 0 && <p className={styles.toast} style={{ ...box(toast.TOAST), opacity: state.toastOpacity }}><CheckCircle size={18} weight="fill" />저장되었습니다</p>}
     {state.devtools && <div className={styles.devtools} style={{ top: toast.DEVTOOLS_TOP - toast.WORK.y }}>
       <nav className={styles.devtoolsTabs}>

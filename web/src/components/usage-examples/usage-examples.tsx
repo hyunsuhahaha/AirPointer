@@ -7,29 +7,33 @@ import { ArrowCounterClockwise, Pause, Play, SpeakerHigh, SpeakerSlash, X } from
 import { createOverviewSound } from "@/lib/overview-sound";
 import type { OverviewSound } from "@/lib/overview-sound";
 import * as corsScript from "@/lib/usage-example-cors";
+import * as flashScript from "@/lib/usage-example-flash";
 import * as game from "@/lib/usage-example-game";
 import { STAGE } from "@/lib/usage-example-timeline";
 import * as toastScript from "@/lib/usage-example-toast";
 import type { CueSound } from "@/lib/usage-example-timeline";
 import * as vmScript from "@/lib/usage-example-vm";
 import { CorsExample } from "./cors-example";
+import { FlashExample } from "./flash-example";
 import { GameExample } from "./game-example";
 import { ToastExample } from "./toast-example";
 import { VmExample } from "./vm-example";
 import styles from "./usage-examples.module.css";
 
 type Example = {
-  id: string; label: string; title: string; duration: number; speed: number;
+  id: string; role: string; title: string; duration: number; speed: number;
   sounds: { at: number; sound: CueSound }[]; typing: [number, number][];
   Scene: (props: { t: number }) => ReactNode;
 };
 
-// New examples are added here; the tab bar lists them in order.
+// New examples are added here; the top bar reads "당신이 {role}라면?" and
+// lists the roles in order. Roles end in a vowel so "라면" always fits.
 const EXAMPLES: Example[] = [
-  { id: "toast", label: "웹 개발", title: "안 눌리는 버튼", duration: toastScript.DURATION, speed: toastScript.SPEED, sounds: toastScript.SOUND_CUES, typing: toastScript.TYPING, Scene: ToastExample },
-  { id: "cors", label: "API 연동", title: "CORS 아닌 CORS 에러", duration: corsScript.DURATION, speed: corsScript.SPEED, sounds: corsScript.SOUND_CUES, typing: corsScript.TYPING, Scene: CorsExample },
-  { id: "game", label: "게임 개발", title: "공격하면 번쩍이는 노란 네모", duration: game.DURATION, speed: game.SPEED, sounds: game.SOUND_CUES, typing: game.TYPING, Scene: GameExample },
-  { id: "vm", label: "VM 설정", title: "이유 없이 안 켜지는 VM", duration: vmScript.DURATION, speed: vmScript.SPEED, sounds: vmScript.SOUND_CUES, typing: vmScript.TYPING, Scene: VmExample },
+  { id: "toast", role: "웹 개발자", title: "안 눌리는 버튼", duration: toastScript.DURATION, speed: toastScript.SPEED, sounds: toastScript.SOUND_CUES, typing: toastScript.TYPING, Scene: ToastExample },
+  { id: "flash", role: "디자이너", title: "팀원은 못 보는 번쩍임", duration: flashScript.DURATION, speed: flashScript.SPEED, sounds: flashScript.SOUND_CUES, typing: flashScript.TYPING, Scene: FlashExample },
+  { id: "cors", role: "풀스택 개발자", title: "CORS 아닌 CORS 에러", duration: corsScript.DURATION, speed: corsScript.SPEED, sounds: corsScript.SOUND_CUES, typing: corsScript.TYPING, Scene: CorsExample },
+  { id: "game", role: "게임 개발자", title: "공격하면 번쩍이는 노란 네모", duration: game.DURATION, speed: game.SPEED, sounds: game.SOUND_CUES, typing: game.TYPING, Scene: GameExample },
+  { id: "vm", role: "인프라 엔지니어", title: "이유 없이 안 켜지는 VM", duration: vmScript.DURATION, speed: vmScript.SPEED, sounds: vmScript.SOUND_CUES, typing: vmScript.TYPING, Scene: VmExample },
 ];
 
 const MAX_TYPING_CLICKS_PER_SECOND = 14;
@@ -37,12 +41,14 @@ export function UsageExamples({ onClose }: { onClose: () => void }) {
   const dialog = useRef<HTMLDivElement>(null);
   const sound = useRef<OverviewSound | null>(null);
   const clock = useRef(0);
-  const [exampleIndex, setExampleIndex] = useState(0);
+  // Nothing plays until a role is picked on the opening "당신이 … 라면?" screen.
+  const [exampleIndex, setExampleIndex] = useState<number | null>(null);
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const [t, setT] = useState(0);
-  const [playing, setPlaying] = useState(true);
+  const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(false);
   const [viewport, setViewport] = useState({ width: 1280, height: 800 });
-  const example = EXAMPLES[exampleIndex];
+  const example = exampleIndex === null ? null : EXAMPLES[exampleIndex];
 
   useEffect(() => {
     sound.current = createOverviewSound();
@@ -60,7 +66,7 @@ export function UsageExamples({ onClose }: { onClose: () => void }) {
   }, []);
 
   useEffect(() => {
-    if (!playing) return;
+    if (!playing || !example) return;
     let frame = 0;
     let last = performance.now();
     const step = (now: number) => {
@@ -88,13 +94,16 @@ export function UsageExamples({ onClose }: { onClose: () => void }) {
 
   const restart = useCallback(() => { clock.current = 0; setT(0); setPlaying(true); }, []);
   const selectExample = (index: number) => { setExampleIndex(index); restart(); };
-  const togglePlaying = () => { if (clock.current >= example.duration) restart(); else setPlaying((current) => !current); };
+  const togglePlaying = () => {
+    if (!example) return;
+    if (clock.current >= example.duration) restart(); else setPlaying((current) => !current);
+  };
   const toggleMuted = () => setMuted((current) => { sound.current?.setMuted(!current); return !current; });
 
   const topBar = 64;
   const scale = Math.min((viewport.width - 32) / STAGE.width, (viewport.height - topBar - 24) / STAGE.height);
-  const ended = t >= example.duration;
-  const Scene = example.Scene;
+  const ended = example !== null && t >= example.duration;
+  const pickedRole = hoverIndex ?? exampleIndex;
 
   return createPortal(
     <div ref={dialog} className={styles.overlay} role="dialog" aria-modal="true" aria-label="실제 활용 예시" tabIndex={-1}
@@ -105,25 +114,39 @@ export function UsageExamples({ onClose }: { onClose: () => void }) {
         event.preventDefault();
       }}>
       <header className={styles.topBar}>
-        <strong>실제 활용 예시</strong>
-        <nav className={styles.tabs} aria-label="예시 목록">
-          {EXAMPLES.map((item, index) => <button key={item.id} type="button" aria-pressed={index === exampleIndex} onClick={() => selectExample(index)}>
-            <b>{String(index + 1).padStart(2, "0")}</b>{item.label}
-          </button>)}
-        </nav>
+        {example && <div className={styles.sentence}>
+          <span>당신이</span>
+          <nav className={styles.tabs} aria-label="직업 선택">
+            {EXAMPLES.map((item, index) => <button key={item.id} type="button" aria-pressed={index === exampleIndex} onClick={() => selectExample(index)}>
+              {item.role}
+            </button>)}
+          </nav>
+          <span>라면?</span>
+        </div>}
         <div className={styles.controls}>
           <button type="button" onClick={toggleMuted} aria-label={muted ? "소리 켜기" : "소리 끄기"}>{muted ? <SpeakerSlash size={16} /> : <SpeakerHigh size={16} />}</button>
-          <button type="button" onClick={togglePlaying} aria-label={playing ? "일시정지" : "재생"}>{playing ? <Pause size={16} weight="fill" /> : <Play size={16} weight="fill" />}</button>
-          <button type="button" onClick={restart} aria-label="처음부터"><ArrowCounterClockwise size={16} /></button>
+          {example && <>
+            <button type="button" onClick={togglePlaying} aria-label={playing ? "일시정지" : "재생"}>{playing ? <Pause size={16} weight="fill" /> : <Play size={16} weight="fill" />}</button>
+            <button type="button" onClick={restart} aria-label="처음부터"><ArrowCounterClockwise size={16} /></button>
+          </>}
           <button type="button" onClick={onClose} aria-label="예시 닫기"><X size={16} weight="bold" /></button>
         </div>
       </header>
-      <div className={styles.stageArea}>
+      {!example && <section className={styles.chooser} aria-label="직업 고르기">
+        <h2>당신이 <span className={styles.blank} data-filled={pickedRole !== null}>{pickedRole === null ? "?" : EXAMPLES[pickedRole].role}</span> 라면?</h2>
+        <div className={styles.roleCards}>
+          {EXAMPLES.map((item, index) => <button key={item.id} type="button" onClick={() => selectExample(index)}
+            onPointerEnter={() => setHoverIndex(index)} onPointerLeave={() => setHoverIndex(null)} onFocus={() => setHoverIndex(index)} onBlur={() => setHoverIndex(null)}>
+            <b>{item.role}</b><small>{item.title}</small>
+          </button>)}
+        </div>
+      </section>}
+      {example && <div className={styles.stageArea}>
         <div className={styles.stage} aria-label={example.title}
           style={{ width: STAGE.width, height: STAGE.height, transform: `translate(-50%, -50%) scale(${scale})` }}>
-          <Scene t={t} />
+          <example.Scene t={t} />
           {ended && <div className={styles.endCard}>
-            <small>예시 {String(exampleIndex + 1).padStart(2, "0")} · {example.label}</small>
+            <small>당신이 {example.role}라면</small>
             <strong>{example.title}, 한 번에 해결</strong>
             <div>
               <button type="button" className={styles.primary} onClick={restart}><ArrowCounterClockwise size={16} /> 다시 보기</button>
@@ -131,8 +154,8 @@ export function UsageExamples({ onClose }: { onClose: () => void }) {
             </div>
           </div>}
         </div>
-      </div>
-      <div className={styles.progress} aria-hidden="true"><span style={{ width: `${(t / example.duration) * 100}%` }} /></div>
+      </div>}
+      {example && <div className={styles.progress} aria-hidden="true"><span style={{ width: `${(t / example.duration) * 100}%` }} /></div>}
     </div>,
     document.body,
   );

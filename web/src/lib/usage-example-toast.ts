@@ -9,7 +9,7 @@
 import { INPUT_TARGET, SEND_BUTTON, captionAt as captionIn, pointerAt, typed, within } from "./usage-example-timeline.ts";
 import type { Caption, CueSound, CursorKey } from "./usage-example-timeline.ts";
 
-export const DURATION = 38.5;
+export const DURATION = 40.5;
 export const SPEED = 1.25;
 
 // Layout, in stage units. The work area holds the browser (with DevTools
@@ -37,28 +37,31 @@ export const BEATS = {
   saveClick: 0.9,
   toast: [1.0, 3.0],
   toastFade: 2.4,
-  deadClicks: [3.5, 3.9, 4.3],
-  devtools: 4.8,
-  networkCheck: 5.4,
-  deadClickNetwork: 5.8,
-  prompt1: [6.4, 7.6],
-  send1: 7.9,
-  consoleTab: 11.4,
-  networkTab: 14.1,
-  pip: 21.8,
-  quickLink: 22.4,
-  pipExport: 23.1,
-  exporting: [23.2, 24.0],
-  exported: 24.1,
-  copy: 24.7,
-  pasteKeys: 25.4,
-  pasted: 25.55,
-  pipMinimize: 25.8,
-  send6: 26.2,
-  reply6: { thinking: 26.5, tools: [26.8, 27.2, 27.6], card: 28.1, text: [28.3, 30.4], done: 30.6, cardEnd: 32.8 },
-  diff: [31.2, 32.4],
-  exportWorks: 33.8,
-  downloaded: 34.0,
+  // A few slow clicks, a puzzled pause, then a burst: nothing happens.
+  deadClicks: [3.4, 3.8, 4.2, 5.0, 5.15, 5.3, 5.45, 5.6, 5.75, 5.9, 6.05],
+  puzzled: [4.35, 4.95],
+  deadShake: [6.1, 6.6],
+  devtools: 6.8,
+  networkCheck: 7.4,
+  deadClickNetwork: 7.8,
+  prompt1: [8.4, 9.6],
+  send1: 9.9,
+  consoleTab: 13.4,
+  networkTab: 16.1,
+  pip: 23.8,
+  quickLink: 24.4,
+  pipExport: 25.1,
+  exporting: [25.2, 26],
+  exported: 26.1,
+  copy: 26.7,
+  pasteKeys: 27.4,
+  pasted: 27.55,
+  pipMinimize: 27.8,
+  send6: 28.2,
+  reply6: { thinking: 28.5, tools: [28.8, 29.2, 29.6], card: 30.1, text: [30.3, 32.4], done: 32.6, cardEnd: 34.8 },
+  diff: [33.2, 34.4],
+  exportWorks: 35.8,
+  downloaded: 36,
   end: DURATION,
 } as const;
 
@@ -70,16 +73,16 @@ export type Round = {
   shot: Shot; snip: number; paste: number; note: string; noteTyping: readonly [number, number]; send: number;
 };
 export const ROUNDS: Round[] = [
-  { ask: "문제를 정확히 파악하기 위해 화면 스크린샷을 보여주시겠어요? 📸", thinking: 8.1, text: [8.3, 9.0], shot: "page", snip: 9.3, paste: 9.8, note: "여기", noteTyping: [9.85, 9.95], send: 10.1 },
-  { ask: "개발자 도구 Console 탭에 에러가 있는지 확인 부탁드려요.", thinking: 10.3, text: [10.5, 11.1], shot: "console", snip: 11.7, paste: 12.2, note: "에러 없다고 했잖아", noteTyping: [12.25, 12.6], send: 12.8 },
-  { ask: "버튼을 누를 때 Network 탭에 요청이 발생하는지도 보여주세요.", thinking: 13.0, text: [13.2, 13.8], shot: "network", snip: 14.4, paste: 14.9, note: "0건이라고…", noteTyping: [14.95, 15.2], send: 15.4 },
-  { ask: "ExportButton 컴포넌트 코드도 보여주시겠어요?", thinking: 15.6, text: [15.8, 16.4], shot: "code", snip: 17.0, paste: 17.5, note: "여기. 핸들러 정상임", noteTyping: [17.55, 17.9], send: 18.1 },
+  { ask: "문제를 정확히 파악하기 위해 화면 스크린샷을 보여주시겠어요? 📸", thinking: 10.1, text: [10.3, 11], shot: "page", snip: 11.3, paste: 11.8, note: "여기", noteTyping: [11.85, 11.95], send: 12.1 },
+  { ask: "개발자 도구 Console 탭에 에러가 있는지 확인 부탁드려요.", thinking: 12.3, text: [12.5, 13.1], shot: "console", snip: 13.7, paste: 14.2, note: "에러 없다고 했잖아", noteTyping: [14.25, 14.6], send: 14.8 },
+  { ask: "버튼을 누를 때 Network 탭에 요청이 발생하는지도 보여주세요.", thinking: 15, text: [15.2, 15.8], shot: "network", snip: 16.4, paste: 16.9, note: "0건이라고…", noteTyping: [16.95, 17.2], send: 17.4 },
+  { ask: "ExportButton 컴포넌트 코드도 보여주시겠어요?", thinking: 17.6, text: [17.8, 18.4], shot: "code", snip: 19, paste: 19.5, note: "여기. 핸들러 정상임", noteTyping: [19.55, 19.9], send: 20.1 },
 ];
 export const SHOT_DELAY = 0.2;
-export const VERDICT = { thinking: 18.3, text: [19.2, 20.3], card: 19.4, cardEnd: 21.6, shake: [20.4, 21.0] } as const;
+export const VERDICT = { thinking: 20.3, text: [21.2, 22.3], card: 21.4, cardEnd: 23.6, shake: [22.4, 23] } as const;
 export const REPLY_5 = "검토 결과 코드에는 문제가 없습니다. 제 환경에서는 정상 작동합니다 🙂";
 
-const APP_SWITCHES: [number, App][] = [[0, "browser"], [16.7, "editor"], [21.5, "browser"], [31.0, "editor"], [33.1, "browser"]];
+const APP_SWITCHES: [number, App][] = [[0, "browser"], [18.7, "editor"], [23.5, "browser"], [33, "editor"], [35.1, "browser"]];
 export type App = "browser" | "editor";
 // The player can hand in a slightly negative t on its first frame.
 export const appAt = (t: number): App => (APP_SWITCHES.findLast(([at]) => t >= at) ?? APP_SWITCHES[0])[1];
@@ -90,7 +93,12 @@ export const altTabAt = (t: number) => APP_SWITCHES.slice(1).some(([at]) => with
 export type BrowserState = {
   toastOpacity: number; toastGhost: boolean; devtools: boolean; devtoolsTab: "console" | "network";
   exportRequest: boolean; downloaded: boolean; saved: boolean;
+  // The dead-click beat: how many clicks went nowhere, the "무반응" marks
+  // still floating up (age in seconds), and the puzzled pause.
+  deadClicks: number; deadPops: { id: number; age: number }[]; puzzled: boolean;
 };
+
+export const DEAD_POP_SECONDS = 0.7;
 
 export function browserAt(t: number): BrowserState {
   const r = BEATS;
@@ -105,6 +113,9 @@ export function browserAt(t: number): BrowserState {
     exportRequest: t >= r.exportWorks,
     downloaded: t >= r.downloaded,
     saved: t >= r.saveClick,
+    deadClicks: t < r.devtools ? r.deadClicks.filter((at) => t >= at).length : 0,
+    deadPops: r.deadClicks.flatMap((at, id) => within(t, [at, at + DEAD_POP_SECONDS]) ? [{ id, age: t - at }] : []),
+    puzzled: within(t, r.puzzled),
   };
 }
 
@@ -220,34 +231,37 @@ const CURSOR_KEYS: CursorKey[] = [
   { t: 0.75, ...SAVE_BUTTON },
   { t: 1.0, ...SAVE_BUTTON },
   { t: 3.35, ...EXPORT_BUTTON },
-  { t: 4.45, ...EXPORT_BUTTON },
-  { t: 5.25, ...NETWORK_TAB },
-  { t: 5.5, ...NETWORK_TAB },
-  { t: 5.7, ...EXPORT_BUTTON },
-  { t: 5.95, ...EXPORT_BUTTON },
-  { t: 6.35, ...INPUT_TARGET },
-  { t: 7.7, ...INPUT_TARGET },
-  { t: 7.85, ...SEND_BUTTON },
-  { t: 11.1, ...SEND_BUTTON },
-  { t: 11.35, ...CONSOLE_TAB },
-  { t: 11.5, ...CONSOLE_TAB },
-  { t: 12.7, ...SEND_BUTTON },
-  { t: 13.9, ...SEND_BUTTON },
-  { t: 14.05, ...NETWORK_TAB },
-  { t: 14.2, ...NETWORK_TAB },
-  { t: 15.3, ...SEND_BUTTON },
-  { t: 22.0, ...SEND_BUTTON },
-  { t: 22.35, ...QUICK_LINK },
-  { t: 22.5, ...QUICK_LINK },
-  { t: 23.0, ...PIP_EXPORT },
-  { t: 24.2, ...PIP_EXPORT },
-  { t: 24.6, ...COPY_BUTTON },
-  { t: 24.9, ...COPY_BUTTON },
-  { t: 25.3, ...INPUT_TARGET },
-  { t: 25.8, ...INPUT_TARGET },
-  { t: 26.15, ...SEND_BUTTON },
-  { t: 33.2, ...SEND_BUTTON },
-  { t: 33.7, ...EXPORT_BUTTON },
+  { t: 4.3, ...EXPORT_BUTTON },
+  { t: 4.6, x: EXPORT_BUTTON.x + 14, y: EXPORT_BUTTON.y + 10 },
+  { t: 4.9, ...EXPORT_BUTTON },
+  { t: 6.6, ...EXPORT_BUTTON },
+  { t: 7.25, ...NETWORK_TAB },
+  { t: 7.5, ...NETWORK_TAB },
+  { t: 7.7, ...EXPORT_BUTTON },
+  { t: 7.95, ...EXPORT_BUTTON },
+  { t: 8.35, ...INPUT_TARGET },
+  { t: 9.7, ...INPUT_TARGET },
+  { t: 9.85, ...SEND_BUTTON },
+  { t: 13.1, ...SEND_BUTTON },
+  { t: 13.35, ...CONSOLE_TAB },
+  { t: 13.5, ...CONSOLE_TAB },
+  { t: 14.7, ...SEND_BUTTON },
+  { t: 15.9, ...SEND_BUTTON },
+  { t: 16.05, ...NETWORK_TAB },
+  { t: 16.2, ...NETWORK_TAB },
+  { t: 17.3, ...SEND_BUTTON },
+  { t: 24, ...SEND_BUTTON },
+  { t: 24.35, ...QUICK_LINK },
+  { t: 24.5, ...QUICK_LINK },
+  { t: 25, ...PIP_EXPORT },
+  { t: 26.2, ...PIP_EXPORT },
+  { t: 26.6, ...COPY_BUTTON },
+  { t: 26.9, ...COPY_BUTTON },
+  { t: 27.3, ...INPUT_TARGET },
+  { t: 27.8, ...INPUT_TARGET },
+  { t: 28.15, ...SEND_BUTTON },
+  { t: 35.2, ...SEND_BUTTON },
+  { t: 35.7, ...EXPORT_BUTTON },
   { t: DURATION, ...EXPORT_BUTTON },
 ];
 
@@ -257,7 +271,8 @@ export const CLICKS = [
   BEATS.quickLink, BEATS.pipExport, BEATS.copy, BEATS.send6, BEATS.exportWorks,
 ].sort((a, b) => a - b);
 
-export const shakeAt = (t: number) => within(t, VERDICT.shake) ? Math.sin(t * 70) * 5 : 0;
+export const shakeAt = (t: number) => within(t, VERDICT.shake) ? Math.sin(t * 70) * 5
+  : within(t, BEATS.deadShake) ? Math.sin(t * 90) * 4 : 0;
 export function cursorAt(t: number) {
   const pointer = pointerAt(CURSOR_KEYS, CLICKS, [], t);
   return { ...pointer, x: pointer.x + shakeAt(t) };
@@ -273,18 +288,19 @@ export function keysAt(t: number): { keys: string[]; note?: string } | null {
 }
 
 export const CAPTIONS: Caption[] = [
-  { text: "설정 저장 완료. 이제 내보내기만 누르면 끝", start: 0.3, end: 3.3 },
-  { text: "안 눌림 → 콘솔 에러 0, 요청 0까지 확인", start: 3.4, end: 6.3 },
-  { text: "재현 조건까지 좁혀서 AI에게 전달", start: 6.4, end: 8.2 },
-  { text: "“스크린샷을 보여주시겠어요?”", start: 8.3, end: 10.2 },
-  { text: "“Console 탭도 확인 부탁드려요” (이미 말함)", start: 10.3, end: 12.9 },
-  { text: "“Network 탭도요” (이미 말함)", start: 13.0, end: 15.5 },
-  { text: "“코드도요”… 캡처 4장째", start: 15.6, end: 18.2 },
-  { text: "14분 뒤: “제 환경에서는 정상 작동합니다 🙂”", start: 18.3, end: 21.6 },
-  { text: "방금그거뭐였지 2번 → 링크 하나 붙여넣기", start: 21.8, end: 26.2 },
-  { text: "지금까지 본 화면 전부에서 원인 발견", start: 28.1, end: 30.9 },
-  { text: "사라진 토스트가 버튼을 덮고 있었다", start: 31.0, end: 33.6 },
-  { text: "캡처 4장 대신, 버튼 1번", start: 33.8, end: 38.3 },
+  { text: "설정 저장 완료. 이제 내보내기만 누르면 끝", start: 0.3, end: 3.2 },
+  { text: "…? 내보내기가 안 눌린다. 몇 번을 눌러도", start: 3.3, end: 6.6 },
+  { text: "콘솔 에러 0, 요청 0까지 직접 확인", start: 6.7, end: 8.3 },
+  { text: "재현 조건까지 좁혀서 AI에게 전달", start: 8.4, end: 10.2 },
+  { text: "“스크린샷을 보여주시겠어요?”", start: 10.3, end: 12.2 },
+  { text: "“Console 탭도 확인 부탁드려요” (이미 말함)", start: 12.3, end: 14.9 },
+  { text: "“Network 탭도요” (이미 말함)", start: 15, end: 17.5 },
+  { text: "“코드도요”… 캡처 4장째", start: 17.6, end: 20.2 },
+  { text: "14분 뒤: “제 환경에서는 정상 작동합니다 🙂”", start: 20.3, end: 23.6 },
+  { text: "방금그거뭐였지 2번 → 링크 하나 붙여넣기", start: 23.8, end: 28.2 },
+  { text: "지금까지 본 화면 전부에서 원인 발견", start: 30.1, end: 32.9 },
+  { text: "사라진 토스트가 버튼을 덮고 있었다", start: 33, end: 35.6 },
+  { text: "캡처 4장 대신, 버튼 1번", start: 35.8, end: 40.3 },
 ];
 export const captionAt = (t: number) => captionIn(CAPTIONS, t);
 

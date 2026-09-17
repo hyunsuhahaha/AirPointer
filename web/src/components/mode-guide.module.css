@@ -1,0 +1,18 @@
+.guide { margin-bottom: 24px; }
+.tabs { display: flex; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 999px; background: var(--base); }
+.tabs button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 34px; padding: 0 8px; border: 0; border-radius: 999px; background: transparent; color: var(--muted); font: inherit; font-size: 12px; font-weight: 700; white-space: nowrap; cursor: pointer; transition: background .15s, color .15s; }
+.tabs button b { font: 10px var(--font-mono); color: var(--accent-soft); }
+.tabs button:hover { color: var(--ink); }
+.tabs button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 2px; }
+.tabs button[aria-selected=true] { background: var(--accent); color: #150a04; }
+.tabs button[aria-selected=true] b { color: #150a04; }
+.panel { padding-top: 22px; animation: fade .2s ease-out; }
+@keyframes fade { from { opacity: 0; transform: translateY(4px); } }
+.panel h2 { margin: 0 0 20px; font-size: 22px; line-height: 1.4; letter-spacing: -.05em; }
+.panel h3 { margin: 0; padding: 12px 0 8px; border-top: 1px solid var(--line); color: var(--accent-soft); font: 10px var(--font-mono); letter-spacing: .12em; }
+.panel ul, .panel ol { margin: 0 0 14px; padding: 0; list-style: none; }
+.panel li { position: relative; padding: 5px 0 5px 16px; font-size: 12px; line-height: 1.7; }
+.panel ul li::before { content: ""; position: absolute; left: 2px; top: 13px; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+.panel ol li { padding-left: 28px; }
+.panel ol b { position: absolute; left: 0; top: 5px; font: 11px/1.7 var(--font-mono); color: var(--accent-soft); }
+@media (prefers-reduced-motion: reduce) { .panel { animation: none; } }

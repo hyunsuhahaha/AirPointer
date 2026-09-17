@@ -12,7 +12,7 @@
 .modeNotice { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 10px clamp(20px, 4vw, 64px); background: var(--panel-raised); border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); text-align: center; }
 .modeNotice a { color: var(--accent-soft); font-weight: 600; text-decoration: none; }
 .modeNotice a:hover { text-decoration: underline; }
-.hero { display: grid; grid-template-columns: minmax(0, 1.9fr) minmax(340px, .82fr); min-height: calc(50vh - 36px); border-bottom: 1px solid var(--line); }
+.hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 1fr); min-height: calc(50vh - 36px); border-bottom: 1px solid var(--line); }
 .stageColumn { min-width: 0; padding: clamp(20px, 3vw, 42px); border-right: 1px solid var(--line); display: flex; flex-direction: column; }
 .stageHeader, .timelineHead { height: 26px; display: flex; justify-content: space-between; color: var(--muted); font: 500 10px var(--font-mono); letter-spacing: .1em; }
 .stageHeader span:last-child { color: var(--accent-soft); }
