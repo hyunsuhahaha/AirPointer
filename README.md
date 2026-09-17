@@ -14,7 +14,7 @@
 세 전달 방식은 다음과 같습니다.
 
 - **Manual**: 선택 0장에서 시작합니다. 화면 확대, 현재 기준 갱신, 브라우저 기본 이미지 드래그, 여러 장 다운로드를 제공합니다.
-- **Agent Link**: `context.md`, `events.json`, 선별 화면을 20분짜리 비공개 토큰 URL로 제공합니다.
+- **Agent Link**: `context.md`, `events.json`, 선별 화면을 비공개 토큰 URL로 제공합니다. 유지 시간은 5분~1시간 또는 삭제할 때까지 고를 수 있습니다.
 - **Local Folder**: 최초 한 번 허용한 상위 폴더 아래에 `Context-*` 폴더를 만들고 실제 경로가 들어간 프롬프트를 제공합니다.
 
 화면 공유 전에는 **30초 체험하기**로 실제 작업 녹화에서 같은 흐름을 시험할 수 있습니다. 최근 1·3·5분은 브라우저 메모리의 순환 버퍼에 남고, 공유를 중지하면 비워집니다. PDF와 ZIP은 현재 내보내기 형식에 포함하지 않습니다. Explorer 자동 열기·파일 전체 선택은 일반 웹페이지에서 제공하지 않습니다.
@@ -27,19 +27,15 @@ npm install
 npm run dev
 ```
 
-Vercel 배포 시 Root Directory는 `web`으로 지정하고 프로젝트 Storage에서 **Private Blob** 저장소를 연결합니다. Agent Link는 20분 동안 유효하며 문서와 선별 화면은 앱의 토큰 URL을 통해서만 제공됩니다. 실제 화면 공유는 HTTPS 또는 로컬 환경에서 사용합니다.
+Vercel 배포 시 Root Directory는 `web`으로 지정하고 프로젝트 Storage에서 **Private Blob** 저장소를 연결합니다. Agent Link는 5분~1시간 또는 삭제할 때까지 유지할 수 있으며 문서와 선별 화면은 앱의 토큰 URL을 통해서만 제공됩니다. 실제 화면 공유는 HTTPS 또는 로컬 환경에서 사용합니다.
 
-## 선택 사항: Windows 앱
+## 데스크톱 앱 (Windows)
 
-Windows 앱은 브라우저 밖에서 전역 단축키로 캡처할 때만 필요합니다. 기본값은 `Ctrl+Alt+S`(현재 화면), `Ctrl+Alt+D`(최근 리플레이), `Ctrl+Alt+R`(영역 선택)입니다. 캡처는 로컬 순환 버퍼에서 준비하고 사용자가 고른 Codex 또는 Claude Desktop 대화에 전달합니다.
+웹과 같은 화면을 띄우고, 브라우저가 못 하는 것만 더합니다. 설치 파일: [whatwas-setup.exe](https://github.com/hyunsuhahaha/AirPointer/releases/latest/download/whatwas-setup.exe)
 
-```powershell
-py -3.11 -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-python airpointer_launcher.py
-```
+- 화면 공유 창 없이 바로 기록
+- 앞에 있던 프로그램·창 제목, 지정한 작업 폴더의 파일 저장 시각을 함께 기록
+- Local Folder는 정해둔 폴더에 바로 저장하고 프롬프트까지 복사
+- 어디서든 `Ctrl + Shift + E`로 내보내기, 창을 닫아도 트레이에서 기록 유지
 
-Portable EXE는 `powershell -NoProfile -ExecutionPolicy Bypass -File .\build-portable.ps1`로 빌드합니다. `portable\AirPointer.exe`를 한 번 실행하면 사용자별 `airpointer://` 프로토콜이 등록됩니다.
-
-자세한 화면 기록과 Agent 연결 범위는 [Screen Memory](docs/screen-memory.md)와 [브라우저·Windows 기능 비교](docs/browser-vs-native-capabilities.md)에 있습니다.
+개발과 배포 방법은 [desktop/README.md](desktop/README.md)에 있습니다. 예전 Python 앱(AirPointer)은 이 앱으로 대체되어 제거했습니다.

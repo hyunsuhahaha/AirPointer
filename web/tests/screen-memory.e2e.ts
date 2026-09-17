@@ -11,12 +11,11 @@ for (const viewport of [
   test(`screen memory's six features are usable at ${viewport.name} width`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await page.goto(APP_URL);
-    await page.getByRole("tab", { name: "확장 기능" }).click();
+    await page.getByRole("tab", { name: "AI 분석" }).click();
     await page.getByText("화면 기록을 이 브라우저에 영구 보관 (선택)", { exact: true }).click();
     const workbench = page.getByRole("region", { name: "화면을 찾고, 되감고, 기록합니다." });
     await workbench.scrollIntoViewIfNeeded();
     await expect(workbench.getByRole("button", { name: /화면 검색/ })).toBeVisible();
-    await expect(workbench.getByRole("button", { name: /Agent API/ })).toBeVisible();
     await workbench.getByRole("button", { name: /샘플 개발 기록으로 체험/ }).click();
     await expect(workbench.getByText("최근 화면 기록 6개")).toBeVisible();
 
@@ -33,7 +32,5 @@ for (const viewport of [
     await expect(workbench.getByText("선택 기간 활동")).toBeVisible();
     await workbench.getByRole("button", { name: "개발 리포트 재현 기록을 Markdown으로", exact: true }).click();
     await expect(workbench.getByText("30분마다 자동 리포트")).toBeVisible();
-    await workbench.getByRole("button", { name: /Agent API/ }).click();
-    await expect(workbench.getByText("Codex MCP 실행")).toBeVisible();
   });
 }

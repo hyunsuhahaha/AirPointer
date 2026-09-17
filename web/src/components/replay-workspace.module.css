@@ -418,3 +418,5 @@
 .overviewButton { display: inline-flex; align-items: center; gap: 8px; height: 42px; padding: 0 20px; border: 1px solid var(--accent); border-radius: 999px; background: transparent; color: var(--ink); font: inherit; font-size: 14px; font-weight: 700; cursor: pointer; transition: background .15s, color .15s; }
 .overviewButton:hover { background: var(--accent); color: var(--t-panel, #170e09); }
 .overviewButton:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 3px; }
+.appDownload { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px; border-radius: 999px; background: var(--accent); color: var(--t-panel, #150a04) !important; font-size: 13px; font-weight: 700; }
+.appDownload:hover { filter: brightness(1.08); }

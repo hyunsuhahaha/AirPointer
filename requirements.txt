@@ -1,6 +1,0 @@
-opencv-python<5
-Pillow
-pywin32
-pywinauto
-mss
-winsdk

@@ -1,23 +1,19 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-import { AnimatePresence, motion } from "motion/react";
-import { ArrowClockwise, ArrowCounterClockwise, Broadcast, Camera, CaretDown, Check, CircleNotch, ClipboardText, DotsSixVertical, Gear, LockKey, MagnifyingGlass, PaperPlaneTilt, PictureInPicture, Pause, Play, ShieldCheck, Sparkle, Stop, Target, WarningCircle, X } from "@phosphor-icons/react";
-import { useCompanionHotkeys } from "@/hooks/use-companion-hotkeys";
+import { ArrowCounterClockwise, Broadcast, Camera, Check, CircleNotch, DownloadSimple, LockKey, MagnifyingGlass, PictureInPicture, Pause, Play, ShieldCheck, Sparkle, Stop, Target, WarningCircle } from "@phosphor-icons/react";
 import { useReplayPlayback } from "@/hooks/use-replay-playback";
-import type { HotkeyBindings } from "@/hooks/use-companion-hotkeys";
 import { BrowserReplayBuffer, DEFAULT_CAPTURE_INTERVAL_MS, cropRegion, frameFromVideo, replayGapOffsets, surroundingReplayOffsets, withReplayBookmarks } from "@/lib/replay-buffer";
 import type { ChangeHighlight, NormalizedBox, OverviewFrame, ReplayCapsule } from "@/lib/replay-buffer";
 import { createPrivacyRedactor } from "@/lib/privacy-redaction";
 import type { PrivacyReport } from "@/lib/privacy-redaction";
 import { closeScreenOcr, recognizeScreenText } from "@/lib/screen-ocr";
-import { listScreenMemoryFrames, memoryFrameFromVideo, saveScreenMemoryFrame, updateScreenMemoryFrame } from "@/lib/screen-memory";
+import { memoryFrameFromVideo, saveScreenMemoryFrame, updateScreenMemoryFrame } from "@/lib/screen-memory";
 import type { ScreenMemoryFrame } from "@/lib/screen-memory";
 import { formatReplayRange } from "@/lib/replay-frame-request";
 import type { ReplayExplorationRequest } from "@/lib/replay-frame-request";
-import type { PromptTemplate } from "@/lib/prompt-template";
 import styles from "./replay-workspace.module.css";
 import { EvidenceTimeMachine, PrivacyZoneEditor, RegionCapture } from "./browser-capture-panel";
 import { AgentExportPanel } from "./agent-export-panel";
@@ -104,41 +100,11 @@ const PIP_MINIMIZED_SIZE: [number, number] = [340, 96];
 const PIP_MINIMIZED_INNER_HEIGHT = 56;
 const PIP_MANUAL_SIZE: [number, number] = [520, 560];
 type ConversationTurn = { role: "user" | "assistant"; text: string };
-type AgentState = "loading" | "idle" | "preparing" | "drafting" | "sending" | "queued" | "done" | "error";
-type AgentThread = { id: string; title: string; status: string; cwd: string; updatedAt: number };
-type DeliveryTarget = "codex" | "claude";
-// Shape AirPointer's companion server returns for Claude Desktop -- see
-// App._list_companion_threads in main.py. No cwd/updatedAt (Claude Desktop's
-// sidebar doesn't surface those the way Codex's App Server does), but has
-// `project` for the same grouped-picker UX as Codex Agent below.
-type ClaudeThread = { id: string; title: string; status: string; project: string };
-// Shape SessionPicker actually renders -- both AgentThread (Codex, grouped
-// by cwd's basename below since Codex's API has no project concept of its
-// own) and ClaudeThread (already carries `project`) get mapped into this
-// before reaching the picker, so it only has to know one shape. `active` is
-// optional since only Codex's status is ever meaningful here (Claude's
-// DesktopPasteDelivery threads always report "unknown" -- see
-// project_airpointer_claude_code_target memory -- so it's never worth
-// mapping ClaudeThread.status into this at all).
-type PickerThread = { id: string; title: string; project: string; active?: boolean };
-type PendingAgentCapture =
-  | { mode: "current"; threadId: string; seconds: number; frames: OverviewFrame[]; region?: boolean }
-  | { mode: "replay"; threadId: string; seconds: number; capsule: ReplayCapsule };
-type HotkeyAction = "replay" | "screenshot" | "region";
 type StageBox = { left: number; top: number; width: number; height: number };
 type ResizeDir = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 
-const PROMPT_PRESETS = [
-  "이 상황이 어떻게 된 건지 설명해줘",
-  "문제 원인과 해결 방법을 찾아줘",
-  "여기서 다음에 무엇을 해야 하는지 알려줘",
-];
-
-// Mirrors the real pipeline (screen_buffer.py -> capture_controller.py ->
-// clipboard_tracker.py/selection_context.py -> companion_bridge.py), but the
-// "active stage" sweep below is a decorative CSS-only loop, not a readout of
-// actual phase state -- there's no per-viewer telemetry cheap enough to
-// drive this honestly yet.
+// The "active stage" sweep below is a decorative CSS-only loop, not a readout
+// of actual phase state.
 const BROWSER_PIPELINE_STAGES = [
   { Icon: Camera, label: "화면 캡처", detail: "순환 버퍼에 프레임 기록" },
   { Icon: Sparkle, label: "변화 감지", detail: "바뀐 순간만 골라냄" },
@@ -146,31 +112,6 @@ const BROWSER_PIPELINE_STAGES = [
   { Icon: MagnifyingGlass, label: "맥락 문서 생성", detail: "변화 시각과 화면 파일 연결" },
   { Icon: Check, label: "Agent 내보내기", detail: "폴더 탐색 또는 파일 첨부" },
 ];
-
-const NATIVE_PIPELINE_STAGES = [
-  { Icon: Camera, label: "화면 캡처", detail: "순환 버퍼에 프레임 기록" },
-  { Icon: Sparkle, label: "변화 감지", detail: "바뀐 순간만 골라냄" },
-  { Icon: Target, label: "대표 프레임 선택", detail: "핵심 장면으로 압축" },
-  { Icon: ClipboardText, label: "컨텍스트 결합", detail: "클립보드 · 선택 영역 · 클릭 이력" },
-  { Icon: PaperPlaneTilt, label: "Agent 전달", detail: "Claude Code · Claude Desktop · Codex" },
-];
-
-type ScoreChart = {
-  points: string;
-  thresholdY: number;
-  bands: { x: number; width: number }[];
-  peaks: { x: number; y: number; score: number }[];
-};
-
-// Same hand-drawn curve as before "실시간 연동" existed -- shown whenever the
-// checkbox is off, or on but no real data is available yet (see
-// liveScoreAvailable/liveScoreChart in ReplayWorkspace).
-const DEMO_SCORE_CHART: ScoreChart = {
-  points: "0,118 25,120 50,116 75,119 100,122 125,109 150,68 175,34 200,50 225,90 250,117 275,120 300,114 325,119 350,122 375,121 400,112 425,74 450,40 475,58 500,92 525,116 550,119 575,116 600,120",
-  thresholdY: 100,
-  bands: [{ x: 138, width: 97 }, { x: 413, width: 100 }],
-  peaks: [{ x: 175, y: 34, score: 0.81 }, { x: 450, y: 40, score: 0.74 }],
-};
 
 const STAGE_MIN_WIDTH = 320;
 const STAGE_MIN_HEIGHT = 220;
@@ -189,27 +130,9 @@ const RESIZE_DIRS: { dir: ResizeDir; label: string }[] = [
   { dir: "sw", label: "왼쪽 아래 대각선" },
 ];
 
-const AIRPOINTER_PROTOCOL = "airpointer://";
-const AIRPOINTER_DOWNLOAD_URL = "/downloads/AirPointer.exe";
-// Appended to Codex Agent error messages that mean "this path is unusable
-// right now" (no local Codex Desktop/CLI bridge, send failed outright) --
-// not to per-field validation messages ("먼저 작업을 선택해 주세요") that
-// the user can already fix inline. Points at the always-available fallback
-// above so a judge without AirPointer/Codex installed isn't left at a dead
-// end.
-const AGENT_FALLBACK_HINT = ' 대신 위쪽 "설치 없이 · 화면 바로 확인"을 눌러보세요.';
-
-async function syncMemoryFrameToCompanion(token: string, frame: ScreenMemoryFrame) {
-  if (!token || frame.source === "demo") return;
-  try {
-    await fetch(`/api/companion/memory?token=${encodeURIComponent(token)}&endpoint=frames`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(frame),
-    });
-  } catch {
-    // IndexedDB remains the source of truth in browser-only mode. The next
-    // captured frame retries naturally after the native companion reconnects.
-  }
-}
+// The desktop app's installer, always the newest GitHub release.
+const DESKTOP_APP_URL = "https://github.com/hyunsuhahaha/AirPointer/releases/latest/download/whatwas-setup.exe";
+const noSubscription = () => () => undefined;
 
 export function ReplayWorkspace() {
   const screenVideo = useRef<HTMLVideoElement>(null);
@@ -218,7 +141,6 @@ export function ReplayWorkspace() {
   const stageMoveStart = useRef<{ pointerX: number; pointerY: number; box: StageBox } | null>(null);
   const stageResizeStart = useRef<{ pointerX: number; pointerY: number; box: StageBox; dir: ResizeDir } | null>(null);
   const [stageBox, setStageBox] = useState<StageBox | null>(null);
-  const [companionToken, setCompanionToken] = useState("");
   const buffer = useRef(new BrowserReplayBuffer(3 * 60_000));
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [retention, setRetention] = useState(3);
@@ -266,47 +188,16 @@ export function ReplayWorkspace() {
   // stay consistent with it. Kept visible/toggleable so it's never a silent
   // watcher -- see the switch next to the highlight panel below.
   const [proactiveDetectionEnabled, setProactiveDetectionEnabled] = useState(true);
-  // Which half of the command dock is showing -- "browser" is every trigger
-  // that works from this tab alone (OpenAI quick-check and PiP),
-  // "full" adds AirPointer hotkeys and Agent delivery to Codex/Claude -- Codex
-  // needs a local Codex Desktop too, so it belongs here, not in "browser").
-  // Defaults to "browser" so a judge who never installs anything lands on
-  // the mode that's actually all they can use (see the AI Championship
-  // submission policy in the conversation this was added for: only a link a
-  // judge can open with zero install is accepted).
+  // "browser" is the export workbench; "full" adds a direct OpenAI check,
+  // privacy masking and the persistent screen memory.
   const [viewMode, setViewMode] = useState<"browser" | "full">("browser");
+  const insideDesktopApp = useSyncExternalStore(noSubscription, () => Boolean(window.whatwasNative), () => false);
   const [message, setMessage] = useState("화면 공유를 시작하면 최근 장면이 이 기기에만 쌓입니다.");
   const [elapsed, setElapsed] = useState(0);
   // Refreshed with `elapsed`: the recorded span and the wall clock the
   // transport scrubber measures against.
   const [bufferBounds, setBufferBounds] = useState<{ start: number; end: number } | null>(null);
   const [clock, setClock] = useState(0);
-  const [companionEnabled, setCompanionEnabled] = useState(false);
-  // Native default (airpointer/hotkeys.py's DEFAULT_BINDINGS) -- kept in
-  // sync by convention, not by import, since the two run in different
-  // languages/runtimes. Whatever's set here is what actually gets registered
-  // on the native side: AirPointer always defers to the browser's config
-  // once it's connected (see main.py's _resolve_hotkey_bindings).
-  const [hotkeyBindings, setHotkeyBindings] = useState<HotkeyBindings>({ screenshot: "ctrl+alt+s", replay: "ctrl+alt+d", region: "ctrl+alt+r" });
-  const [agentThreads, setAgentThreads] = useState<AgentThread[]>([]);
-  const [agentThreadId, setAgentThreadId] = useState("");
-  const [deliveryTarget, setDeliveryTarget] = useState<DeliveryTarget>("codex");
-  // Claude Desktop's own picker, loaded through AirPointer's companion
-  // server (needs companionToken, i.e. "AirPointer 켜기" already on) rather
-  // than a Node-side bridge -- see /api/companion/threads/route.ts and
-  // airpointer/desktop_paste.py's sidebar reverse-engineering. "" means
-  // "whatever conversation is already open", same as leaving it unset.
-  const [claudeThreads, setClaudeThreads] = useState<ClaudeThread[]>([]);
-  const [claudeThreadId, setClaudeThreadId] = useState("");
-  const [claudeThreadsLoading, setClaudeThreadsLoading] = useState(false);
-  const [agentState, setAgentState] = useState<AgentState>("loading");
-  const [agentMessage, setAgentMessage] = useState("Codex 작업을 불러오는 중입니다.");
-  const [pendingCapture, setPendingCapture] = useState<PendingAgentCapture | null>(null);
-  const [agentPrompt, setAgentPrompt] = useState("");
-  const [companionMessage, setCompanionMessage] = useState("");
-  const [companionLaunchIssue, setCompanionLaunchIssue] = useState<"missing" | "error" | "">("");
-  const [bootProgress, setBootProgress] = useState(0);
-  const [promptSettingsOpen, setPromptSettingsOpen] = useState(false);
   // No-install work-mode trigger: an always-on-top floating window with its
   // own buttons. It is requested automatically after screen sharing starts;
   // the visible switch remains only as a close/retry control.
@@ -347,13 +238,6 @@ export function ReplayWorkspace() {
     void window.whatwasNative?.pageReady();
     return () => window.removeEventListener("whatwas-native-ready", start);
   }, []);
-  const [promptTemplate, setPromptTemplate] = useState<PromptTemplate | null>(null);
-  const [promptSettingsState, setPromptSettingsState] = useState<"idle" | "loading" | "saving" | "error">("idle");
-  const [promptSettingsMessage, setPromptSettingsMessage] = useState("");
-  // User intent, not availability -- stays checked across a connection drop
-  // so the chart just falls back to the demo curve with an explanation
-  // rather than silently unchecking itself (see liveScoreAvailable below).
-  const [liveScoreEnabled, setLiveScoreEnabled] = useState(false);
 
   const getStageBox = useCallback((): StageBox => {
     if (stageBox) return stageBox;
@@ -806,334 +690,6 @@ export function ReplayWorkspace() {
     pipWindowRef.current?.close();
   }, []);
 
-  const loadAgentThreads = useCallback(async () => {
-    setAgentState("loading"); setAgentMessage("Codex 작업을 불러오는 중입니다.");
-    try {
-      const response = await fetch("/api/agent", { cache: "no-store" });
-      const data = await response.json() as { available?: boolean; threads?: AgentThread[]; error?: string };
-      if (!response.ok || !data.available) throw new Error(data.error || "Codex Agent에 연결하지 못했습니다.");
-      const nextThreads = data.threads || [];
-      setAgentThreads(nextThreads);
-      setAgentThreadId((current) => {
-        const saved = window.localStorage.getItem("airpointer-agent-thread") || "";
-        if (nextThreads.some((thread) => thread.id === current)) return current;
-        return nextThreads.some((thread) => thread.id === saved) ? saved : "";
-      });
-      setAgentState("idle");
-      setAgentMessage(nextThreads.length ? "전송할 Codex 작업을 선택해 주세요." : "전송 가능한 Codex 작업이 없습니다.");
-    } catch (reason) {
-      setAgentThreads([]); setAgentState("error");
-      setAgentMessage((reason instanceof Error ? reason.message : "Codex Agent 연결에 실패했습니다.") + AGENT_FALLBACK_HINT);
-    }
-  }, []);
-
-  const handleAgentThreadChange = useCallback((id: string) => {
-    setAgentThreadId(id);
-    window.localStorage.setItem("airpointer-agent-thread", id);
-    setAgentState("idle");
-    setAgentMessage(id ? "전송 준비가 끝났습니다." : "전송할 Codex 작업을 선택해 주세요.");
-  }, []);
-
-  // Codex's AgentThread has no `project` -- grouped by its `cwd`'s
-  // basename instead (see pathBasename/groupPickerThreads) so SessionPicker
-  // only ever deals with one thread shape regardless of source.
-  const codexPickerThreads = useMemo<PickerThread[]>(
-    () => agentThreads.map((thread) => ({
-      id: thread.id, title: thread.title, project: pathBasename(thread.cwd), active: thread.status === "active",
-    })),
-    [agentThreads],
-  );
-
-  const openPromptSettings = useCallback(async () => {
-    setPromptSettingsOpen(true);
-    setPromptSettingsState("loading");
-    setPromptSettingsMessage("");
-    try {
-      const response = await fetch("/api/prompt-settings", { cache: "no-store" });
-      const data = await response.json() as { template?: PromptTemplate; error?: string };
-      if (!response.ok || !data.template) throw new Error(data.error || "설정을 불러오지 못했습니다.");
-      setPromptTemplate(data.template);
-      setPromptSettingsState("idle");
-    } catch (reason) {
-      setPromptSettingsState("error");
-      setPromptSettingsMessage(reason instanceof Error ? reason.message : "설정을 불러오지 못했습니다.");
-    }
-  }, []);
-
-  const savePromptSettings = useCallback(async () => {
-    if (!promptTemplate) return;
-    setPromptSettingsState("saving");
-    setPromptSettingsMessage("");
-    try {
-      const response = await fetch("/api/prompt-settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(promptTemplate) });
-      const data = await response.json() as { saved?: boolean; error?: string };
-      if (!response.ok || !data.saved) throw new Error(data.error || "설정을 저장하지 못했습니다.");
-      setPromptSettingsState("idle");
-      setPromptSettingsMessage("저장했습니다. 다음 전송부터 적용됩니다.");
-    } catch (reason) {
-      setPromptSettingsState("error");
-      setPromptSettingsMessage(reason instanceof Error ? reason.message : "설정을 저장하지 못했습니다.");
-    }
-  }, [promptTemplate]);
-
-  const resetPromptSettings = useCallback(async () => {
-    setPromptSettingsState("saving");
-    setPromptSettingsMessage("");
-    try {
-      const response = await fetch("/api/prompt-settings", { method: "DELETE" });
-      const data = await response.json() as { template?: PromptTemplate; error?: string };
-      if (!response.ok || !data.template) throw new Error(data.error || "초기화하지 못했습니다.");
-      setPromptTemplate(data.template);
-      setPromptSettingsState("idle");
-      setPromptSettingsMessage("기본값으로 되돌렸습니다.");
-    } catch (reason) {
-      setPromptSettingsState("error");
-      setPromptSettingsMessage(reason instanceof Error ? reason.message : "초기화하지 못했습니다.");
-    }
-  }, []);
-
-  const postToAgent = useCallback(async (payload: { threadId: string; mode: Mode; kind: "screenshot" | "region"; seconds: number; frames: string[]; userPrompt: string }) => {
-    for (let attempt = 0; attempt < 31; attempt += 1) {
-      const response = await fetch("/api/agent", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-      const data = await response.json() as { delivered?: boolean; queued?: boolean; turnId?: string; error?: string };
-      if (response.ok && data.delivered) return data;
-      if (response.status !== 409 || !data.queued || attempt === 30) throw new Error(data.error || "Codex Agent 전송에 실패했습니다.");
-      setAgentState("queued"); setAgentMessage("선택한 작업이 실행 중입니다. 캡처를 보관하고 자동 재시도합니다.");
-      await new Promise((resolve) => window.setTimeout(resolve, 2_000));
-    }
-    throw new Error("Codex 작업이 계속 실행 중이라 전송하지 못했습니다.");
-  }, []);
-
-  // Claude Desktop has no App-Tools pipe or SDK like Codex does (see
-  // codex-desktop-bridge.ts / codex-app-server.ts), so this instead reaches
-  // it through AirPointer's own delivery -- the same UI automation the
-  // native app already uses for its own captures (see
-  // airpointer/desktop_paste.py, App._deliver_companion_capture). Requires
-  // AirPointer to be running and paired (companionToken set, i.e. the
-  // "AirPointer 켜기" switch above is on) -- there's no App-Tools-pipe-style
-  // fallback for this path.
-  const postToCompanion = useCallback(async (frames: string[], kind: "screenshot" | "region" | "replay", prompt: string) => {
-    if (!companionToken) throw new Error("Claude Code로 보내려면 먼저 AirPointer를 켜주세요.");
-    const response = await fetch(`/api/companion/send?token=${encodeURIComponent(companionToken)}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ target: "claude", threadId: claudeThreadId, prompt, kind, frames }),
-    });
-    const data = await response.json() as { ok?: boolean; error?: string };
-    if (!response.ok || !data.ok) throw new Error(data.error || "Claude Desktop 전송에 실패했습니다.");
-    return data;
-  }, [claudeThreadId, companionToken]);
-
-  const loadClaudeThreads = useCallback(async () => {
-    if (!companionToken) { setClaudeThreads([]); setClaudeThreadId(""); return; }
-    setClaudeThreadsLoading(true);
-    try {
-      const response = await fetch(`/api/companion/threads?token=${encodeURIComponent(companionToken)}&target=claude`, { cache: "no-store" });
-      const data = await response.json() as { threads?: ClaudeThread[]; error?: string };
-      if (!response.ok) throw new Error(data.error || "Claude Desktop 세션을 불러오지 못했습니다.");
-      const nextThreads = data.threads || [];
-      setClaudeThreads(nextThreads);
-      setClaudeThreadId((current) => (nextThreads.some((thread) => thread.id === current) ? current : ""));
-    } catch (reason) {
-      setClaudeThreads([]);
-      setAgentMessage(reason instanceof Error ? reason.message : "Claude Desktop 세션을 불러오지 못했습니다.");
-    } finally {
-      setClaudeThreadsLoading(false);
-    }
-  }, [companionToken]);
-
-  const postCapsuleToAgent = useCallback(async (form: FormData) => {
-    for (let attempt = 0; attempt < 31; attempt += 1) {
-      const response = await fetch("/api/agent", { method: "POST", body: form });
-      const data = await response.json() as { delivered?: boolean; queued?: boolean; turnId?: string; error?: string };
-      if (response.ok && data.delivered) return data;
-      if (response.status !== 409 || !data.queued || attempt === 30) throw new Error(data.error || "Codex Agent 전송에 실패했습니다.");
-      setAgentState("queued"); setAgentMessage("선택한 작업이 실행 중입니다. Replay Capsule을 보관하고 자동 재시도합니다.");
-      await new Promise((resolve) => window.setTimeout(resolve, 2_000));
-    }
-    throw new Error("Codex 작업이 계속 실행 중이라 전송하지 못했습니다.");
-  }, []);
-
-  const prepareAgentCapture = useCallback(async (mode: Mode) => {
-    if (deliveryTarget === "codex" && !agentThreadId) { setAgentState("error"); setAgentMessage("먼저 전송할 Codex 작업을 선택해 주세요."); return; }
-    if (deliveryTarget === "claude" && !companionToken) { setAgentState("error"); setAgentMessage("Claude Code로 보내려면 먼저 AirPointer를 켜주세요."); return; }
-    if (!stream || !screenVideo.current) { setAgentState("error"); setAgentMessage("먼저 화면 공유를 시작해 주세요."); return; }
-    setAgentState("preparing");
-    try {
-      setAgentMessage(`${mode === "current" ? "현재 화면" : `최근 ${sendSeconds}초`} 맥락을 고정하고 있습니다.`);
-      if (mode === "replay") {
-        const baseCapsule = await buffer.current.recentCapsule(sendSeconds, 6);
-        const capsule = { ...baseCapsule, overviewFrames: withReplayBookmarks(baseCapsule.overviewFrames, replayBookmarks, baseCapsule.triggeredAt, MAX_REPLAY_BOOKMARKS) };
-        if (!capsule.overviewFrames.length || !capsule.segments.length) throw new Error("전송할 만큼 화면 버퍼가 아직 쌓이지 않았습니다.");
-        setFrames(capsule.overviewFrames);
-        setPendingCapture({ mode, threadId: agentThreadId, seconds: sendSeconds, capsule });
-      } else {
-        const nextFrames = await captureFrames("current");
-        setPendingCapture({ mode, threadId: agentThreadId, seconds: sendSeconds, frames: nextFrames });
-      }
-      setAgentPrompt("");
-      setAgentState("drafting");
-      setAgentMessage("맥락을 고정했습니다. 질문을 입력하기 전에는 Agent로 전송되지 않습니다.");
-    } catch (reason) {
-      setAgentState("error"); setAgentMessage(reason instanceof Error ? reason.message : "화면 맥락을 준비하지 못했습니다.");
-    }
-  }, [agentThreadId, captureFrames, companionToken, deliveryTarget, replayBookmarks, sendSeconds, stream]);
-
-  const cancelPendingCapture = useCallback(() => {
-    if (agentState === "sending" || agentState === "queued") return;
-    setPendingCapture(null); setAgentPrompt(""); setAgentState("idle");
-    setAgentMessage("전송을 취소했습니다. 고정한 맥락은 Agent로 보내지지 않았습니다.");
-  }, [agentState]);
-
-  const submitPendingCapture = useCallback(async () => {
-    const prompt = agentPrompt.trim();
-    if (!pendingCapture || !prompt || agentState === "sending" || agentState === "queued") return;
-    setAgentState("sending");
-    setAgentMessage(deliveryTarget === "claude"
-      ? "질문과 고정한 화면 맥락을 Claude Code에 전송하고 있습니다."
-      : "질문과 고정한 화면 맥락을 Codex Agent에 전송하고 있습니다.");
-    try {
-      let data: { turnId?: string; ok?: boolean };
-      if (deliveryTarget === "claude") {
-        // No Replay Capsule (video segments + on-demand frame query) for
-        // Claude yet -- just the overview frames already shown in the
-        // timeline, same as what a "current screen" send uses.
-        const frames = pendingCapture.mode === "replay" ? pendingCapture.capsule.overviewFrames : pendingCapture.frames;
-        const kind = pendingCapture.mode === "replay" ? "replay" : pendingCapture.region ? "region" : "screenshot";
-        data = await postToCompanion(frames.map((frame) => frame.url), kind, prompt);
-      } else if (pendingCapture.mode === "replay") {
-        const { capsule } = pendingCapture;
-        const form = new FormData();
-        form.set("metadata", JSON.stringify({ threadId: pendingCapture.threadId, mode: pendingCapture.mode, seconds: pendingCapture.seconds, userPrompt: prompt, startedAt: capsule.startedAt, triggeredAt: capsule.triggeredAt, segments: capsule.segments.map(({ startedAt, durationMs, blob }) => ({ startedAt, durationMs, mimeType: blob.type })) }));
-        capsule.overviewFrames.forEach((frame, index) => form.append("overview", dataUrlToBlob(frame.url), `overview-${String(index + 1).padStart(2, "0")}.jpg`));
-        capsule.segments.forEach((segment, index) => form.append("segment", segment.blob, `segment-${String(index + 1).padStart(3, "0")}.webm`));
-        data = await postCapsuleToAgent(form);
-      } else {
-        data = await postToAgent({ threadId: pendingCapture.threadId, mode: pendingCapture.mode, kind: pendingCapture.region ? "region" : "screenshot", seconds: pendingCapture.seconds, frames: pendingCapture.frames.map((frame) => frame.url), userPrompt: prompt });
-      }
-      const label = pendingCapture.mode === "replay" ? `최근 ${pendingCapture.seconds}초 Replay Capsule` : pendingCapture.region ? "선택 영역" : "현재 화면";
-      setPendingCapture(null); setAgentPrompt(""); setAgentState("done");
-      setAgentMessage(deliveryTarget === "claude"
-        ? `${label}과 질문을 Claude Code에 보냈습니다.`
-        : `${label}과 질문을 Codex 작업에 보냈습니다. (${data.turnId})`);
-    } catch (reason) {
-      setAgentState("error");
-      const base = reason instanceof Error ? reason.message
-        : deliveryTarget === "claude" ? "Claude Desktop 전송에 실패했습니다." : "Codex Agent 전송에 실패했습니다.";
-      // Claude Desktop failures here mean AirPointer is already running (its
-      // token gates the whole "claude" path -- see prepareAgentCapture above)
-      // and something else went wrong, so the fallback hint would be noise;
-      // Codex failures can mean no local bridge exists at all.
-      setAgentMessage(deliveryTarget === "codex" ? base + AGENT_FALLBACK_HINT : base);
-    }
-  }, [agentPrompt, agentState, deliveryTarget, pendingCapture, postCapsuleToAgent, postToAgent, postToCompanion]);
-
-  const changeCompanionEnabled = useCallback((enabled: boolean) => {
-    // External protocols must be opened while the trusted click is still active.
-    const token = enabled ? window.crypto.randomUUID() : companionToken;
-    setCompanionLaunchIssue("");
-    const outcome = launchAirPointer(enabled ? "start_hotkey" : "quit", token);
-    if (enabled && outcome) void outcome.then((issue) => setCompanionLaunchIssue(issue || ""));
-    setCompanionToken(enabled ? token : "");
-    setCompanionEnabled(enabled);
-    setCompanionMessage(enabled ? "AirPointer를 시작하고 있습니다." : "");
-  }, [companionToken]);
-
-  const setHotkeyBinding = useCallback((action: HotkeyAction, combo: string) => {
-    setHotkeyBindings((current) => ({ ...current, [action]: combo }));
-  }, []);
-
-  const { sentFrames: companionSentFrames, error: companionError, ready: companionReady, connected: companionConnected, scoreHistory: liveScoreHistory, scoreThreshold: liveScoreThreshold } = useCompanionHotkeys({ enabled: companionEnabled, token: companionToken, agentThreadId, hotkeys: hotkeyBindings, deliveryTarget });
-
-  // AirPointer has to actually be running for scoreHistory to mean anything
-  // -- companion_bridge.py only ever gets real values pushed into it from
-  // App._redraw() while the native capture loop is alive (see main.py).
-  const liveScoreAvailable = companionEnabled && companionReady;
-  const liveScoreChart = useMemo<ScoreChart | null>(() => {
-    if (liveScoreHistory.length < 2) return null;
-    const scores = liveScoreHistory.map(([, score]) => score);
-    // Real global-diff scores run far below 1.0 in practice (see the
-    // mem_probe.py measurement thread) -- scale to whatever's actually
-    // showing up so the line isn't squashed flat against the bottom.
-    const maxScore = Math.max(liveScoreThreshold * 1.4, ...scores, 0.001);
-    const minT = liveScoreHistory[0][0];
-    const maxT = liveScoreHistory[liveScoreHistory.length - 1][0];
-    const span = Math.max(maxT - minT, 0.001);
-    const toX = (t: number) => ((t - minT) / span) * 600;
-    const toY = (score: number) => 135 - (score / maxScore) * 125;
-    const points = liveScoreHistory.map(([t, score]) => `${toX(t).toFixed(1)},${toY(score).toFixed(1)}`).join(" ");
-
-    // One pass: a run of consecutive at-or-above-threshold samples becomes
-    // one shaded band plus one peak marker at that run's highest score --
-    // mirrors _ChangeTracker merging consecutive above-threshold frames into
-    // one ChangeEvent, just without the quiet-frame hysteresis (this only
-    // has the global score to work with, not the tile grid _ChangeTracker
-    // also checks -- see the legend's "전역 기준만" note).
-    const bands: { x: number; width: number }[] = [];
-    const peaks: { x: number; y: number; score: number }[] = [];
-    let runStartT: number | null = null;
-    let runBestT = 0;
-    let runBestScore = 0;
-    const closeRun = (endT: number) => {
-      if (runStartT === null) return;
-      bands.push({ x: toX(runStartT), width: Math.max(4, toX(endT) - toX(runStartT)) });
-      peaks.push({ x: toX(runBestT), y: toY(runBestScore), score: runBestScore });
-      runStartT = null;
-    };
-    liveScoreHistory.forEach(([t, score], index) => {
-      const above = score >= liveScoreThreshold;
-      if (above) {
-        if (runStartT === null) { runStartT = t; runBestT = t; runBestScore = score; }
-        else if (score > runBestScore) { runBestT = t; runBestScore = score; }
-        if (index === liveScoreHistory.length - 1) closeRun(t);
-      } else {
-        closeRun(liveScoreHistory[index - 1]?.[0] ?? t);
-      }
-    });
-
-    return { points, thresholdY: toY(liveScoreThreshold), bands, peaks };
-  }, [liveScoreHistory, liveScoreThreshold]);
-  const showLiveScore = liveScoreEnabled && liveScoreAvailable && liveScoreChart !== null;
-  const scoreChart = showLiveScore ? liveScoreChart! : DEMO_SCORE_CHART;
-
-  // Mirrors a hotkey-triggered capture into the same "LOCAL RING
-  // BUFFER" grid below that otherwise only ever shows this page's own
-  // screen-share captures (see setFrames elsewhere in this file) -- a
-  // native capture never reached the browser at all before this, since it
-  // goes straight to Codex/Claude Desktop via desktop_paste.py.
-  useEffect(() => {
-    // atSeconds now comes from the native side for real (see
-    // App._publish_sent_frames, which reads screen_buffer.py's
-    // export_recent() sidecar) -- 0 for a screenshot/region send is
-    // genuinely "just now", not a placeholder.
-    // Mirror an external companion event into the shared capture preview.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (companionSentFrames.length) setFrames(companionSentFrames);
-  }, [companionSentFrames]);
-
-  // Reset the boot-progress estimate the moment the switch turns off, during
-  // render rather than as a setState call inside the effect below.
-  const [trackedCompanionEnabled, setTrackedCompanionEnabled] = useState(companionEnabled);
-  if (companionEnabled !== trackedCompanionEnabled) {
-    setTrackedCompanionEnabled(companionEnabled);
-    if (!companionEnabled) setBootProgress(0);
-  }
-
-  useEffect(() => {
-    // No real progress signal exists for the exe-launch portion (PyInstaller
-    // onefile extraction happens before the companion's HTTP server can even
-    // answer), so that part is an elapsed-time estimate -- eases toward 96%
-    // and never claims 100% on its own. The companion's running status
-    // provides the real readiness signal.
-    if (!companionEnabled || companionReady) return;
-    const startedAt = Date.now();
-    const timer = window.setInterval(() => {
-      const elapsed = Date.now() - startedAt;
-      setBootProgress(Math.round(96 * (1 - Math.exp(-elapsed / 3200))));
-    }, 100);
-    return () => window.clearInterval(timer);
-  }, [companionEnabled, companionReady]);
-
   useEffect(() => {
     if (!stream) return;
     const tick = () => {
@@ -1168,19 +724,6 @@ export function ReplayWorkspace() {
   useEffect(() => () => { analysisController.current?.abort(); buffer.current.stop(); }, []);
   useEffect(() => () => { void closeScreenOcr(); }, []);
   useEffect(() => {
-    if (!companionConnected || !companionToken) return;
-    let cancelled = false;
-    const backfill = async () => {
-      const localFrames = await listScreenMemoryFrames({ limit: 120 });
-      for (const frame of localFrames) {
-        if (cancelled) return;
-        await syncMemoryFrameToCompanion(companionToken, frame);
-      }
-    };
-    const timer = window.setTimeout(() => void backfill(), 0);
-    return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [companionConnected, companionToken]);
-  useEffect(() => {
     if (!stream || !memoryEnabled || viewMode !== "full") return;
     let cancelled = false;
     let lastFingerprint = "";
@@ -1204,59 +747,22 @@ export function ReplayWorkspace() {
         const displaySurface = stream.getVideoTracks()[0]?.getSettings().displaySurface;
         const surface = displaySurface === "browser" || displaySurface === "window" || displaySurface === "monitor" ? displaySurface : "unknown";
         const saved = await saveScreenMemoryFrame({ capturedAt, imageUrl: captured.imageUrl, text: "", source: "timeline", surface, width: captured.width, height: captured.height, bookmarked: false, note: "", tags: [] });
-        void syncMemoryFrameToCompanion(companionToken, saved);
         memoryOcrQueue.current = memoryOcrQueue.current.then(async () => {
           if (cancelled) return;
           const text = await recognizeScreenText(saved.imageUrl);
-          if (text) {
-            const updated = await updateScreenMemoryFrame(saved.id, { text });
-            if (updated) await syncMemoryFrameToCompanion(companionToken, updated);
-          }
+          if (text) await updateScreenMemoryFrame(saved.id, { text });
         });
       } finally { working = false; }
     };
     const first = window.setTimeout(() => void persist(), 1_000);
     const timer = window.setInterval(() => void persist(), 4_000);
     return () => { cancelled = true; window.clearTimeout(first); window.clearInterval(timer); };
-  }, [companionToken, stream, memoryEnabled, viewMode]);
-  useEffect(() => {
-    if (viewMode !== "full") return;
-    const timer = window.setTimeout(() => void loadAgentThreads(), 0);
-    return () => window.clearTimeout(timer);
-  }, [loadAgentThreads, viewMode]);
-  useEffect(() => {
-    if (deliveryTarget !== "claude") return;
-    const timer = window.setTimeout(() => void loadClaudeThreads(), 0);
-    return () => window.clearTimeout(timer);
-  }, [deliveryTarget, loadClaudeThreads]);
-  useEffect(() => {
-    if (!pendingCapture) return;
-    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") cancelPendingCapture(); };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [cancelPendingCapture, pendingCapture]);
+  }, [stream, memoryEnabled, viewMode]);
   const bufferPercent = Math.min(100, (elapsed / (retention * 60_000)) * 100);
   const { videoRef: replayVideoRef, at: replayAt, previewUrl: replayPreviewUrl, playing: replayPlaying, scrub: scrubReplay, seek: seekReplay, play: playReplay, pause: pauseReplay, goLive } = useReplayPlayback(buffer, Boolean(stream));
   const replayAgo = replayAt !== null ? formatDuration(Math.max(0, clock - replayAt)) : "";
   const timeLabel = replayAt !== null ? `-${replayAgo}` : formatDuration(elapsed);
   const stateLabel = useMemo(() => ({ idle: "대기", recording: "로컬 기록 중", preparing: "프레임 준비", analyzing: "AI 분석 중", done: "분석 완료", error: "확인 필요" })[status], [status]);
-  // companionLaunchIssue comes straight from the local spawn attempt (we know
-  // for certain whether AirPointer.exe was even found), so it's authoritative
-  // over the generic connection-timeout message from useCompanionHotkeys.
-  // Off localhost we have no such signal -- the OS protocol call gives no
-  // feedback -- so a timeout there is genuinely ambiguous and still worth
-  // suggesting a download for.
-  const companionStatus = useMemo(() => {
-    if (companionLaunchIssue === "missing") return { text: "AirPointer.exe를 찾을 수 없습니다.", showDownload: true };
-    if (companionLaunchIssue === "error") return { text: "AirPointer 실행에 실패했습니다. 잠시 후 다시 시도해 주세요.", showDownload: false };
-    if (companionError) return { text: companionError, showDownload: !isLocalCompanion() };
-    return null;
-  }, [companionLaunchIssue, companionError]);
-  const agentStateLabel = useMemo(() => ({ loading: "연결 중", idle: "AGENT 대기", preparing: "맥락 고정 중", drafting: "프롬프트 대기", sending: "AGENT 전송 중", queued: "AGENT 전송 대기", done: "AGENT 전송 완료", error: "AGENT 확인 필요" })[agentState], [agentState]);
-  const dockHudLabel = companionReady ? "단축키 대기 중" : "AirPointer 연결 대기 중";
-  const dockLoadingLabel = "AirPointer 시작 중";
-  const dockBadgeLabel = companionEnabled && companionReady ? "HOTKEY · EXE" : "EXE 연결 안 됨";
-  const pipelineStages = viewMode === "browser" ? BROWSER_PIPELINE_STAGES : NATIVE_PIPELINE_STAGES;
   const exportPanel = <AgentExportPanel key={stream?.id ?? "idle"} bufferRef={buffer} active={Boolean(stream)} seconds={sendSeconds} bufferMinutes={retention} onBufferMinutesChange={changeRetention} onSecondsChange={setSendSeconds} captureIntervalMs={captureIntervalMs} onCaptureIntervalChange={setCaptureIntervalMs} recording={Boolean(stream)} onStartRecording={() => void startSharing()} onStopRecording={stopSharing} minimized={pipMinimized} onMinimizedChange={changePipMinimized} halfScreen={pipHalfScreen} onHalfScreenChange={pipContainer ? changePipHalfScreen : undefined} surface={stream?.getVideoTracks()[0]?.getSettings().displaySurface ?? "unknown"} onBookmark={timelineActive ? bookmarkToday : undefined} />;
 
   return (
@@ -1266,14 +772,10 @@ export function ReplayWorkspace() {
         <a className={styles.brand} href="#top" aria-label="방금그거뭐였지 홈"><span className={styles.brandMark} aria-hidden="true">↺</span><span>방금그거뭐였지</span></a>
         <div className={styles.modeSwitch} role="tablist" aria-label="기능 범위 선택">
           <button type="button" role="tab" aria-selected={viewMode === "browser"} data-active={viewMode === "browser"} onClick={() => setViewMode("browser")}>리플레이 작업대</button>
-          <button type="button" role="tab" aria-selected={viewMode === "full"} data-active={viewMode === "full"} onClick={() => setViewMode("full")}>확장 기능</button>
+          <button type="button" role="tab" aria-selected={viewMode === "full"} data-active={viewMode === "full"} onClick={() => setViewMode("full")}>AI 분석</button>
         </div>
-        <div className={styles.navMeta}><ThemePicker /><span className={styles.localBadge}><LockKey size={14} weight="bold" /> LOCAL BUFFER</span><a href="#how">작동 원리</a><a href="#timeline">오늘 타임라인</a><a href="#pipeline">파이프라인</a></div>
+        <div className={styles.navMeta}><ThemePicker />{!insideDesktopApp && <a className={styles.appDownload} href={DESKTOP_APP_URL} title="Windows 앱: 공유 창 없이 바로 기록, 앞에 있던 창과 파일 저장까지 기록, 단축키 한 번으로 내보내기"><DownloadSimple size={15} weight="bold" />데스크톱 앱</a>}<span className={styles.localBadge}><LockKey size={14} weight="bold" /> LOCAL BUFFER</span><a href="#how">작동 원리</a><a href="#timeline">오늘 타임라인</a><a href="#pipeline">파이프라인</a></div>
       </header>
-      {viewMode === "full" && !companionEnabled && <div className={styles.modeNotice}>
-        <span>Full Access는 별도 프로그램(AirPointer) 설치가 필요합니다 — 설치 전에도 아래에서 미리 둘러볼 수 있어요.</span>
-        <a href={AIRPOINTER_DOWNLOAD_URL}>AirPointer 다운로드</a>
-      </div>}
 
       {overviewOpen && <ProjectOverview onClose={() => setOverviewOpen(false)} onShowExamples={() => { setOverviewOpen(false); setExamplesOpen(true); }} />}
       {examplesOpen && <UsageExamples mode={examplesMode} onClose={() => { setExamplesOpen(false); setExamplesMode(undefined); }} />}
@@ -1331,22 +833,7 @@ export function ReplayWorkspace() {
         </div>
 
         <aside className={styles.commandDock}>
-          <div className={styles.eyebrowRow}><p className={styles.eyebrow}>{viewMode === "browser" ? "BROWSER REPLAY" : "REPLAY TO AGENT"}</p>{viewMode === "full" && <button type="button" className={styles.settingsButton} onClick={() => void openPromptSettings()} aria-label="프롬프트 설정"><Gear size={15} /></button>}</div>
-          {viewMode === "full" && <>
-            <div className={styles.companionStatusPanel} data-connected={companionEnabled && companionReady} role="status">
-              <span>{dockBadgeLabel}</span><strong>{dockHudLabel}</strong>
-              {companionEnabled && !companionReady && <small>{companionStatus?.text || `${dockLoadingLabel}… ${bootProgress}%`}</small>}
-            </div>
-            <div className={styles.gestureControls}><label className={styles.switch}><input type="checkbox" checked={companionEnabled} onChange={(event) => changeCompanionEnabled(event.target.checked)} /><span /><b>단축키 + AirPointer {companionEnabled ? "켜짐" : "켜기"}</b></label><a className={styles.downloadLink} href={AIRPOINTER_DOWNLOAD_URL}>AirPointer 처음이신가요? 다운로드</a></div>
-              <p className={styles.settingsGroupLabel}>단축키 · 꺼진 상태에서도 미리 정할 수 있습니다</p>
-              <div className={styles.gestureActions} aria-label="단축키 설정">
-                <HotkeyRecorder label="현재 화면" combo={hotkeyBindings.screenshot} disabled={false} onChange={(value) => setHotkeyBinding("screenshot", value)} />
-                <HotkeyRecorder label="최근 리플레이" combo={hotkeyBindings.replay} disabled={false} onChange={(value) => setHotkeyBinding("replay", value)} />
-                <HotkeyRecorder label="영역 선택" combo={hotkeyBindings.region} disabled={false} onChange={(value) => setHotkeyBinding("region", value)} />
-              </div>
-            {(companionStatus || (!companionReady && companionMessage)) && <small className={styles.companionError}>{companionStatus ? companionStatus.text : companionMessage}{companionStatus?.showDownload && <> <a href={AIRPOINTER_DOWNLOAD_URL}>AirPointer 다운로드</a></>}</small>}
-            <div className={styles.rule} />
-          </>}
+          <div className={styles.eyebrowRow}><p className={styles.eyebrow}>{viewMode === "browser" ? "BROWSER REPLAY" : "AI QUICK CHECK"}</p></div>
           {<details className={styles.captureSettings}><summary>기록 설정</summary><label className={styles.field}><span>로컬 버퍼</span><select value={retention} onChange={(event) => changeRetention(Number(event.target.value))}><option value={1}>최근 1분</option><option value={3}>최근 3분</option><option value={5}>최근 5분</option></select></label>
           <label className={styles.field}><span>전송 구간</span><select value={sendSeconds} onChange={(event) => setSendSeconds(Number(event.target.value))}>{[5, 15, 30, 60, 180, 300].filter((value) => value <= retention * 60).map((value) => <option key={value} value={value}>최근 {value < 60 ? `${value}초` : `${value / 60}분`}</option>)}</select></label>
           {viewMode === "full" && <>
@@ -1376,22 +863,6 @@ export function ReplayWorkspace() {
           {!pipSupported && <small className={styles.companionError}>작은 창을 지원하지 않습니다. 이 화면에서 계속 사용할 수 있습니다.</small>}
           {pipSupported && !pipMessage && <small className={styles.companionError}>화면 공유 후 작은 창에서 파일과 프롬프트를 내보낼 수 있습니다.</small>}
           {pipMessage && <small className={styles.companionError}>{pipMessage}</small>}
-          {viewMode === "full" && <>
-            <div className={styles.rule} />
-            <p className={styles.settingsGroupLabel}>보낼 곳</p>
-            <div className={styles.gestureActions} aria-label="보낼 곳 선택">
-              <LaunchModeOption label="Codex" detail="Codex 작업 선택 후 전송" active={deliveryTarget === "codex"} disabled={false} onSelect={() => setDeliveryTarget("codex")} />
-              <LaunchModeOption label="Claude Code" detail={companionToken ? "Claude Desktop 세션 선택 후 전송" : "AirPointer 연결 필요"} active={deliveryTarget === "claude"} disabled={false} onSelect={() => setDeliveryTarget("claude")} />
-            </div>
-            {deliveryTarget === "codex"
-              ? <label className={styles.field}><span>Codex Agent</span><span className={styles.agentPicker}><SessionPicker threads={codexPickerThreads} value={agentThreadId} onChange={handleAgentThreadChange} loading={agentState === "loading"} blankLabel="작업 선택" ariaLabel="전송할 Codex 작업" /><button type="button" className={styles.agentPickerRefresh} onClick={() => void loadAgentThreads()} aria-label="Codex 작업 새로고침"><ArrowClockwise size={15} /></button></span></label>
-              : companionToken
-                ? <label className={styles.field}><span>Claude Session</span><span className={styles.agentPicker}><SessionPicker threads={claudeThreads} value={claudeThreadId} onChange={setClaudeThreadId} loading={claudeThreadsLoading} blankLabel="현재 열려 있는 대화" ariaLabel="전송할 Claude 세션" /><button type="button" className={styles.agentPickerRefresh} onClick={() => void loadClaudeThreads()} aria-label="Claude 세션 새로고침"><ArrowClockwise size={15} /></button></span></label>
-                : <small className={styles.companionError}>Claude Desktop으로 보내려면 위에서 AirPointer를 먼저 켜주세요.</small>}
-            <button className={styles.action} onClick={() => void prepareAgentCapture("replay")} disabled={!stream || (deliveryTarget === "codex" ? !agentThreadId : !companionToken) || agentState === "preparing" || agentState === "sending" || agentState === "queued"}><PaperPlaneTilt size={20} weight="bold" /> 최근 {sendSeconds}초 Agent에 묻기</button>
-            <button className={styles.secondary} onClick={() => void prepareAgentCapture("current")} disabled={!stream || (deliveryTarget === "codex" ? !agentThreadId : !companionToken) || agentState === "preparing" || agentState === "sending" || agentState === "queued"}><Camera size={18} /> 지금 화면 Agent에 묻기</button>
-            <div className={styles.status} data-tone={agentState === "error" ? "error" : agentState === "done" ? "done" : "normal"}>{agentState === "loading" || agentState === "preparing" || agentState === "sending" || agentState === "queued" ? <CircleNotch className={styles.spin} size={16} /> : agentState === "error" ? <WarningCircle size={16} /> : agentState === "done" ? <Check size={16} /> : <span className={styles.statusDot} />}<div><strong>{agentStateLabel}</strong><span>{agentMessage}</span></div></div>
-          </>}
         </aside>
       </section>
 
@@ -1419,51 +890,18 @@ export function ReplayWorkspace() {
         {analysisEvidencePreview !== null && analysisEvidence[analysisEvidencePreview] && <EvidenceTimeMachine evidence={analysisEvidence[analysisEvidencePreview]} onClose={() => setAnalysisEvidencePreview(null)} />}
       </section>
 
-      {viewMode === "full" && <section className={styles.memoryOptIn}><label className={styles.switch}><input type="checkbox" checked={memoryEnabled} onChange={event => setMemoryEnabled(event.target.checked)} /><span /><b>화면 기록을 이 브라우저에 영구 보관 (선택)</b></label><p>켜면 OCR과 화면 이미지가 기기에 저장됩니다. 공유를 중지해도 남습니다.</p>{memoryEnabled && <ScreenMemoryWorkbench recording={Boolean(stream)} companionConnected={companionConnected} companionToken={companionToken} onAddToReplay={addMemoryFrameToReplay} />}</section>}
+      {viewMode === "full" && <section className={styles.memoryOptIn}><label className={styles.switch}><input type="checkbox" checked={memoryEnabled} onChange={event => setMemoryEnabled(event.target.checked)} /><span /><b>화면 기록을 이 브라우저에 영구 보관 (선택)</b></label><p>켜면 OCR과 화면 이미지가 기기에 저장됩니다. 공유를 중지해도 남습니다.</p>{memoryEnabled && <ScreenMemoryWorkbench recording={Boolean(stream)} onAddToReplay={addMemoryFrameToReplay} />}</section>}
 
       <DayTimeline active={timelineActive} recorder={labelerStatus} onStart={() => void startTimeline()} onStop={() => setTimelineOn(false)} onShowExample={() => setTimelineExampleOpen(true)} />
       {timelineExampleOpen && <DayTimelineDemo onClose={() => setTimelineExampleOpen(false)} />}
 
 
-      <AnimatePresence>
-        {pendingCapture && <motion.div className={styles.promptBackdrop} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-          <motion.section className={styles.promptDialog} role="dialog" aria-modal="true" aria-label="Agent에게 질문" initial={{ opacity: 0, y: 24, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 16, scale: .98 }}>
-            <div className={styles.promptHeader}><button type="button" onClick={cancelPendingCapture} disabled={agentState === "sending" || agentState === "queued"} aria-label="질문 창 닫기"><X size={20} /></button></div>
-            <p className={styles.captureSummary}>{pendingCapture.mode === "replay" ? `최근 ${pendingCapture.seconds}초 맥락 · ${pendingCapture.capsule.overviewFrames.length}개 개요 + 원본 구간` : pendingCapture.region ? "선택 영역" : "현재 화면"}</p>
-            <div className={styles.promptChoices} aria-label="추천 질문">{PROMPT_PRESETS.map((preset) => <button type="button" key={preset} onClick={() => setAgentPrompt(preset)} aria-pressed={agentPrompt === preset}>{preset}</button>)}</div>
-            <label className={styles.promptInput}><span>직접 질문</span><textarea autoFocus value={agentPrompt} maxLength={2000} placeholder="예: 0.5초 전에 잠깐 뜬 오류가 뭐였고 어떻게 해결해?" onChange={(event) => setAgentPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void submitPendingCapture(); } }} /></label>
-            <div className={styles.promptFooter}><p><b>{agentPrompt.length}</b> / 2000 · Enter 전송 · Shift+Enter 줄바꿈</p><div><button type="button" className={styles.promptCancel} onClick={cancelPendingCapture} disabled={agentState === "sending" || agentState === "queued"}>취소</button><button type="button" className={styles.promptSend} onClick={() => void submitPendingCapture()} disabled={!agentPrompt.trim() || agentState === "sending" || agentState === "queued"}>{agentState === "sending" || agentState === "queued" ? <CircleNotch className={styles.spin} size={17} /> : <PaperPlaneTilt size={17} weight="bold" />} 질문과 함께 전송</button></div></div>
-          </motion.section>
-        </motion.div>}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {promptSettingsOpen && <motion.div className={styles.promptBackdrop} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-          <motion.section className={styles.promptDialog} role="dialog" aria-modal="true" aria-labelledby="prompt-settings-title" initial={{ opacity: 0, y: 24, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 16, scale: .98 }}>
-            <div className={styles.promptHeader}><div><p>PROMPT TEMPLATE</p><h2 id="prompt-settings-title">Codex에게 보낼 프롬프트 설정</h2></div><button type="button" onClick={() => setPromptSettingsOpen(false)} aria-label="설정 창 닫기"><X size={20} /></button></div>
-            <p className={styles.settingsHint}>매번 직접 입력하는 질문(요청) 내용은 여기서 바꿀 수 없습니다. 그 질문을 감싸는 문구만 편집합니다.</p>
-            {promptSettingsState === "loading" && <div className={styles.settingsLoading}><CircleNotch className={styles.spin} size={20} /> 불러오는 중…</div>}
-            {promptTemplate && promptSettingsState !== "loading" && <div className={styles.settingsForm}>
-              <label className={styles.settingsField}><span>마무리 문구</span><input type="text" value={promptTemplate.wrapperOutro} onChange={(event) => setPromptTemplate({ ...promptTemplate, wrapperOutro: event.target.value })} /></label>
-              <label className={styles.settingsField}><span>최근 활성 창 이력 라벨 · AirPointer.exe 캡처에만 붙음</span><input type="text" value={promptTemplate.windowHistoryLabel} onChange={(event) => setPromptTemplate({ ...promptTemplate, windowHistoryLabel: event.target.value })} /></label>
-              <p className={styles.settingsGroupLabel}>질문을 안 남겼을 때 기본 질문</p>
-              {(["screenshot", "region", "replay"] as const).map((kind) => <label className={styles.settingsField} key={`default-${kind}`}><span>{{ screenshot: "현재 화면", region: "선택 영역", replay: "최근 화면 기록" }[kind]}</span><input type="text" value={promptTemplate.defaultRequestByKind[kind]} onChange={(event) => setPromptTemplate({ ...promptTemplate, defaultRequestByKind: { ...promptTemplate.defaultRequestByKind, [kind]: event.target.value } })} /></label>)}
-              <p className={styles.settingsGroupLabel}>Replay Capsule 전용 (최근 화면 기록을 보낼 때)</p>
-              <label className={styles.settingsField}><span>도입 문구 · <code>{"{seconds}"}</code> 사용 가능</span><input type="text" value={promptTemplate.capsuleIntro} onChange={(event) => setPromptTemplate({ ...promptTemplate, capsuleIntro: event.target.value })} /></label>
-              <label className={styles.settingsField}><span>조회 안내 문구</span><textarea value={promptTemplate.capsuleInstruction} onChange={(event) => setPromptTemplate({ ...promptTemplate, capsuleInstruction: event.target.value })} /></label>
-            </div>}
-            {promptSettingsMessage && <p className={styles.settingsMessage} data-tone={promptSettingsState === "error" ? "error" : "normal"}>{promptSettingsMessage}</p>}
-            <div className={styles.promptFooter}><p>편집 즉시 저장되지 않습니다.</p><div><button type="button" className={styles.promptCancel} onClick={() => void resetPromptSettings()} disabled={promptSettingsState === "loading" || promptSettingsState === "saving"}>기본값으로 초기화</button><button type="button" className={styles.promptSend} onClick={() => void savePromptSettings()} disabled={!promptTemplate || promptSettingsState === "loading" || promptSettingsState === "saving"}>{promptSettingsState === "saving" ? <CircleNotch className={styles.spin} size={17} /> : <Check size={17} weight="bold" />} 저장</button></div></div>
-          </motion.section>
-        </motion.div>}
-      </AnimatePresence>
-
       <section className={styles.pipelineSection} id="pipeline">
-        <p className={styles.eyebrow}>{viewMode === "browser" ? "HOW CONTEXT EXPORTS" : "HOW AIRPOINTER THINKS"}</p>
-        <h2>{viewMode === "browser" ? <>다섯 단계로<br />화면 맥락을 전달합니다.</> : <>다섯 단계로<br />화면이 Agent에 도착합니다.</>}</h2>
+        <p className={styles.eyebrow}>HOW CONTEXT EXPORTS</p>
+        <h2>다섯 단계로<br />화면 맥락을 전달합니다.</h2>
         <div className={styles.pipelineTrack}>
           <div className={styles.pipelineLine} aria-hidden="true"><span className={styles.pipelineBeam} /></div>
-          {pipelineStages.map(({ Icon, label, detail }, index) => (
+          {BROWSER_PIPELINE_STAGES.map(({ Icon, label, detail }, index) => (
             <div className={styles.pipelineNode} style={{ "--i": index } as React.CSSProperties} key={label}>
               <span className={styles.pipelineIcon}><Icon size={20} weight="bold" /></span>
               <span className={styles.pipelineText}><b>{label}</b><small>{detail}</small></span>
@@ -1471,58 +909,6 @@ export function ReplayWorkspace() {
           ))}
         </div>
 
-        {/* Off (or on with nothing to show yet), this renders DEMO_SCORE_CHART
-            -- a hand-drawn curve, not a live readout. Checked while AirPointer
-            is running, it renders liveScoreChart instead: real per-frame
-            scores from _ChangeTracker.observe(), plumbed through
-            ScreenReplayBuffer.recent_scores() -> companion_bridge.py's
-            publish_scores() -> this page's /status poll. Either way the
-            rendering below is the same code path -- see ScoreChart above. */}
-        <div hidden={viewMode !== "full"} className={styles.scorePanel}>
-          <div className={styles.scorePanelHead}>
-            <span>TILE DIFF SCORE{showLiveScore && " · LIVE"}</span>
-            <div className={styles.scorePanelHeadRight}>
-              <span>_ChangeTracker.observe()</span>
-              <label className={styles.scoreLiveToggle} data-available={liveScoreAvailable} title={liveScoreAvailable ? undefined : "AirPointer 연결 시 사용 가능"}>
-                <input type="checkbox" checked={liveScoreEnabled} onChange={(event) => setLiveScoreEnabled(event.target.checked)} />
-                <span>실시간 연동</span>
-              </label>
-            </div>
-          </div>
-          <p className={styles.scoreCaption}>프레임마다 화면이 바뀐 정도를 점수로 매깁니다. 점선(임계값)을 넘는 구간을 하나의 &ldquo;이벤트&rdquo;로 묶고, 그 안에서 점수가 가장 높은 프레임을 대표 프레임으로 뽑습니다.</p>
-          {liveScoreEnabled && !showLiveScore && (
-            <p className={styles.scoreLiveHint}>
-              {!liveScoreAvailable ? "AirPointer 연결 대기 중 — 그동안 데모 곡선을 보여줍니다." : "데이터를 모으는 중입니다 — 그동안 데모 곡선을 보여줍니다."}
-            </p>
-          )}
-          <div className={styles.scoreChart}>
-            <svg viewBox="0 0 600 140" preserveAspectRatio="none">
-              <line x1="0" y1={scoreChart.thresholdY} x2="600" y2={scoreChart.thresholdY} className={styles.scoreThreshold} />
-              {scoreChart.bands.map((band, index) => (
-                <rect key={index} x={band.x} y="0" width={band.width} height="140" className={styles.scoreBand} />
-              ))}
-              <polyline className={styles.scoreLine} points={scoreChart.points} />
-              {scoreChart.peaks.map((peak, index) => (
-                <rect key={index} x={peak.x - 4} y={peak.y - 4} width="8" height="8" className={styles.scorePeak} />
-              ))}
-            </svg>
-            {!showLiveScore && <span className={styles.scorePlayhead} />}
-            <span className={styles.scoreAxisLabel} data-corner="top-left">점수 높음 ↑</span>
-            <span className={styles.scoreAxisLabel} data-corner="bottom-right">시간 →</span>
-            <span className={styles.scoreThresholdLabel} style={{ top: `calc(${(scoreChart.thresholdY / 140) * 100}% - 16px)` }}>임계값</span>
-            {scoreChart.bands.map((band, index) => (
-              <span className={styles.scoreEventLabel} style={{ left: `${((band.x + band.width / 2) / 600) * 100}%` }} key={index}>이벤트 구간</span>
-            ))}
-            {scoreChart.peaks.map((peak, index) => (
-              <span className={styles.scorePeakLabel} style={{ left: `${(peak.x / 600) * 100}%` }} key={index}>대표 프레임</span>
-            ))}
-          </div>
-          <div className={styles.scoreLegend}>
-            <span>diff score</span>
-            <span>{showLiveScore ? `THRESHOLD · GLOBAL_MIN_SCORE ${liveScoreThreshold} (전역 기준만, 타일 기준 생략)` : "THRESHOLD · GLOBAL_MIN_SCORE 0.02 / TILE_MIN_SCORE 0.15"}</span>
-            <span>{scoreChart.peaks.length ? `PEAK ${scoreChart.peaks.map((peak) => peak.score.toFixed(2)).join(" · ")}` : "PEAK 없음"}</span>
-          </div>
-        </div>
       </section>
 
       <footer className={styles.footer}><span>방금그거뭐였지</span><span>AI Championship 2026 Prototype</span><span>Built for moments that disappear.</span></footer>
@@ -1579,256 +965,4 @@ function ReplayScrubber({ bounds, spanMs, now, at, playing, onScrub, onSeek, onL
 function formatDuration(ms: number) {
   const seconds = Math.floor(ms / 1_000);
   return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
-}
-
-// Buckets by `project` in order of first appearance (not sorted-input
-// run-length grouping): Claude's threads already arrive project-block
-// ordered (see App._list_companion_threads / desktop_paste.py's
-// _claude_sidebar_rows), where this reduces to the same thing, but Codex's
-// don't -- its threads are updatedAt-sorted with cwd-derived projects
-// interleaved, so first-appearance-order bucketing is what actually keeps
-// each project's items together for Codex too.
-function groupPickerThreads(threads: PickerThread[]): [string, PickerThread[]][] {
-  const order: string[] = [];
-  const buckets = new Map<string, PickerThread[]>();
-  for (const thread of threads) {
-    if (!buckets.has(thread.project)) { buckets.set(thread.project, []); order.push(thread.project); }
-    buckets.get(thread.project)!.push(thread);
-  }
-  return order.map((project) => [project, buckets.get(project)!]);
-}
-
-// Codex's AgentThread has no project field, only `cwd` (a full filesystem
-// path) -- the trailing folder name is a reasonable proxy for "project",
-// matching how the folders/projects in Claude's own sidebar are named.
-function pathBasename(path: string): string {
-  const parts = path.split(/[\\/]/).filter(Boolean);
-  return parts[parts.length - 1] || "";
-}
-
-function LaunchModeOption({ label, detail, active, disabled, onSelect }: { label: string; detail: string; active: boolean; disabled: boolean; onSelect: () => void }) {
-  return <label className={styles.gestureAction} data-active={active}><span><b>{label}</b><small>{detail}</small></span><input type="radio" name="airpointer-launch-mode" checked={active} disabled={disabled} onChange={onSelect} /><i>{active ? "●" : "○"}</i></label>;
-}
-
-// A hand-drawn dropdown, not a native <select> -- a real <select>'s open
-// popup is OS/browser-drawn and its background/text colors can't be
-// reliably controlled together (see the back-and-forth this replaced: a
-// plain option/optgroup styling attempt showed readable rows in some spots
-// and blank ones in others, inconsistently, because <option> nested inside
-// an <optgroup> doesn't reliably inherit color the same way a top-level
-// <option> does, and there's no way to add a project-row accent layer to a
-// native popup at all). This renders entirely in our own DOM instead, so
-// every color and the project-row accent border are exactly what's coded
-// here, with no browser-dependent guessing.
-function SessionPicker({ threads, value, onChange, loading, blankLabel, ariaLabel }: {
-  threads: PickerThread[]; value: string; onChange: (id: string) => void; loading: boolean;
-  blankLabel: string; ariaLabel: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  // Always an explicit viewport-fixed coordinate once the panel is open --
-  // set on open (anchored under/over the trigger, whichever fits) and
-  // updated live while dragging the handle. Rendered through a portal
-  // straight into document.body (see the return below): an ancestor with
-  // any `transform` (framer-motion's <motion.*> wrappers apply one even at
-  // rest) turns position:fixed into "fixed relative to that ancestor"
-  // instead of the viewport, which is exactly why the panel used to jump
-  // off-screen the instant a drag started -- the portal sidesteps that
-  // ancestor chain entirely, same as a real popup layer would.
-  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
-  const searchRef = useRef<HTMLInputElement>(null);
-  const selected = threads.find((thread) => thread.id === value);
-  const label = selected ? selected.title : blankLabel;
-
-  const normalizedQuery = query.trim().toLowerCase();
-  const filteredThreads = normalizedQuery
-    ? threads.filter((thread) => thread.title.toLowerCase().includes(normalizedQuery))
-    : threads;
-  const groups = useMemo(() => groupPickerThreads(filteredThreads), [filteredThreads]);
-
-  // Closing always clears the search query and position too -- folded into
-  // one helper (rather than a separate reset-on-close effect) so every
-  // close path (trigger toggle, outside click, Escape, picking an item)
-  // goes through one place instead of a setState-in-effect.
-  const close = () => { setOpen(false); setQuery(""); setPos(null); };
-
-  const startDrag = (event: React.PointerEvent) => {
-    event.preventDefault();
-    const startX = event.clientX;
-    const startY = event.clientY;
-    const origin = pos ?? panelRef.current?.getBoundingClientRect() ?? { left: 0, top: 0 };
-    const onMove = (moveEvent: PointerEvent) => {
-      setPos({ left: origin.left + (moveEvent.clientX - startX), top: origin.top + (moveEvent.clientY - startY) });
-    };
-    const onUp = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-  };
-
-  const toggleOpen = () => {
-    if (open) { close(); return; }
-    if (rootRef.current) {
-      const rect = rootRef.current.getBoundingClientRect();
-      const roomBelow = window.innerHeight - rect.bottom;
-      const openUpward = roomBelow < 540 && rect.top > roomBelow;
-      // 520 here matches customPickerPanel's default height -- an estimate
-      // (the user may have resized it last time, but the panel always
-      // remounts at the default size, see the CSS comment there), same
-      // margin/spacing (4px) the old anchored CSS used.
-      setPos({ left: rect.left, top: openUpward ? rect.top - 520 - 4 : rect.bottom + 4 });
-    }
-    setOpen(true);
-  };
-
-  useEffect(() => {
-    if (!open) return;
-    searchRef.current?.focus();
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (rootRef.current?.contains(target)) return;
-      if (panelRef.current?.contains(target)) return;
-      close();
-    };
-    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") close(); };
-    document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
-
-  const pick = (id: string) => { onChange(id); close(); };
-
-  return (
-    <div className={styles.customPicker} ref={rootRef}>
-      <button type="button" className={styles.customPickerTrigger} onClick={toggleOpen}
-              disabled={loading} aria-haspopup="listbox" aria-expanded={open}>
-        <span>{label}</span>
-        <CaretDown size={13} weight="bold" />
-      </button>
-      {open && pos && createPortal(
-        <div ref={panelRef} className={styles.customPickerPanel}
-             style={{ left: pos.left, top: pos.top }}>
-          <div className={styles.customPickerDragHandle} onPointerDown={startDrag} title="드래그해서 옮기기">
-            <DotsSixVertical size={13} weight="bold" />
-          </div>
-          <div className={styles.customPickerSearch}>
-            <MagnifyingGlass size={14} />
-            <input ref={searchRef} type="text" value={query} placeholder="세션 검색..."
-                   onChange={(event) => setQuery(event.target.value)}
-                   onKeyDown={(event) => event.stopPropagation()} />
-          </div>
-          <div role="listbox" aria-label={ariaLabel} className={styles.customPickerList}>
-            {!normalizedQuery && (
-              <div className={styles.customPickerOption} data-active={!value} role="option" aria-selected={!value}
-                   onClick={() => pick("")}>{blankLabel}</div>
-            )}
-            {groups.map(([project, groupThreads]) => (
-              <div key={project || "__misc__"}>
-                {project && <div className={styles.customPickerGroup}>{project}</div>}
-                {groupThreads.map((thread) => (
-                  <div key={thread.id} className={styles.customPickerOption} data-active={thread.id === value}
-                       role="option" aria-selected={thread.id === value} onClick={() => pick(thread.id)}>
-                    {thread.active ? "● " : ""}{thread.title}
-                  </div>
-                ))}
-              </div>
-            ))}
-            {normalizedQuery && groups.length === 0 && (
-              <div className={styles.customPickerEmpty}>일치하는 세션이 없습니다.</div>
-            )}
-          </div>
-        </div>,
-        document.body,
-      )}
-    </div>
-  );
-}
-
-const HOTKEY_MODIFIER_KEYS = new Set(["Control", "Alt", "Shift", "Meta"]);
-
-// Used by HotkeyRecorder to send a native global shortcut to AirPointer.
-// Pure-browser work mode deliberately has no hotkey path; its no-install
-// control surface is the auto-opened PiP. A recorded native combo is sent
-// verbatim and parsed by airpointer/hotkeys.py's parse_binding -- keep the
-// vocabulary (modifier names, JS's own event.key spelling for named keys
-// like "ArrowUp"/"Escape") in sync with that function if either side changes.
-// Takes a structural subset (not KeyboardEvent itself) so it works with
-// React's synthetic event in HotkeyRecorder.
-function comboFromKeyEvent(event: { key: string; ctrlKey: boolean; altKey: boolean; shiftKey: boolean; metaKey: boolean }): string | null {
-  if (HOTKEY_MODIFIER_KEYS.has(event.key)) return null;
-  const parts: string[] = [];
-  if (event.ctrlKey) parts.push("ctrl");
-  if (event.altKey) parts.push("alt");
-  if (event.shiftKey) parts.push("shift");
-  if (event.metaKey) parts.push("win");
-  if (!parts.length) return null; // a bare key would register as a global hotkey -- reject, keep waiting
-  parts.push(event.key === " " ? "space" : event.key.toLowerCase());
-  return parts.join("+");
-}
-
-function HotkeyRecorder({ label, combo, disabled, onChange }: { label: string; combo: string; disabled: boolean; onChange: (combo: string) => void }) {
-  const [recording, setRecording] = useState(false);
-
-  const onKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
-    if (!recording) return;
-    event.preventDefault();
-    if (event.key === "Escape") { setRecording(false); return; }
-    const combo = comboFromKeyEvent(event);
-    if (!combo) return;
-    onChange(combo);
-    setRecording(false);
-  };
-
-  return (
-    <div className={styles.gestureAction} data-active={!disabled}>
-      <span><b>{label}</b><small>{combo.toUpperCase()}</small></span>
-      <button type="button" disabled={disabled} onClick={() => setRecording(true)}
-              onKeyDown={onKeyDown} onBlur={() => setRecording(false)}>
-        {recording ? "키 입력 대기…" : "변경"}
-      </button>
-    </div>
-  );
-}
-
-const isLocalCompanion = () => typeof window !== "undefined" && ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
-
-// Local dev spawns AirPointer.exe directly and can tell us exactly why that
-// failed (missing file vs. some other spawn error); returns undefined when
-// there's nothing more specific to say (production, or the "quit" command).
-function launchAirPointer(command: "start_hotkey" | "quit", token: string): Promise<"missing" | "error" | undefined> | undefined {
-  if (isLocalCompanion()) {
-    const request = fetch("/api/companion", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ command, token }),
-    });
-    if (command === "quit") { void request; return undefined; }
-    return request
-      .then(async (response) => {
-        if (response.ok) return undefined;
-        const body = await response.json().catch(() => ({}) as { error?: string });
-        return /ENOENT|no such file/i.test(body.error || "") ? "missing" : "error";
-      })
-      .catch(() => "error" as const);
-  }
-  // This is an external OS protocol, not an internal Next.js route.
-  // eslint-disable-next-line @next/next/no-location-assign-relative-destination
-  window.location.href = `${AIRPOINTER_PROTOCOL}${command}?token=${encodeURIComponent(token)}`;
-  return undefined;
-}
-
-function dataUrlToBlob(value: string) {
-  const [header, payload] = value.split(",", 2);
-  const mimeType = /^data:([^;]+);base64$/.exec(header)?.[1] || "image/jpeg";
-  const binary = window.atob(payload);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  return new Blob([bytes], { type: mimeType });
 }
