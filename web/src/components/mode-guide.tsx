@@ -14,8 +14,8 @@ const MODES: Mode[] = [
     name: "Manual",
     tagline: "보낼 화면을 내가 직접 고릅니다",
     when: [
-      "딱 한 장면만 AI에게 보여주고 싶을 때",
-      "ChatGPT·Claude 웹처럼 이미지 첨부만 되는 AI를 쓸 때",
+      "AI가 만든 결과를 검토할 때마다 캡처 도구를 꺼내 일일이 찍기 귀찮고, 막상 찍으려니 방금 본 화면이 다시 안 나와 답답할 때",
+      "이미지 첨부가 되는 AI를 쓸 때",
       "개인정보가 섞여 있어 보낼 화면을 직접 골라야 할 때",
     ],
     how: [
@@ -78,7 +78,7 @@ export function ModeGuide() {
     <div key={mode.id} className={styles.panel} role="tabpanel" id={`mode-panel-${mode.id}`} aria-labelledby={`mode-tab-${mode.id}`}>
       <h2>{mode.tagline}</h2>
       <h3>이럴 때 쓰세요</h3>
-      <ul>{mode.when.map((line) => <li key={line}>{line}</li>)}</ul>
+      <ul className={styles.when}>{mode.when.map((line) => <li key={line}>{line}</li>)}</ul>
       <h3>작동 방식</h3>
       <ol>{mode.how.map((line, index) => <li key={line}><b>{String(index + 1).padStart(2, "0")}</b>{line}</li>)}</ol>
     </div>

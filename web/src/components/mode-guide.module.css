@@ -12,7 +12,8 @@
 .panel h3 { margin: 0; padding: 12px 0 8px; border-top: 1px solid var(--line); color: var(--accent-soft); font: 10px var(--font-mono); letter-spacing: .12em; }
 .panel ul, .panel ol { margin: 0 0 14px; padding: 0; list-style: none; }
 .panel li { position: relative; padding: 5px 0 5px 16px; font-size: 12px; line-height: 1.7; }
-.panel ul li::before { content: ""; position: absolute; left: 2px; top: 13px; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+.panel .when li { padding: 7px 0 7px 18px; font-size: 15px; line-height: 1.6; }
+.panel ul li::before { content: ""; position: absolute; left: 2px; top: 16px; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
 .panel ol li { padding-left: 28px; }
 .panel ol b { position: absolute; left: 0; top: 5px; font: 11px/1.7 var(--font-mono); color: var(--accent-soft); }
 @media (prefers-reduced-motion: reduce) { .panel { animation: none; } }
