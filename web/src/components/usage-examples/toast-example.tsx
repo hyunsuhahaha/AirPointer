@@ -87,10 +87,10 @@ function Browser({ state }: { state: toast.BrowserState }) {
       <p className={styles.field}><span>팀 이름</span><em>Acme Growth</em></p>
       <p className={styles.field}><span>알림 메일</span><em>ops@acme.dev</em></p>
       <p className={styles.field}><span>데이터 보관</span><em>90일</em></p>
-      <span className={styles.button} data-kind="primary" style={{ left: toast.SAVE_BUTTON.x - toast.WORK.x - 60, top: toast.SAVE_BUTTON.y - toast.WORK.y - 17 }}>{state.saved ? "저장됨" : "저장"}</span>
-      <span className={styles.button} style={{ left: toast.EXPORT_BUTTON.x - toast.WORK.x - 60, top: toast.EXPORT_BUTTON.y - toast.WORK.y - 17 }}><DownloadSimple size={14} />내보내기</span>
-      {state.toastOpacity > 0 && <p className={styles.toast} style={{ ...box(toast.TOAST), opacity: state.toastOpacity }}><CheckCircle size={18} weight="fill" />저장되었습니다</p>}
     </div>
+    <span className={styles.button} data-kind="primary" style={{ left: toast.SAVE_BUTTON.x - toast.WORK.x - 60, top: toast.SAVE_BUTTON.y - toast.WORK.y - 17 }}>{state.saved ? "저장됨" : "저장"}</span>
+    <span className={styles.button} style={{ left: toast.EXPORT_BUTTON.x - toast.WORK.x - 60, top: toast.EXPORT_BUTTON.y - toast.WORK.y - 17 }}><DownloadSimple size={14} />내보내기</span>
+    {state.toastOpacity > 0 && <p className={styles.toast} style={{ ...box(toast.TOAST), opacity: state.toastOpacity }}><CheckCircle size={18} weight="fill" />저장되었습니다</p>}
     {state.devtools && <div className={styles.devtools} style={{ top: toast.DEVTOOLS_TOP - toast.WORK.y }}>
       <nav className={styles.devtoolsTabs}>
         <span>Elements</span>

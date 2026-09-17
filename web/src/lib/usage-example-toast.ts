@@ -15,11 +15,12 @@ export const SPEED = 1.25;
 // Layout, in stage units. The work area holds the browser (with DevTools
 // docked below the page once opened) or the editor.
 export const WORK = { x: 40, y: 70, width: 720, height: 600 };
-export const DEVTOOLS_TOP = 360;
-export const SAVE_BUTTON = { x: WORK.x + 100, y: WORK.y + 250 };
-export const EXPORT_BUTTON = { x: WORK.x + 620, y: WORK.y + 250 };
-// The toast box, relative to the work area: it covers the export button.
-export const TOAST = { x: 470, y: 222, width: 230, height: 56 };
+export const DEVTOOLS_TOP = WORK.y + 340;
+export const SAVE_BUTTON = { x: WORK.x + 100, y: WORK.y + 290 };
+export const EXPORT_BUTTON = { x: WORK.x + 620, y: WORK.y + 290 };
+// Buttons and the toast are placed against the work area (not the page
+// below the address bar). The toast box covers the export button.
+export const TOAST = { x: 470, y: 262, width: 230, height: 56 };
 export const CONSOLE_TAB = { x: WORK.x + 128, y: DEVTOOLS_TOP + 16 };
 export const NETWORK_TAB = { x: WORK.x + 208, y: DEVTOOLS_TOP + 16 };
 
