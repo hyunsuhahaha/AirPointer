@@ -27,7 +27,10 @@ jobs:
       # Create the release up front: electron-builder uploads several files at
       # once and would otherwise race to create it.
       - name: Create draft release
-        run: gh release create "$env:GITHUB_REF_NAME" --draft --title "방금그거뭐였지 데스크톱 $env:GITHUB_REF_NAME" --notes "Windows 설치 파일: whatwas-setup.exe"
+        run: >-
+          gh release create "$env:GITHUB_REF_NAME" --draft
+          --title "방금그거뭐였지 데스크톱 $env:GITHUB_REF_NAME"
+          --notes "Windows 설치 파일 whatwas-setup.exe"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: npm run release
