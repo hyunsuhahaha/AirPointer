@@ -779,7 +779,7 @@ export function ReplayWorkspace() {
 
       {overviewOpen && <ProjectOverview onClose={() => setOverviewOpen(false)} onShowExamples={() => { setOverviewOpen(false); setExamplesOpen(true); }} />}
       {examplesOpen && <UsageExamples mode={examplesMode} onClose={() => { setExamplesOpen(false); setExamplesMode(undefined); }} />}
-      <section className={styles.intro} id="top"><div><p>SHOW CONTEXT. GET ANSWERS.</p><h1>방금그거뭐였지<span>상황을 다시 설명하지 않아도 되는 AI</span></h1><button type="button" className={styles.overviewButton} onClick={() => setOverviewOpen(true)}><Play size={15} weight="fill" /> 프로젝트 개요</button></div><span className={styles.introIndex}>01 — 03<br /><b>공유 → 내보내기 → 전달</b></span></section>
+      <section className={styles.intro} id="top"><div><p>SHOW CONTEXT. GET ANSWERS.</p><h1>방금그거뭐였지<span>AI에게 상황을 다시 설명하지 않아도 되는 도구</span></h1><button type="button" className={styles.overviewButton} onClick={() => setOverviewOpen(true)}><Play size={15} weight="fill" /> 프로젝트 개요</button></div><span className={styles.introIndex}>01 — 03<br /><b>공유 → 내보내기 → 전달</b></span></section>
       <section hidden={Boolean(analysis) && resultFocus && viewMode === "browser"} className={styles.hero}>
         <div className={styles.stageColumn}>
           <div className={styles.stageHeader}><span>LIVE DESKTOP</span><span>{stream ? "CAPTURING" : "NOT CONNECTED"}</span></div>
