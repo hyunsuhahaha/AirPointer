@@ -1,7 +1,7 @@
 {
   "name": "whatwas-desktop",
   "productName": "방금그거뭐였지",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "방금그거뭐였지 데스크톱 앱: 화면 기록에 작업 기록을 더하고, 내보내기를 한 번에",
   "author": "hyunsuhahaha",
   "private": true,
@@ -39,7 +39,8 @@
       "provider": "github",
       "owner": "hyunsuhahaha",
       "repo": "AirPointer",
-      "releaseType": "release"
+      "releaseType": "draft",
+      "tagNamePrefix": "desktop-v"
     },
     "executableName": "whatwas"
   },

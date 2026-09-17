@@ -24,6 +24,16 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
       - run: npm ci
       - run: npm test
+      # Create the release up front: electron-builder uploads several files at
+      # once and would otherwise race to create it.
+      - name: Create draft release
+        run: gh release create "$env:GITHUB_REF_NAME" --draft --title "방금그거뭐였지 데스크톱 $env:GITHUB_REF_NAME" --notes "Windows 설치 파일: whatwas-setup.exe"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: npm run release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish release
+        run: gh release edit "$env:GITHUB_REF_NAME" --draft=false --latest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
