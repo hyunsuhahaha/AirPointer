@@ -96,12 +96,16 @@ const MODES: [Mode, string][] = [["Manual", "화면 직접 선택"], ["Agent Lin
 
 // The 방금그거뭐였지 PiP chrome, mirroring the real export panel: title bar,
 // recording status and the three delivery modes. `minimized` shows the bar.
-export function PipFrame({ rect, mode, minimized = false, children }: {
-  rect: { x: number; y: number; width: number; height: number }; mode: Mode | null; minimized?: boolean; children?: ReactNode;
+// The minimized bar's 1·2·3 buttons open the modes in MODES order;
+// `pressedQuick` is the index of the one being clicked.
+export function PipFrame({ rect, mode, minimized = false, pressedQuick = null, children }: {
+  rect: { x: number; y: number; width: number; height: number }; mode: Mode | null; minimized?: boolean; pressedQuick?: number | null; children?: ReactNode;
 }) {
-  if (minimized) return <section className={styles.pip} data-minimized="true" style={{ left: rect.x, top: rect.y + rect.height - 78, width: 360, height: 78 }}>
+  if (minimized) return <section className={styles.pip} data-minimized="true" style={{ left: rect.x, top: rect.y + rect.height - 78, width: 360, height: 78 }} aria-label="방금그거뭐였지 작은 창">
     <header>whatwas.vercel.app</header>
-    <div className={styles.pipBar}><span className={styles.recDot} />화면 기록 중<em><Stop size={9} weight="fill" /> 중지</em><em>Manual</em><CornersOut size={13} /></div>
+    <div className={styles.pipBar}><span className={styles.recDot} />화면 기록 중<em><Stop size={9} weight="fill" /> 중지</em>
+      <span className={styles.quickModes}>{MODES.map(([label], index) => <i key={label} title={label} data-pressed={index === pressedQuick}>{index + 1}</i>)}</span>
+      <CornersOut size={13} /></div>
   </section>;
   return <section className={styles.pip} style={box(rect)} aria-label="방금그거뭐였지 작은 창">
     <header>whatwas.vercel.app</header>

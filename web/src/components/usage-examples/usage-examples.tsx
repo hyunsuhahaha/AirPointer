@@ -6,11 +6,15 @@ import { createPortal } from "react-dom";
 import { ArrowCounterClockwise, Pause, Play, SpeakerHigh, SpeakerSlash, X } from "@phosphor-icons/react";
 import { createOverviewSound } from "@/lib/overview-sound";
 import type { OverviewSound } from "@/lib/overview-sound";
+import * as corsScript from "@/lib/usage-example-cors";
 import * as game from "@/lib/usage-example-game";
 import { STAGE } from "@/lib/usage-example-timeline";
+import * as toastScript from "@/lib/usage-example-toast";
 import type { CueSound } from "@/lib/usage-example-timeline";
 import * as vmScript from "@/lib/usage-example-vm";
+import { CorsExample } from "./cors-example";
 import { GameExample } from "./game-example";
+import { ToastExample } from "./toast-example";
 import { VmExample } from "./vm-example";
 import styles from "./usage-examples.module.css";
 
@@ -22,6 +26,8 @@ type Example = {
 
 // New examples are added here; the tab bar lists them in order.
 const EXAMPLES: Example[] = [
+  { id: "toast", label: "웹 개발", title: "안 눌리는 버튼", duration: toastScript.DURATION, speed: toastScript.SPEED, sounds: toastScript.SOUND_CUES, typing: toastScript.TYPING, Scene: ToastExample },
+  { id: "cors", label: "API 연동", title: "CORS 아닌 CORS 에러", duration: corsScript.DURATION, speed: corsScript.SPEED, sounds: corsScript.SOUND_CUES, typing: corsScript.TYPING, Scene: CorsExample },
   { id: "game", label: "게임 개발", title: "공격하면 번쩍이는 노란 네모", duration: game.DURATION, speed: game.SPEED, sounds: game.SOUND_CUES, typing: game.TYPING, Scene: GameExample },
   { id: "vm", label: "VM 설정", title: "이유 없이 안 켜지는 VM", duration: vmScript.DURATION, speed: vmScript.SPEED, sounds: vmScript.SOUND_CUES, typing: vmScript.TYPING, Scene: VmExample },
 ];

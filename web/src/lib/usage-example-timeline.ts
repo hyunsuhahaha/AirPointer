@@ -14,10 +14,11 @@ export type Caption = { text: string; start: number; end: number };
 
 export const smooth = (u: number) => u * u * (3 - 2 * u);
 
-// Text typed into a field between `start` and `end`.
+// Text typed into a field between `start` and `end`, never splitting an emoji.
 export function typed(text: string, [start, end]: readonly [number, number], t: number) {
   if (t < start) return "";
-  return text.slice(0, Math.round(Math.min(1, (t - start) / (end - start)) * text.length));
+  const characters = Array.from(text);
+  return characters.slice(0, Math.round(Math.min(1, (t - start) / (end - start)) * characters.length)).join("");
 }
 
 export function captionAt(captions: Caption[], t: number) {

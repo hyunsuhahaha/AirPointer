@@ -39,7 +39,7 @@
 .messages { position: absolute; left: 0; right: 0; top: 56px; display: flex; flex-direction: column; justify-content: flex-end; gap: 12px; padding: 0 18px 8px; overflow: hidden; mask-image: linear-gradient(180deg, transparent, #000 48px); }
 .welcome { display: flex; flex-direction: column; align-items: center; gap: 10px; margin: auto 0; color: #6f695d; font-family: Georgia, "Noto Serif KR", serif; font-size: 22px; }
 .userMessage { align-self: flex-end; max-width: 78%; padding: 10px 14px; border-radius: 16px; background: #e7e0d1; font-size: 15px; line-height: 1.5; animation: rise .25s ease-out; }
-.userMessage p { margin: 0; }
+.userMessage p { margin: 0; overflow-wrap: anywhere; }
 .messageImages { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .messageImage { display: block; width: 92px; height: 92px; overflow: hidden; border-radius: 10px; border: 1px solid #cfc6b3; }
 .messageImages[data-many=true] .messageImage { width: 62px; height: 40px; border-radius: 6px; }
@@ -82,8 +82,10 @@
 @keyframes pipIn { from { transform: translateY(20px) scale(.96); opacity: 0; } }
 .pipStatus { position: absolute; right: 14px; top: 6px; display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; }
 .pipStatus em, .pipBar em { display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px; border: 1px solid #6b3a28; border-radius: 3px; color: #ff9e80; font-size: 10px; font-style: normal; }
-.pipBar { display: flex; align-items: center; gap: 8px; height: 48px; padding: 0 14px; font-size: 12px; font-weight: 700; }
-.pipBar em:last-of-type { border-color: #4a4c45; color: #e1e2da; }
+.pipBar { position: relative; display: flex; align-items: center; gap: 8px; height: 48px; padding: 0 14px; font-size: 12px; font-weight: 700; }
+.quickModes { position: absolute; left: 190px; top: 14px; display: flex; gap: 6px; }
+.quickModes i { display: grid; place-items: center; width: 20px; height: 20px; border: 1px solid #4a4c45; border-radius: 3px; background: #1b1c19; color: #e1e2da; font: 700 10px var(--font-mono), monospace; font-style: normal; transition: transform .08s; }
+.quickModes i[data-pressed=true] { border-color: #ff6b22; color: #ff9360; transform: scale(.88); }
 .pipBar svg { margin-left: auto; }
 .recDot { width: 7px; height: 7px; border-radius: 50%; background: #ff6b22; box-shadow: 0 0 8px #ff6b22; }
 .modeButton { position: absolute; width: 168px; height: 48px; padding: 7px 10px; border: 1px solid #393b35; border-radius: 6px; background: #1b1c19; color: #d0d1c8; transition: border-color .15s, background .15s; }
