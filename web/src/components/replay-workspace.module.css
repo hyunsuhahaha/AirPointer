@@ -89,6 +89,12 @@
 .eyebrow { margin: 0 0 18px; color: var(--accent); font: 600 10px var(--font-mono); letter-spacing: .16em; }
 .eyebrowRow { display: flex; align-items: center; justify-content: space-between; margin: 0 0 18px; }
 .eyebrowRow .eyebrow { margin: 0; }
+/* Always-on-top export window toggle: the first thing in the dock. */
+.pipLauncher { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 48px; margin: 0 0 20px; border: 1px solid var(--accent); border-radius: 10px; background: var(--accent); color: var(--t-panel, #150a04); font: inherit; font-size: 15px; font-weight: 800; cursor: pointer; }
+.pipLauncher:hover:not(:disabled) { filter: brightness(1.06); }
+.pipLauncher:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 3px; }
+.pipLauncher:disabled { cursor: not-allowed; opacity: .5; }
+.pipLauncher[data-on=true] { background: transparent; color: var(--accent); }
 .settingsButton { width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 50%; background: transparent; color: var(--muted); cursor: pointer; }
 .settingsButton:hover { color: var(--ink); border-color: var(--muted); }
 .commandDock h1 { margin: 0; font-size: clamp(43px, 5vw, 72px); line-height: .98; letter-spacing: -.07em; font-weight: 800; }

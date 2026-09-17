@@ -834,6 +834,12 @@ export function ReplayWorkspace() {
 
         <aside className={styles.commandDock}>
           <div className={styles.eyebrowRow}><p className={styles.eyebrow}>{viewMode === "browser" ? "BROWSER REPLAY" : "AI QUICK CHECK"}</p></div>
+          {/* The always-on-top export window is the main way to use the app, so it leads the dock. */}
+          <button type="button" role="switch" aria-checked={pipOpen} className={styles.pipLauncher} data-on={pipOpen} disabled={!pipSupported}
+            onClick={() => { if (pipOpen) closeCapturePip(); else void openCapturePip(false, true); }}>
+            <PictureInPicture size={18} weight="bold" />{pipOpen ? "AI 내보내기 창 끄기" : "항상 위 AI 내보내기 창 켜기"}
+          </button>
+          {(!pipSupported || pipMessage) && <small className={styles.companionError}>{pipMessage || "이 브라우저는 작은 창을 지원하지 않습니다."}</small>}
           {<details className={styles.captureSettings}><summary>기록 설정</summary><label className={styles.field}><span>로컬 버퍼</span><select value={retention} onChange={(event) => changeRetention(Number(event.target.value))}><option value={1}>최근 1분</option><option value={3}>최근 3분</option><option value={5}>최근 5분</option></select></label>
           <label className={styles.field}><span>전송 구간</span><select value={sendSeconds} onChange={(event) => setSendSeconds(Number(event.target.value))}>{[5, 15, 30, 60, 180, 300].filter((value) => value <= retention * 60).map((value) => <option key={value} value={value}>최근 {value < 60 ? `${value}초` : `${value / 60}분`}</option>)}</select></label>
           {viewMode === "full" && <>
@@ -859,10 +865,6 @@ export function ReplayWorkspace() {
             if ("text" in result) setRegionImage(null);
           }} />}
           <div className={styles.status} data-tone={status === "error" ? "error" : status === "done" ? "done" : "normal"}>{status === "analyzing" || status === "preparing" ? <CircleNotch className={styles.spin} size={16} /> : status === "error" ? <WarningCircle size={16} /> : status === "done" ? <Check size={16} /> : <span className={styles.statusDot} />}<div><strong>{stateLabel}</strong><span>{message}</span></div></div>
-          {<label className={styles.switch}><input type="checkbox" checked={pipOpen} disabled={!pipSupported} onChange={(event) => { if (event.target.checked) void openCapturePip(false, true); else closeCapturePip(); }} /><span /><b><PictureInPicture size={16} /> 항상 위 AI 내보내기 창 켜기 (브라우저, 설치 불필요)</b></label>}
-          {!pipSupported && <small className={styles.companionError}>작은 창을 지원하지 않습니다. 이 화면에서 계속 사용할 수 있습니다.</small>}
-          {pipSupported && !pipMessage && <small className={styles.companionError}>화면 공유 후 작은 창에서 파일과 프롬프트를 내보낼 수 있습니다.</small>}
-          {pipMessage && <small className={styles.companionError}>{pipMessage}</small>}
         </aside>
       </section>
 
