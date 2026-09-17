@@ -23,6 +23,7 @@ import { EvidenceTimeMachine, PrivacyZoneEditor, RegionCapture } from "./browser
 import { AgentExportPanel } from "./agent-export-panel";
 import { ProjectOverview } from "./project-overview";
 import { UsageExamples } from "./usage-examples/usage-examples";
+import type { DeliveryMode } from "./usage-examples/usage-examples";
 import { IncidentReview } from "./incident-review";
 import type { Incident } from "@/lib/incident-report";
 import { ModeGuide } from "./mode-guide";
@@ -303,6 +304,7 @@ export function ReplayWorkspace() {
   const [pipOpen, setPipOpen] = useState(false);
   const [overviewOpen, setOverviewOpen] = useState(false);
   const [examplesOpen, setExamplesOpen] = useState(false);
+  const [examplesMode, setExamplesMode] = useState<DeliveryMode | undefined>();
   // Document PiP has no minimize API, so "minimize" shrinks the window to the
   // status bar and remembers the size to restore. Lives here, not in the
   // export panel, because the panel remounts whenever the share changes.
@@ -1242,7 +1244,7 @@ export function ReplayWorkspace() {
       </div>}
 
       {overviewOpen && <ProjectOverview onClose={() => setOverviewOpen(false)} onShowExamples={() => { setOverviewOpen(false); setExamplesOpen(true); }} />}
-      {examplesOpen && <UsageExamples onClose={() => setExamplesOpen(false)} />}
+      {examplesOpen && <UsageExamples mode={examplesMode} onClose={() => { setExamplesOpen(false); setExamplesMode(undefined); }} />}
       <section className={styles.intro} id="top"><div><p>SHOW CONTEXT. GET ANSWERS.</p><h1>방금그거뭐였지<span>상황을 다시 설명하지 않아도 되는 AI</span></h1><button type="button" className={styles.overviewButton} onClick={() => setOverviewOpen(true)}><Play size={15} weight="fill" /> 프로젝트 개요</button></div><span className={styles.introIndex}>01 — 03<br /><b>공유 → 내보내기 → 전달</b></span></section>
       <section hidden={Boolean(analysis) && resultFocus && viewMode === "browser"} className={styles.hero}>
         <div className={styles.stageColumn}>
@@ -1324,7 +1326,7 @@ export function ReplayWorkspace() {
           </>}
           </details>}
           <>
-            {!stream && <ModeGuide />}
+            {!stream && <ModeGuide onShowExamples={(mode) => { setExamplesMode(mode); setExamplesOpen(true); }} />}
             {stream && viewMode === "browser" && !pipContainer && exportPanel}
             {stream && viewMode === "browser" && pipContainer && <p>항상 위에 뜬 작은 창에서 모드를 고르고 AI 내보내기를 누르세요.</p>}
             {stream && viewMode === "full" && <><textarea className={styles.workQuestion} aria-label="추가 질문 (선택)" placeholder="질문 없이 버튼만 눌러도 됩니다. 더 궁금한 내용은 여기에 적으세요." value={workQuestion} onChange={event => setWorkQuestion(event.target.value)} maxLength={500} />
