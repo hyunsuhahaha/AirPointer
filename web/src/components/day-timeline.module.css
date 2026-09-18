@@ -132,3 +132,10 @@
   .list li[data-active=true]::before { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { .expand, .spin, .recording > svg { animation: none; } }
+
+@media (max-width: 720px) {
+  /* The overlay is centered on the wide, scrollable graph, so it lands far off
+     screen; the same two buttons sit in the header row on mobile. */
+  .empty { display: none; }
+  .graph { overflow-x: auto; }
+}

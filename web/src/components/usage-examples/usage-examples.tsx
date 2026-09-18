@@ -127,7 +127,12 @@ export function UsageExamples({ onClose, mode }: { onClose: () => void; mode?: D
   const toggleMuted = () => setMuted((current) => { sound.current?.setMuted(!current); return !current; });
 
   const topBar = 64;
-  const scale = Math.min((viewport.width - 32) / STAGE.width, (viewport.height - topBar - 24) / STAGE.height);
+  // A 16:9 stage in a portrait phone would shrink to a third of the screen, so
+  // it is turned sideways instead; rotating the phone puts it upright again.
+  const sideways = viewport.width < 700 && viewport.height > viewport.width;
+  const scale = sideways
+    ? Math.min((viewport.height - topBar - 56) / STAGE.width, (viewport.width - 20) / STAGE.height)
+    : Math.min((viewport.width - 32) / STAGE.width, (viewport.height - topBar - 24) / STAGE.height);
   const ended = example !== null && t >= example.duration;
   const pickedRole = hoverIndex ?? exampleIndex;
 
@@ -169,8 +174,9 @@ export function UsageExamples({ onClose, mode }: { onClose: () => void; mode?: D
         </div>
       </section>}
       {example && <div className={styles.stageArea}>
+        {sideways && <p className={styles.rotateHint}>휴대폰을 가로로 돌리면 똑바로 보여요</p>}
         <div className={styles.stage} aria-label={example.title}
-          style={{ width: STAGE.width, height: STAGE.height, transform: `translate(-50%, -50%) scale(${scale})` }}>
+          style={{ width: STAGE.width, height: STAGE.height, transform: `translate(-50%, -50%) rotate(${sideways ? 90 : 0}deg) scale(${scale})` }}>
           <example.Scene t={t} />
           {ended && <div className={styles.endCard}>
             <small>당신이 {example.role}{ramyeon(example.role)}</small>

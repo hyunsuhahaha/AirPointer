@@ -426,3 +426,25 @@
 .overviewButton:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 3px; }
 .appDownload { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px; border-radius: 999px; background: var(--accent); color: var(--t-panel, #150a04) !important; font-size: 13px; font-weight: 700; }
 .appDownload:hover { filter: brightness(1.08); }
+
+/* Mobile: the phone can't share a screen, so it gets the pitch and the
+   examples, and the live stage/transport are hidden rather than dead. */
+.mobileIntro { display: none; }
+@media (max-width: 720px) {
+  .mobileIntro { display: block; padding: 26px 20px 30px; border-bottom: 1px solid var(--line); }
+  .mobileIntro > p { margin: 0 0 12px; font: 10px var(--font-mono); letter-spacing: .16em; color: var(--accent-soft); }
+  .mobileIntro h2 { margin: 0 0 18px; font-size: 26px; line-height: 1.32; letter-spacing: -.05em; }
+  .mobileIntro ol { margin: 0 0 20px; padding: 0; list-style: none; }
+  .mobileIntro li { display: flex; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); font-size: 14px; line-height: 1.6; color: var(--ink); }
+  .mobileIntro li b { flex: none; font: 11px var(--font-mono); color: var(--accent-soft); }
+  .mobileIntro > div { display: grid; gap: 10px; }
+  .mobileIntro > div button { width: 100%; height: 52px; justify-content: center; font-size: 16px; }
+  .mobileIntro > small { display: block; margin-top: 14px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+  .intro { padding-top: 22px; padding-bottom: 22px; }
+  .intro h1 span { margin-top: 6px; }
+  .overviewButton { width: 100%; justify-content: center; }
+  /* Screen sharing needs a desktop browser; don't show the empty stage here. */
+  .stageColumn { display: none; }
+  .hero .commandDock { padding: 26px 20px 34px; }
+  .pipelineSection, .replaySection, .memoryOptIn { padding-left: 20px; padding-right: 20px; }
+}

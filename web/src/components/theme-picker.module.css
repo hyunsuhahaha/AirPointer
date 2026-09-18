@@ -11,3 +11,8 @@
 .swatches { display: flex; gap: 8px; }
 .swatches button { width: 26px; height: 26px; border: 2px solid var(--panel-raised); border-radius: 50%; box-shadow: 0 0 0 1px var(--line); cursor: pointer; }
 .swatches button[aria-checked=true] { box-shadow: 0 0 0 2px var(--ink); }
+
+@media (max-width: 640px) {
+  .trigger { height: 32px; padding: 0 10px; gap: 5px; }
+  .trigger span { display: none; }
+}

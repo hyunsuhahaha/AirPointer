@@ -779,6 +779,21 @@ export function ReplayWorkspace() {
 
       {overviewOpen && <ProjectOverview onClose={() => setOverviewOpen(false)} onShowExamples={() => { setOverviewOpen(false); setExamplesOpen(true); }} />}
       {examplesOpen && <UsageExamples mode={examplesMode} onClose={() => { setExamplesOpen(false); setExamplesMode(undefined); }} />}
+      {/* Phones can't share a screen, so they get the pitch and the examples instead of dead controls. */}
+      <section className={styles.mobileIntro} aria-label="모바일 소개">
+        <p>이 사이트가 하는 일</p>
+        <h2>방금 지나간 화면을<br />설명 대신 AI에게 그대로</h2>
+        <ol>
+          <li><b>01</b><span>PC에서 화면 공유를 켜두면 최근 1~5분이 내 기기에만 쌓여요.</span></li>
+          <li><b>02</b><span>버튼 한 번이면 그 순간의 화면과 변화 기록이 파일로 묶여요.</span></li>
+          <li><b>03</b><span>ChatGPT·Claude 같은 AI에 그대로 넘기면 상황을 다시 설명할 필요가 없어요.</span></li>
+        </ol>
+        <div>
+          <button type="button" className={styles.primary} onClick={() => setExamplesOpen(true)}><Play size={16} weight="fill" /> 실제 활용 예시 보기</button>
+          <button type="button" className={styles.secondary} onClick={() => setOverviewOpen(true)}>프로젝트 개요</button>
+        </div>
+        <small>화면 기록은 PC의 크롬·엣지에서 동작해요. 폰에서는 예시 애니메이션으로 확인해 주세요.</small>
+      </section>
       <section className={styles.intro} id="top"><div><p>SHOW CONTEXT. GET ANSWERS.</p><h1>방금그거뭐였지<span>AI에게 상황을 다시 설명하지 않아도 되는 도구</span></h1><button type="button" className={styles.overviewButton} onClick={() => setOverviewOpen(true)}><Play size={15} weight="fill" /> 프로젝트 개요</button></div><span className={styles.introIndex}>01 — 03<br /><b>공유 → 내보내기 → 전달</b></span></section>
       <section hidden={Boolean(analysis) && resultFocus && viewMode === "browser"} className={styles.hero}>
         <div className={styles.stageColumn}>

@@ -182,9 +182,16 @@
 .endCard button { display: inline-flex; align-items: center; gap: 7px; height: 46px; padding: 0 22px; border: 1px solid rgba(255,255,255,.35); border-radius: 999px; background: rgba(15,15,15,.7); color: #fff; font-size: 16px; font-weight: 700; cursor: pointer; }
 .endCard .primary { border-color: #ff6b22; background: #ff6b22; color: #150a04; }
 
+.rotateHint { position: absolute; left: 0; right: 0; bottom: 10px; z-index: 5; margin: 0; color: #a7a99f; font-size: 12px; text-align: center; }
+
 @media (max-width: 640px) {
   .topBar { gap: 10px; padding: 0 10px; }
+  /* "당신이 … 라면?" doesn't fit next to the roles; the roles scroll instead. */
+  .sentence > span { display: none; }
   .sentence { gap: 6px; }
+  .tabs { overflow-x: auto; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .rotateHint { bottom: 6px; font-size: 13px; color: #f1f1eb; }
   .roleCards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .roleCards button { min-height: 88px; padding: 14px; }
   .sentence > span { font-size: 15px; }
