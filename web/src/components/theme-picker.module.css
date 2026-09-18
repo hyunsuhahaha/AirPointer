@@ -15,4 +15,10 @@
 @media (max-width: 640px) {
   .trigger { height: 32px; padding: 0 10px; gap: 5px; }
   .trigger span { display: none; }
+  /* Anchored to the trigger it can hang off a narrow screen (or be clipped by
+     the header), so on phones it spans the viewport instead. */
+  .menu { position: fixed; left: 12px; right: 12px; top: 62px; width: auto; }
+  .swatches { justify-content: space-between; }
+  .swatches button { width: 34px; height: 34px; }
+  .modes button { height: 40px; font-size: 13px; }
 }
