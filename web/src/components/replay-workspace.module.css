@@ -441,6 +441,14 @@
   .mobileIntro li b { flex: none; font: 11px var(--font-mono); color: var(--accent-soft); }
   .mobileIntro > div { display: grid; gap: 10px; }
   .mobileIntro > div button { width: 100%; height: 52px; justify-content: center; font-size: 16px; }
+  /* 프로젝트 개요 lives in the hero below; don't repeat it here. */
+  .mobileIntro { border-bottom: 0; padding-bottom: 8px; }
+  /* Endless sweeps and glows keep the compositor busy while scrolling. */
+  .pipelineBeam, .pipelineIcon, .scorePlayhead { animation: none; }
+  .pipelineBeam { display: none; }
+  .stage, .emptyStage, .commandDock, .replaySection { box-shadow: none; }
+  /* Skip rendering work for sections that are still far off screen. */
+  .replaySection, .pipelineSection, .memoryOptIn { content-visibility: auto; contain-intrinsic-size: auto 700px; }
   .mobileIntro > small { display: block; margin-top: 14px; color: var(--muted); font-size: 12px; line-height: 1.6; }
   .intro { padding-top: 22px; padding-bottom: 22px; }
   .intro h1 span { margin-top: 6px; }

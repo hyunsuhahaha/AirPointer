@@ -790,7 +790,6 @@ export function ReplayWorkspace() {
         </ol>
         <div>
           <button type="button" className={styles.primary} onClick={() => setExamplesOpen(true)}><Play size={16} weight="fill" /> 실제 활용 예시 보기</button>
-          <button type="button" className={styles.secondary} onClick={() => setOverviewOpen(true)}>프로젝트 개요</button>
         </div>
         <small>화면 기록은 PC의 크롬·엣지에서 동작해요. 폰에서는 예시 애니메이션으로 확인해 주세요.</small>
       </section>

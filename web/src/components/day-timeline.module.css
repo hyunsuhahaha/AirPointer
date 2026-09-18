@@ -138,4 +138,5 @@
      screen; the same two buttons sit in the header row on mobile. */
   .empty { display: none; }
   .graph { overflow-x: auto; }
+  .timeline { padding: 40px 20px 48px; content-visibility: auto; contain-intrinsic-size: auto 900px; }
 }
