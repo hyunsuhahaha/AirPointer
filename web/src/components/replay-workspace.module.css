@@ -17,7 +17,9 @@
 .stageHeader, .timelineHead { height: 26px; display: flex; justify-content: space-between; color: var(--muted); font: 500 10px var(--font-mono); letter-spacing: .1em; }
 .stageHeader span:last-child { color: var(--accent-soft); }
 .stageViewport { position: relative; flex: 1; min-height: 410px; }
-.stage { position: absolute; inset: 0; overflow: hidden; border: 1px solid var(--t-line-strong, #3d3b36); background: var(--t-panel, #11110f); cursor: grab; touch-action: none; }
+/* touch-action stays `pan-y` so a finger can still scroll the page over the
+   preview; only the drag-to-move handles need to swallow the gesture. */
+.stage { position: absolute; inset: 0; overflow: hidden; border: 1px solid var(--t-line-strong, #3d3b36); background: var(--t-panel, #11110f); cursor: grab; touch-action: pan-y; }
 .stage:active { cursor: grabbing; }
 .stage::before { content: ""; position: absolute; inset: 12px; pointer-events: none; z-index: 2; border: 1px solid color-mix(in srgb, var(--t-ink, rgb(255 255 255)) 2.5%, transparent); }
 .screenVideo { width: 100%; height: 100%; object-fit: contain; opacity: 0; position: absolute; inset: 0; }
